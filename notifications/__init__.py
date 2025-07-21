@@ -1,0 +1,1 @@
+# Notifications package for the AI Trading System

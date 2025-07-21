@@ -1,0 +1,80 @@
+# Environment variables and API keys
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# Logs
+logs/
+*.log
+
+# H2O.ai
+h2o-genmodel.jar
+h2o_cluster_*
+
+# Trading data
+*.csv
+data/
+backtest_results/
+portfolio_recommendations_*.json
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+
+# Cache files
+.cache/
+*.cache
+
+# API keys and secrets (additional protection)
+*key*
+*secret*
+*token*
+credentials.json
+secrets.yaml
+
+# Email webhook URLs
+webhook_urls.txt
