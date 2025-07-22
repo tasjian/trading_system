@@ -30,11 +30,12 @@ class LLMResponse:
     metadata: Dict[str, Any]
 
 class LLMClient:
-    """Unified LLM client supporting OpenAI and Anthropic APIs."""
+    """Unified LLM client supporting OpenAI and Llama 3.1 (via Ollama)."""
     
     def __init__(self):
         self.openai_client = None
-        self.anthropic_client = None
+        self.ollama_client = None
+        # self.anthropic_client = None  # Deprecated
         self.preferred_provider = None
         self.request_count = 0
         self.total_cost = 0.0
@@ -56,18 +57,31 @@ class LLMClient:
             except Exception as e:
                 logger.warning(f"OpenAI client initialization failed: {e}")
         
-        # Try Anthropic as fallback
-        if settings.anthropic_api_key:
+        # Try Llama 3.1 via Ollama as fallback
+        if settings.use_llama_fallback:
             try:
-                import anthropic
-                self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+                import ollama
+                self.ollama_client = ollama.Client(host=settings.ollama_base_url)
                 if not self.preferred_provider:
-                    self.preferred_provider = "anthropic"
-                logger.info("✅ Anthropic client initialized")
+                    self.preferred_provider = "llama"
+                logger.info("✅ Llama 3.1 (Ollama) client initialized")
             except ImportError:
-                logger.warning("Anthropic package not installed. Run: pip install anthropic")
+                logger.warning("Ollama package not installed. Run: pip install ollama")
             except Exception as e:
-                logger.warning(f"Anthropic client initialization failed: {e}")
+                logger.warning(f"Ollama client initialization failed: {e}")
+                
+        # Legacy Anthropic support (deprecated)
+        # if settings.anthropic_api_key:
+        #     try:
+        #         import anthropic
+        #         self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        #         if not self.preferred_provider:
+        #             self.preferred_provider = "anthropic"
+        #         logger.info("✅ Anthropic client initialized")
+        #     except ImportError:
+        #         logger.warning("Anthropic package not installed. Run: pip install anthropic")
+        #     except Exception as e:
+        #         logger.warning(f"Anthropic client initialization failed: {e}")
         
         if not self.preferred_provider:
             logger.error("❌ No LLM clients available. Please configure API keys.")
@@ -94,20 +108,28 @@ class LLMClient:
                 response = await self._call_openai(
                     system_prompt, user_message, model, temperature, max_tokens
                 )
-            elif use_provider == "anthropic" and self.anthropic_client:
-                response = await self._call_anthropic(
+            elif use_provider == "llama" and self.ollama_client:
+                response = await self._call_llama(
                     system_prompt, user_message, model, temperature, max_tokens
                 )
+            # elif use_provider == "anthropic" and self.anthropic_client:  # Deprecated
+            #     response = await self._call_anthropic(
+            #         system_prompt, user_message, model, temperature, max_tokens
+            #     )
             else:
                 # Fallback to any available provider
                 if self.openai_client:
                     response = await self._call_openai(
                         system_prompt, user_message, model, temperature, max_tokens
                     )
-                elif self.anthropic_client:
-                    response = await self._call_anthropic(
+                elif self.ollama_client:
+                    response = await self._call_llama(
                         system_prompt, user_message, model, temperature, max_tokens
                     )
+                # elif self.anthropic_client:  # Deprecated
+                #     response = await self._call_anthropic(
+                #         system_prompt, user_message, model, temperature, max_tokens
+                #     )
                 else:
                     raise ValueError("No LLM providers available")
             
@@ -188,7 +210,7 @@ class LLMClient:
             logger.error(f"OpenAI API call failed: {e}")
             raise
     
-    async def _call_anthropic(
+    async def _call_llama(
         self,
         system_prompt: str,
         user_message: str,
@@ -196,51 +218,55 @@ class LLMClient:
         temperature: float,
         max_tokens: int
     ) -> LLMResponse:
-        """Call Anthropic API."""
+        """Call Llama 3.1 via Ollama."""
         
         # Default model selection
         if not model:
-            model = "claude-3-5-sonnet-20241022"
+            model = settings.ollama_model
         
         try:
+            # Create combined prompt for Llama (it doesn't separate system/user)
+            combined_prompt = f"System: {system_prompt}\n\nUser: {user_message}\n\nAssistant:"
+            
             response = await asyncio.to_thread(
-                self.anthropic_client.messages.create,
+                self.ollama_client.generate,
                 model=model,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=60
+                prompt=combined_prompt,
+                options={
+                    'temperature': temperature,
+                    'num_predict': max_tokens,
+                    'top_p': 0.9,
+                    'stop': ['User:', 'System:']
+                }
             )
             
-            content = response.content[0].text
+            content = response['response'].strip()
             
-            # Anthropic doesn't provide token usage directly
-            tokens_used = self._estimate_tokens(system_prompt + user_message + content)
+            # Ollama doesn't provide token usage directly
+            tokens_used = self._estimate_tokens(combined_prompt + content)
             
-            # Estimate cost
-            cost_per_token = self._get_anthropic_cost_per_token(model)
-            cost_estimate = tokens_used * cost_per_token
+            # Local model has no cost
+            cost_estimate = 0.0
             
-            # Estimate confidence
+            # Estimate confidence based on response length and temperature
             confidence = self._estimate_confidence(content, temperature)
             
             return LLMResponse(
                 content=content,
-                model=f"anthropic/{model}",
+                model=f"ollama/{model}",
                 tokens_used=tokens_used,
                 cost_estimate=cost_estimate,
                 response_time=0.0,  # Will be set by caller
                 confidence=confidence,
                 metadata={
-                    "provider": "anthropic",
-                    "stop_reason": response.stop_reason,
-                    "usage": response.usage.dict() if hasattr(response, 'usage') else {}
+                    "provider": "ollama",
+                    "model_info": response.get('model', ''),
+                    "local_inference": True
                 }
             )
             
         except Exception as e:
-            logger.error(f"Anthropic API call failed: {e}")
+            logger.error(f"Llama/Ollama API call failed: {e}")
             raise
     
     def _estimate_tokens(self, text: str) -> int:
@@ -272,14 +298,7 @@ class LLMClient:
         }
         return costs.get(model, 0.000015)  # Default to GPT-4o pricing
     
-    def _get_anthropic_cost_per_token(self, model: str) -> float:
-        """Get approximate cost per token for Anthropic models."""
-        costs = {
-            "claude-3-5-sonnet-20241022": 0.000015,  # $15/1M tokens (blended)
-            "claude-3-sonnet-20240229": 0.000015,
-            "claude-3-haiku-20240307": 0.0000005   # $0.5/1M tokens
-        }
-        return costs.get(model, 0.000015)  # Default to Sonnet pricing
+    # Removed Anthropic cost calculation - replaced with free local Llama 3.1
     
     async def analyze_financial_data(
         self,
@@ -357,7 +376,7 @@ class LLMClient:
             "total_cost_estimate": self.total_cost,
             "preferred_provider": self.preferred_provider,
             "openai_available": self.openai_client is not None,
-            "anthropic_available": self.anthropic_client is not None
+            "llama_available": self.ollama_client is not None
         }
     
     async def test_connection(self) -> Dict[str, bool]:
@@ -377,18 +396,18 @@ class LLMClient:
                 logger.error(f"OpenAI connection test failed: {e}")
                 results["openai"] = False
         
-        if self.anthropic_client:
+        if self.ollama_client:
             try:
                 await self.generate_response(
                     system_prompt="You are a test assistant.",
-                    user_message="Respond with 'Anthropic connection successful'",
+                    user_message="Respond with 'Llama connection successful'",
                     max_tokens=50,
-                    provider="anthropic"
+                    provider="llama"
                 )
-                results["anthropic"] = True
+                results["llama"] = True
             except Exception as e:
-                logger.error(f"Anthropic connection test failed: {e}")
-                results["anthropic"] = False
+                logger.error(f"Llama/Ollama connection test failed: {e}")
+                results["llama"] = False
         
         return results
 

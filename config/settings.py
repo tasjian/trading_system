@@ -18,7 +18,11 @@ class TradingSettings(BaseSettings):
     
     # LLM API Configuration
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
+    
+    # Llama 3.1 Configuration (via Ollama)
+    ollama_base_url: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
+    ollama_model: str = Field(default="llama3.1:8b", env="OLLAMA_MODEL")
+    use_llama_fallback: bool = Field(default=True, env="USE_LLAMA_FALLBACK")
     
     # Trading Parameters
     trading_mode: str = Field(default="paper", env="TRADING_MODE")
@@ -51,6 +55,24 @@ class TradingSettings(BaseSettings):
     make_webhook_url: Optional[str] = Field(default=None, env="MAKE_WEBHOOK_URL")
     n8n_webhook_url: Optional[str] = Field(default=None, env="N8N_WEBHOOK_URL")
     
+    # Sentiment Analysis - Social Media API Configuration
+    reddit_client_id: Optional[str] = Field(default=None, env="REDDIT_CLIENT_ID")
+    reddit_client_secret: Optional[str] = Field(default=None, env="REDDIT_CLIENT_SECRET")
+    reddit_user_agent: str = Field(default="TradingBot/1.0", env="REDDIT_USER_AGENT")
+    twitter_api_key: Optional[str] = Field(default=None, env="TWITTER_API_KEY")
+    twitter_api_secret: Optional[str] = Field(default=None, env="TWITTER_API_SECRET")
+    twitter_bearer_token: Optional[str] = Field(default=None, env="TWITTER_BEARER_TOKEN")
+    
+    # Redis Configuration for Inter-Agent Communication
+    redis_host: str = Field(default="localhost", env="REDIS_HOST")
+    redis_port: int = Field(default=6379, env="REDIS_PORT")
+    redis_db: int = Field(default=0, env="REDIS_DB")
+    
+    # Sentiment Analysis Configuration
+    sentiment_polling_interval: int = Field(default=300, env="SENTIMENT_POLLING_INTERVAL")  # 5 minutes
+    sentiment_confidence_threshold: float = Field(default=0.6, env="SENTIMENT_CONFIDENCE_THRESHOLD")
+    sentiment_volume_threshold: int = Field(default=5, env="SENTIMENT_VOLUME_THRESHOLD")
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
@@ -64,8 +86,8 @@ def validate_settings():
     if not settings.alpaca_api_key or not settings.alpaca_secret_key:
         raise ValueError("Alpaca API credentials are required")
     
-    if not settings.openai_api_key and not settings.anthropic_api_key:
-        raise ValueError("At least one LLM API key is required")
+    if not settings.openai_api_key and not settings.use_llama_fallback:
+        raise ValueError("Either OpenAI API key or Llama fallback must be configured")
     
     if settings.trading_mode not in ["paper", "live"]:
         raise ValueError("Trading mode must be 'paper' or 'live'")

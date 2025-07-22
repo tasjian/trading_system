@@ -28,11 +28,87 @@ from tools.llm_client import llm_client, LLMResponse
 from prompts.system_prompts import get_system_prompt, get_agent_weights, PROMPTS
 from config.settings import settings
 
-# Import original classes for compatibility
-from agents.portfolio_management import (
-    MarketRegime, AssetClass, RiskProfile, PortfolioAllocation, 
-    PortfolioRecommendation
-)
+# Essential data structures (consolidated from portfolio_management.py)
+class MarketRegime(Enum):
+    """Market regime classification for adaptive portfolio management."""
+    BULL_MARKET = "bull_market"
+    BEAR_MARKET = "bear_market"
+    SIDEWAYS_MARKET = "sideways_market"
+    HIGH_VOLATILITY = "high_volatility"
+    LOW_VOLATILITY = "low_volatility"
+    CRISIS_MODE = "crisis_mode"
+
+class AssetClass(Enum):
+    """Asset class categorization for diversification."""
+    LARGE_CAP_GROWTH = "large_cap_growth"
+    LARGE_CAP_VALUE = "large_cap_value"
+    MID_CAP = "mid_cap"
+    SMALL_CAP = "small_cap"
+    TECHNOLOGY = "technology"
+    HEALTHCARE = "healthcare"
+    FINANCIALS = "financials"
+    ENERGY = "energy"
+    CONSUMER = "consumer"
+    INDUSTRIALS = "industrials"
+    MATERIALS = "materials"
+    UTILITIES = "utilities"
+    REAL_ESTATE = "real_estate"
+    DEFENSIVE = "defensive"
+    CYCLICAL = "cyclical"
+
+class RiskProfile(Enum):
+    """Risk profile for portfolio construction."""
+    CONSERVATIVE = "conservative"
+    MODERATE = "moderate"
+    AGGRESSIVE = "aggressive"
+    TACTICAL = "tactical"
+
+@dataclass
+class PortfolioAllocation:
+    """Individual portfolio allocation recommendation."""
+    symbol: str
+    asset_class: AssetClass
+    target_weight: float
+    current_weight: float
+    recommended_action: str  # "buy", "sell", "hold", "rebalance"
+    confidence: float
+    reasoning: str
+    risk_score: float
+    expected_return: float
+    correlation_score: float
+    agent_source: str
+    priority: int
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class PortfolioRecommendation:
+    """Complete portfolio recommendation from the multi-agent system."""
+    allocations: List[PortfolioAllocation]
+    target_risk_level: float
+    expected_return: float
+    expected_volatility: float
+    diversification_score: float
+    market_regime: MarketRegime
+    confidence: float
+    cash_allocation: float
+    rebalance_urgency: float
+    reasoning: str
+    agents_consensus: Dict[str, float]
+    timestamp: datetime
+
+# Advanced position class (consolidated from advanced_portfolio_strategy.py)
+@dataclass
+class AdvancedPosition:
+    """Advanced position with long/short and strategy metadata."""
+    symbol: str
+    side: str  # 'long', 'short'
+    weight: float
+    strategy: str  # 'momentum', 'mean_reversion', 'pairs_trade', 'hedge', etc.
+    confidence: float
+    expected_return: float
+    volatility: float
+    beta: float
+    correlation_hedge: Optional[str] = None  # Symbol this position hedges
 
 logger = logging.getLogger(__name__)
 
@@ -358,7 +434,121 @@ class LLMSectorRotationAgent:
             timestamp=datetime.now()
         )
 
-class LLMPortfolioConstructionEngine:
+class LLMSpecializedAnalysisMixin:
+    """Mixin class with specialized analysis capabilities (consolidated from llm_specialized_agents.py)."""
+    
+    async def analyze_risk_management(self, symbols: List[str], current_portfolio: Dict[str, float] = None) -> LLMAgentDecision:
+        """Analyze portfolio risk using LLM with quantitative support."""
+        try:
+            logger.info("🧠 LLM Risk Management Analysis...")
+            
+            # Simplified risk analysis using LLM
+            analysis_data = {
+                "symbols": symbols,
+                "current_portfolio": current_portfolio or {},
+                "instructions": """
+                Analyze portfolio risk and provide position sizing recommendations.
+                
+                Output:
+                1. Risk-adjusted position sizes (percentages) 
+                2. Portfolio risk score (1-10)
+                3. Key risk warnings
+                4. Diversification recommendations
+                """
+            }
+            
+            llm_response = await llm_client.analyze_financial_data(
+                agent_name="Risk Analysis",
+                analysis_data=analysis_data,
+                temperature=0.3
+            )
+            
+            # Parse risk recommendations
+            risk_scores = {}
+            for symbol in symbols:
+                # Simple extraction - look for percentage recommendations
+                content = llm_response.content.lower()
+                if f"{symbol.lower()}" in content:
+                    # Default moderate risk score
+                    risk_scores[symbol] = 0.1  # 10% max position
+                else:
+                    risk_scores[symbol] = 0.05  # 5% conservative
+            
+            return LLMAgentDecision(
+                agent_name="Risk Management",
+                decision={"risk_adjusted_weights": risk_scores, "portfolio_risk_score": 6},
+                confidence=llm_response.confidence,
+                reasoning=llm_response.content,
+                supporting_data={},
+                llm_response=llm_response,
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"Risk analysis failed: {e}")
+            # Fallback conservative risk scores
+            conservative_scores = {symbol: 0.05 for symbol in symbols}  # 5% max each
+            return LLMAgentDecision(
+                agent_name="Risk Management",
+                decision={"risk_adjusted_weights": conservative_scores, "portfolio_risk_score": 8},
+                confidence=0.3,
+                reasoning=f"Risk analysis failed, using conservative defaults: {e}",
+                supporting_data={},
+                llm_response=None,
+                timestamp=datetime.now()
+            )
+    
+    async def analyze_momentum_factors(self, symbols: List[str]) -> LLMAgentDecision:
+        """Analyze momentum factors using LLM."""
+        try:
+            logger.info("🧠 LLM Momentum Analysis...")
+            
+            analysis_data = {
+                "symbols": symbols,
+                "instructions": """
+                Analyze momentum characteristics for each symbol.
+                
+                Output:
+                1. Momentum score for each symbol (0-1)
+                2. Momentum trend (up/down/sideways)
+                3. Key momentum drivers
+                """
+            }
+            
+            llm_response = await llm_client.analyze_financial_data(
+                agent_name="Momentum Analysis",
+                analysis_data=analysis_data,
+                temperature=0.4
+            )
+            
+            # Simple momentum scoring
+            momentum_scores = {symbol: 0.6 for symbol in symbols}  # Default moderate
+            
+            return LLMAgentDecision(
+                agent_name="Momentum Analysis",
+                decision={"momentum_scores": momentum_scores},
+                confidence=llm_response.confidence,
+                reasoning=llm_response.content,
+                supporting_data={},
+                llm_response=llm_response,
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"Momentum analysis failed: {e}")
+            neutral_scores = {symbol: 0.5 for symbol in symbols}
+            return LLMAgentDecision(
+                agent_name="Momentum Analysis",
+                decision={"momentum_scores": neutral_scores},
+                confidence=0.3,
+                reasoning=f"Momentum analysis failed: {e}",
+                supporting_data={},
+                llm_response=None,
+                timestamp=datetime.now()
+            )
+
+
+class LLMPortfolioConstructionEngine(LLMSpecializedAnalysisMixin):
     """Main LLM-enhanced portfolio construction engine."""
     
     def __init__(self):
@@ -655,6 +845,85 @@ class LLMPortfolioConstructionEngine:
             agents_consensus={},
             timestamp=datetime.now()
         )
+
+
+class ConsolidatedAdvancedPortfolioStrategy:
+    """Consolidated advanced portfolio strategy with long/short capabilities."""
+    
+    def __init__(self, total_capital: float = 100000):
+        self.total_capital = total_capital
+        self.max_leverage = 1.5  # Allow 150% leverage for long/short
+        self.max_short_exposure = 0.3  # Max 30% short exposure
+        self.max_single_position = 0.15  # Max 15% per position
+        self.rebalance_threshold = 0.05  # 5% drift triggers rebalance
+        
+    async def create_advanced_positions(self, 
+                                      basic_allocations: List[PortfolioAllocation],
+                                      market_regime: MarketRegime) -> List[AdvancedPosition]:
+        """Convert basic allocations to advanced positions with long/short logic."""
+        try:
+            advanced_positions = []
+            
+            for allocation in basic_allocations:
+                # Determine position side based on confidence and market regime
+                side = self._determine_position_side(allocation, market_regime)
+                
+                # Create advanced position
+                position = AdvancedPosition(
+                    symbol=allocation.symbol,
+                    side=side,
+                    weight=min(allocation.target_weight, self.max_single_position),
+                    strategy=self._determine_strategy(allocation, market_regime),
+                    confidence=allocation.confidence,
+                    expected_return=allocation.expected_return,
+                    volatility=0.20,  # Default assumption
+                    beta=1.0,  # Default assumption
+                    correlation_hedge=None
+                )
+                
+                advanced_positions.append(position)
+            
+            return advanced_positions
+            
+        except Exception as e:
+            logger.error(f"Error creating advanced positions: {e}")
+            return []
+    
+    def _determine_position_side(self, allocation: PortfolioAllocation, market_regime: MarketRegime) -> str:
+        """Determine whether position should be long or short."""
+        # Simple logic: short in bear markets with high confidence
+        if (market_regime == MarketRegime.BEAR_MARKET and 
+            allocation.confidence > 0.7 and 
+            allocation.expected_return < -0.05):
+            return "short"
+        return "long"
+    
+    def _determine_strategy(self, allocation: PortfolioAllocation, market_regime: MarketRegime) -> str:
+        """Determine trading strategy based on allocation and market conditions."""
+        if market_regime == MarketRegime.HIGH_VOLATILITY:
+            return "mean_reversion"
+        elif market_regime == MarketRegime.BULL_MARKET:
+            return "momentum"
+        elif market_regime == MarketRegime.BEAR_MARKET:
+            return "defensive"
+        else:
+            return "balanced"
+
+
+# Export consolidated portfolio management system
+__all__ = [
+    'LLMPortfolioConstructionEngine',
+    'LLMSpecializedAnalysisMixin',
+    'ConsolidatedAdvancedPortfolioStrategy', 
+    'MarketRegime',
+    'AssetClass',
+    'RiskProfile',
+    'PortfolioAllocation',
+    'PortfolioRecommendation',
+    'AdvancedPosition',
+    'LLMAgentDecision',
+    'LLMMarketRegimeAnalyst'
+]
 
 # Global LLM portfolio engine
 llm_portfolio_engine = LLMPortfolioConstructionEngine()

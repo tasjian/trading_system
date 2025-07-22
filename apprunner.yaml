@@ -1,0 +1,80 @@
+# AWS App Runner Configuration for LLM-Enhanced Trading System
+version: 1.0
+
+# Build and runtime configuration
+build:
+  commands:
+    build:
+      - echo "🔨 Building LLM-Enhanced Trading System"
+      - echo "Installing Python dependencies..."
+      - pip install --upgrade pip
+      - pip install -r requirements.txt
+      - echo "✅ Build completed successfully"
+  env:
+    - name: PYTHONPATH
+      value: "/app"
+    - name: PYTHONUNBUFFERED
+      value: "1"
+    - name: PYTHONDONTWRITEBYTECODE
+      value: "1"
+
+run:
+  # Runtime configuration
+  runtime-version: python3.11
+  
+  # Startup command
+  command: python app.py
+  
+  # Network configuration
+  network:
+    port: 8080
+    env: PORT
+  
+  # Environment variables for production
+  env:
+    - name: TRADING_MODE
+      value: "paper"
+    - name: LOG_LEVEL
+      value: "INFO"
+    - name: HOST
+      value: "0.0.0.0"
+    - name: PORT
+      value: "8080"
+    - name: ENVIRONMENT
+      value: "production"
+    
+    # Security headers
+    - name: SECURE_SSL_REDIRECT
+      value: "true"
+    - name: SECURE_HSTS_SECONDS
+      value: "31536000"
+    
+    # Application settings
+    - name: MAX_PORTFOLIO_RISK
+      value: "0.05"
+    - name: MAX_POSITION_SIZE
+      value: "0.15"
+    - name: REBALANCE_FREQUENCY
+      value: "3600"
+    - name: MIN_CASH_RESERVE
+      value: "0.1"
+    
+    # LLM settings
+    - name: LLM_TEMPERATURE
+      value: "0.7"
+    - name: LLM_MAX_TOKENS
+      value: "2000"
+    
+    # Alpaca configuration (will be set via secrets in App Runner)
+    # - name: ALPACA_API_KEY (set in App Runner console)
+    # - name: ALPACA_SECRET_KEY (set in App Runner console)
+    # - name: ALPACA_BASE_URL (set in App Runner console)
+    
+    # LLM API Keys (set via secrets in App Runner)
+    # - name: OPENAI_API_KEY (set in App Runner console)
+    # - name: ANTHROPIC_API_KEY (set in App Runner console)
+    
+    # Data source API keys (optional, set via secrets)
+    # - name: ALPHA_VANTAGE_API_KEY (set in App Runner console)
+    # - name: FINNHUB_API_KEY (set in App Runner console)
+    # - name: NEWS_API_KEY (set in App Runner console)

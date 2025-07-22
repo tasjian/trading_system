@@ -32,6 +32,7 @@ class TradingWorkflow:
         
         # Add nodes (agent functions)
         workflow.add_node("market_monitor", self.market_monitor_agent)
+        workflow.add_node("sentiment_analyzer", self.sentiment_analysis_agent)
         workflow.add_node("risk_assessor", self.risk_assessment_agent)
         workflow.add_node("signal_generator", self.signal_generation_agent)
         workflow.add_node("strategy_optimizer", self.strategy_optimization_agent)
@@ -41,7 +42,8 @@ class TradingWorkflow:
         
         # Define the workflow routing
         workflow.add_edge(START, "market_monitor")
-        workflow.add_edge("market_monitor", "risk_assessor")
+        workflow.add_edge("market_monitor", "sentiment_analyzer")
+        workflow.add_edge("sentiment_analyzer", "risk_assessor")
         
         # Conditional routing based on risk assessment
         workflow.add_conditional_edges(
@@ -127,6 +129,90 @@ class TradingWorkflow:
             error_msg = f"Market Monitor Agent error: {e}"
             logger.error(error_msg)
             return add_error_to_state(state, error_msg)
+    
+    async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze social media sentiment for active positions and candidate stocks."""
+        try:
+            from agents.sentiment_agent import sentiment_agent
+            
+            logger.info("Sentiment Analysis Agent: Analyzing social media sentiment")
+            
+            # Get current positions and candidate symbols
+            current_positions = list(state.get("positions", {}).keys())
+            candidate_symbols = state.get("candidate_symbols", [])
+            all_symbols = list(set(current_positions + candidate_symbols))
+            
+            if not all_symbols:
+                logger.warning("No symbols to analyze for sentiment")
+                state["sentiment_data"] = {}
+                state["current_agent"] = "sentiment_analyzer"
+                return update_state_timestamp(state)
+            
+            # Run sentiment analysis cycle
+            sentiment_outputs = await sentiment_agent.run_sentiment_cycle(
+                tickers=all_symbols[:10],  # Limit to avoid rate limits
+                platforms=['reddit']
+            )
+            
+            # Process sentiment outputs
+            sentiment_data = {}
+            sentiment_signals = []
+            
+            for output in sentiment_outputs:
+                ticker = output.ticker
+                sentiment_data[ticker] = {
+                    'sentiment': output.overall_sentiment.value,
+                    'confidence': output.confidence,
+                    'volume': output.volume,
+                    'trend_signal': output.trend_signal.value,
+                    'key_insights': output.key_insights,
+                    'timestamp': output.timestamp.isoformat()
+                }
+                
+                # Generate sentiment-based trading signals
+                if output.confidence > 0.6:  # High confidence threshold
+                    if output.overall_sentiment.value in ['positive', 'very_positive']:
+                        if output.trend_signal.value in ['surge_positive', 'volume_spike']:
+                            sentiment_signals.append({
+                                'symbol': ticker,
+                                'signal': 'BUY',
+                                'strength': 0.7 if output.overall_sentiment.value == 'positive' else 0.9,
+                                'reason': f'Positive sentiment surge: {", ".join(output.key_insights[:2])}',
+                                'source': 'social_sentiment'
+                            })
+                    elif output.overall_sentiment.value in ['negative', 'very_negative']:
+                        if output.trend_signal.value in ['surge_negative', 'coordination_detected']:
+                            sentiment_signals.append({
+                                'symbol': ticker,
+                                'signal': 'SELL',
+                                'strength': 0.6 if output.overall_sentiment.value == 'negative' else 0.8,
+                                'reason': f'Negative sentiment surge: {", ".join(output.key_insights[:2])}',
+                                'source': 'social_sentiment'
+                            })
+            
+            # Update state with sentiment data
+            state["sentiment_data"] = sentiment_data
+            state["sentiment_signals"] = sentiment_signals
+            
+            # Add to existing signals
+            existing_signals = state.get("trading_signals", [])
+            existing_signals.extend(sentiment_signals)
+            state["trading_signals"] = existing_signals
+            
+            logger.info(f"Sentiment analysis complete: {len(sentiment_outputs)} tickers analyzed, "
+                       f"{len(sentiment_signals)} sentiment signals generated")
+            
+            state["current_agent"] = "sentiment_analyzer"
+            return update_state_timestamp(state)
+            
+        except Exception as e:
+            error_msg = f"Sentiment Analysis Agent error: {e}"
+            logger.error(error_msg)
+            # Don't fail the entire workflow for sentiment analysis errors
+            state["sentiment_data"] = {}
+            state["sentiment_signals"] = []
+            state["current_agent"] = "sentiment_analyzer"
+            return update_state_timestamp(state)
     
     async def risk_assessment_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Assess portfolio risk and check limits."""
