@@ -22,9 +22,11 @@ class TradingSettings(BaseSettings):
     
     # Trading Parameters
     trading_mode: str = Field(default="paper", env="TRADING_MODE")
-    max_portfolio_risk: float = Field(default=0.01, env="MAX_PORTFOLIO_RISK")
-    max_position_size: float = Field(default=0.05, env="MAX_POSITION_SIZE")
-    stop_loss_percent: float = Field(default=0.03, env="STOP_LOSS_PERCENT")
+    max_portfolio_risk: float = Field(default=0.05, env="MAX_PORTFOLIO_RISK")
+    max_position_size: float = Field(default=0.15, env="MAX_POSITION_SIZE")
+    stop_loss_percent: float = Field(default=0.08, env="STOP_LOSS_PERCENT")
+    rebalance_frequency: int = Field(default=3600, env="REBALANCE_FREQUENCY")
+    min_rebalance_threshold: float = Field(default=0.05, env="MIN_REBALANCE_THRESHOLD")
     
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
@@ -41,6 +43,13 @@ class TradingSettings(BaseSettings):
     fmp_api_key: Optional[str] = Field(default=None, env="FMP_API_KEY")  # Financial Modeling Prep
     nasdaq_api_key: Optional[str] = Field(default=None, env="NASDAQ_API_KEY")  # Nasdaq Data Link
     news_api_key: Optional[str] = Field(default=None, env="NEWS_API_KEY")
+    
+    # Email Notification Settings
+    gmail_email: Optional[str] = Field(default=None, env="GMAIL_EMAIL")
+    gmail_app_password: Optional[str] = Field(default=None, env="GMAIL_APP_PASSWORD")
+    zapier_webhook_url: Optional[str] = Field(default=None, env="ZAPIER_WEBHOOK_URL")
+    make_webhook_url: Optional[str] = Field(default=None, env="MAKE_WEBHOOK_URL")
+    n8n_webhook_url: Optional[str] = Field(default=None, env="N8N_WEBHOOK_URL")
     
     class Config:
         env_file = ".env"

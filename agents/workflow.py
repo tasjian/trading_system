@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, Optional
 from datetime import datetime
 
 from langgraph.graph import StateGraph, START, END
@@ -197,84 +197,117 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def signal_generation_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate trading signals using advanced market analysis agents."""
+        """Generate trading signals using LLM-enhanced multi-agent portfolio construction."""
         try:
-            logger.info("Signal Generation Agent: Performing comprehensive market analysis")
+            logger.info("Signal Generation Agent: Performing LLM-enhanced portfolio analysis")
             
-            # Import market analysis agents
-            from agents.market_analysis import market_analysis_factory
+            # Import LLM portfolio construction
+            from agents.llm_portfolio_management import construct_llm_portfolio
             
-            # Get portfolio information for optimization
-            portfolio_value = state["portfolio"].get("equity", 0)
+            # Get portfolio information
+            portfolio_value = state["portfolio"].get("equity", 100000.0)  # Default to 100k if not set
+            risk_profile = state["trading_config"].get("risk_profile", "moderate")
             
-            # Perform comprehensive analysis
-            analysis_results = market_analysis_factory.get_portfolio_recommendations(
-                symbols=state["watchlist"],
-                portfolio_value=portfolio_value
+            # Use LLM-enhanced portfolio construction
+            recommendation = await construct_llm_portfolio(
+                candidate_symbols=state["watchlist"],
+                portfolio_value=portfolio_value,
+                risk_profile=risk_profile,
+                max_positions=8
             )
             
-            # Extract individual symbol analysis
-            symbol_analysis = analysis_results["symbol_analysis"]
-            market_condition = analysis_results["market_condition"]
-            optimal_weights = analysis_results["optimal_weights"]
-            recommendations = analysis_results["recommendations"]
+            # Update market regime in state
+            state["market_conditions"] = recommendation.market_regime
             
-            # Update market conditions in state
-            state["market_conditions"] = market_condition
-            
-            # Convert analysis results to trading signals
+            # Convert portfolio recommendation to trading signals
             signals = []
-            for symbol, analysis in symbol_analysis.items():
-                if analysis.action != "hold" and analysis.confidence > 0.3:
+            for allocation in recommendation.allocations:
+                if allocation.target_weight > 0.01:  # Only meaningful allocations
                     # Import here to avoid circular imports
                     from agents.state import TradingSignal
                     
-                    # Calculate quantity based on optimal weights and risk management
-                    quantity = self._calculate_position_size(
-                        symbol, analysis, optimal_weights, portfolio_value
-                    )
+                    # Calculate quantity based on target weight
+                    target_value = portfolio_value * allocation.target_weight
                     
-                    signal = TradingSignal(
-                        symbol=symbol,
-                        action=analysis.action,
-                        confidence=analysis.confidence,
-                        price_target=analysis.price_target,
-                        stop_loss=analysis.stop_loss,
-                        quantity=quantity,
-                        reasoning=f"{analysis.signal_type}: {analysis.reasoning}"
-                    )
-                    signals.append(signal)
+                    # Get current price from market data
+                    symbol_data = state["market_data"]["symbols"].get(allocation.symbol)
+                    if symbol_data:
+                        current_price = symbol_data["price"]
+                        quantity = target_value / current_price
+                        
+                        signal = TradingSignal(
+                            symbol=allocation.symbol,
+                            action=allocation.recommended_action,
+                            confidence=allocation.confidence,
+                            price_target=current_price * 1.1 if allocation.recommended_action == "buy" else current_price * 0.9,
+                            stop_loss=current_price * 0.95 if allocation.recommended_action == "buy" else current_price * 1.05,
+                            quantity=quantity,
+                            reasoning=f"LLM Portfolio Construction: {allocation.reasoning}"
+                        )
+                        signals.append(signal)
             
             # Add signals to state
             state["signals"].extend(signals)
             
             # Create comprehensive summary
-            signal_summary = f"Advanced analysis: {len(signals)} signals generated"
-            if market_condition:
-                signal_summary += f" | Market: {market_condition.market_trend}"
-                signal_summary += f", Vol: {market_condition.volatility_regime}"
-            
-            if recommendations:
-                signal_summary += f" | Recommendations: {len(recommendations)}"
+            signal_summary = f"LLM Portfolio Analysis: {len(signals)} signals generated"
+            signal_summary += f" | Market Regime: {recommendation.market_regime.value}"
+            signal_summary += f" | Expected Return: {recommendation.expected_return:.1%}"
+            signal_summary += f" | Confidence: {recommendation.confidence:.1%}"
             
             # Log detailed analysis results
-            logger.info(f"Market Analysis Results:")
-            logger.info(f"  - Market Trend: {market_condition.market_trend if market_condition else 'Unknown'}")
-            logger.info(f"  - Volatility: {market_condition.volatility_regime if market_condition else 'Unknown'}")
+            logger.info(f"LLM Portfolio Construction Results:")
+            logger.info(f"  - Market Regime: {recommendation.market_regime.value}")
+            logger.info(f"  - Expected Return: {recommendation.expected_return:.1%}")
+            logger.info(f"  - Portfolio Confidence: {recommendation.confidence:.1%}")
+            logger.info(f"  - Cash Allocation: {recommendation.cash_allocation:.1%}")
             logger.info(f"  - Signals Generated: {len(signals)}")
-            logger.info(f"  - Portfolio Recommendations: {len(recommendations)}")
             
             for signal in signals:
-                logger.info(f"  - {signal.symbol}: {signal.action} (confidence: {signal.confidence:.2f})")
+                logger.info(f"  - {signal.symbol}: {signal.action} ({signal.confidence:.2f} confidence, "
+                          f"${signal.quantity * signal.price_target:.0f} value)")
             
             state["messages"].append(AIMessage(content=signal_summary))
             state["current_agent"] = "signal_generator"
             return update_state_timestamp(state)
             
         except Exception as e:
-            error_msg = f"Signal Generation Agent error: {e}"
+            error_msg = f"LLM Signal Generation Agent error: {e}"
             logger.error(error_msg)
-            return add_error_to_state(state, error_msg)
+            # Fallback to traditional analysis if LLM fails
+            try:
+                logger.info("Falling back to traditional market analysis")
+                from agents.market_analysis import market_analysis_factory
+                
+                analysis_results = market_analysis_factory.get_portfolio_recommendations(
+                    symbols=state["watchlist"],
+                    portfolio_value=state["portfolio"].get("equity", 100000.0)
+                )
+                
+                # Basic signal conversion
+                signals = []
+                for symbol, analysis in analysis_results["symbol_analysis"].items():
+                    if analysis.action != "hold" and analysis.confidence > 0.3:
+                        from agents.state import TradingSignal
+                        
+                        signal = TradingSignal(
+                            symbol=symbol,
+                            action=analysis.action,
+                            confidence=analysis.confidence,
+                            price_target=analysis.price_target,
+                            stop_loss=analysis.stop_loss,
+                            quantity=10,  # Default quantity
+                            reasoning=f"Fallback analysis: {analysis.reasoning}"
+                        )
+                        signals.append(signal)
+                
+                state["signals"].extend(signals)
+                state["messages"].append(AIMessage(content=f"Fallback analysis: {len(signals)} signals"))
+                return update_state_timestamp(state)
+                
+            except Exception as fallback_error:
+                logger.error(f"Fallback analysis also failed: {fallback_error}")
+                return add_error_to_state(state, f"Both LLM and fallback analysis failed: {error_msg}")
     
     def _calculate_position_size(self, symbol: str, analysis, optimal_weights: Dict[str, float], 
                                portfolio_value: float) -> Optional[float]:

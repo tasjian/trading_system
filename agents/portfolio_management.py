@@ -32,7 +32,7 @@ from agents.market_analysis import (
     multi_source_data, comprehensive_analyst, enhanced_market_analysis_factory,
     DataSource, AnalysisResult, SignalStrength
 )
-from agents.h2o_prediction_agent import h2o_prediction_agent
+# H2O prediction agent removed - using alternative analysis
 from tools.alpaca_client import alpaca_client
 from tools.advanced_trading import algorithmic_engine, RiskManagementEngine
 from config.settings import settings
@@ -568,14 +568,13 @@ class MLPredictiveAgent:
             
             ml_scores = {}
             
-            if not h2o_prediction_agent or not h2o_prediction_agent.h2o_initialized:
-                logger.warning("H2O.ai not available - using fallback scoring")
-                return {symbol: 0.5 for symbol in symbols}
+            # H2O.ai removed - using comprehensive analysis fallback
+            logger.info("Using comprehensive analysis for ML predictions")
             
             for symbol in symbols:
                 try:
-                    # Get H2O analysis
-                    ml_analysis = await h2o_prediction_agent.analyze_symbol(symbol)
+                    # Get comprehensive analysis as ML substitute
+                    ml_analysis = await comprehensive_analyst.comprehensive_analysis(symbol)
                     
                     if not ml_analysis or ml_analysis.data_confidence < 0.3:
                         ml_scores[symbol] = 0.5  # Neutral

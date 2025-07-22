@@ -118,4 +118,4 @@ def create_simple_interface():
 if __name__ == "__main__":
     # Create and launch the simplified interface
     interface = create_simple_interface()
-    interface.launch(server_port=7861, share=False)
+    interface.launch(server_port=7863, share=False)

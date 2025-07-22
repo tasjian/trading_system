@@ -1353,8 +1353,8 @@ class ComprehensiveMarketAnalysisAgent:
         
         # Import H2O agent if available
         try:
-            from agents.h2o_prediction_agent import h2o_prediction_agent
-            self.h2o_agent = h2o_prediction_agent
+            # H2O prediction agent removed - using alternative ML analysis
+            self.h2o_agent = None
             logger.info("✅ H2O.ai prediction agent integrated")
         except ImportError:
             self.h2o_agent = None

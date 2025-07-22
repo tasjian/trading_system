@@ -163,7 +163,7 @@ class AlpacaClient:
         Args:
             symbol: Stock symbol
             qty: Quantity to trade
-            side: "buy" or "sell"
+            side: "buy", "sell", or "sell_short"
             order_type: "market", "limit", "stop", "stop_limit"
             limit_price: Price for limit orders
             stop_price: Price for stop orders
@@ -175,13 +175,21 @@ class AlpacaClient:
                 raise ValueError("Pre-trade safety checks failed")
             
             # Prepare order parameters
+            # Handle sell_short by converting to sell with proper side
+            alpaca_side = "sell" if side.lower() == "sell_short" else side.lower()
+            
             order_params = {
                 "symbol": symbol,
                 "qty": abs(qty),  # Ensure positive quantity
-                "side": side.lower(),
+                "side": alpaca_side,
                 "type": order_type.lower(),
                 "time_in_force": time_in_force.lower()
             }
+            
+            # Add position intent for short selling (if supported by broker)
+            if side.lower() == "sell_short":
+                logger.info(f"Placing short sell order for {symbol}")
+                # Note: Alpaca handles short selling automatically if shares are available
             
             if limit_price is not None:
                 order_params["limit_price"] = str(limit_price)
@@ -282,8 +290,12 @@ class AlpacaClient:
                         if order_value > account["buying_power"]:
                             logger.error(f"Insufficient buying power: ${order_value:.2f} > ${account['buying_power']:.2f}")
                             return False
+                    else:
+                        # If no market data, skip buying power check and let Alpaca handle it
+                        logger.warning(f"No market data for {symbol}, skipping buying power check")
                 except Exception as e:
                     logger.warning(f"Could not verify buying power: {e}")
+                    # Continue without buying power check - let Alpaca API handle it
             
             # Check position size limits
             portfolio_value = account["portfolio_value"]
@@ -298,8 +310,11 @@ class AlpacaClient:
                         if position_percent > settings.max_position_size:
                             logger.error(f"Position size too large: {position_percent:.2%} > {settings.max_position_size:.2%}")
                             return False
+                    else:
+                        logger.warning(f"No market data for {symbol}, skipping position size check")
                 except Exception as e:
                     logger.warning(f"Could not verify position size: {e}")
+                    # Continue without position size check
             
             return True
             
