@@ -244,10 +244,19 @@ class TradingWorkflow:
                     state["circuit_breakers"]["daily_loss_limit_hit"] = True
                     logger.warning(f"Daily loss limit hit: {daily_loss:.2%}")
             
-            # Check position concentration
+            # Check position concentration and diversification
             positions = state["portfolio"].get("positions", {})
             total_exposure = sum(abs(pos.get("market_value", 0)) for pos in positions.values())
             
+            # Portfolio size checks
+            num_positions = len(positions)
+            if num_positions < settings.min_portfolio_size:
+                logger.info(f"Portfolio under-diversified: {num_positions} positions (target: {settings.target_portfolio_size})")
+            elif num_positions > settings.max_portfolio_size:
+                logger.warning(f"Portfolio over-diversified: {num_positions} positions (max: {settings.max_portfolio_size})")
+            
+            # Check individual position sizes
+            sector_allocation = {}
             for symbol, position in positions.items():
                 market_value = abs(position.get("market_value", 0))
                 if portfolio_value > 0:
@@ -257,6 +266,16 @@ class TradingWorkflow:
                     if exposure_pct > max_position:
                         state["circuit_breakers"]["position_size_exceeded"] = True
                         logger.warning(f"Position size exceeded for {symbol}: {exposure_pct:.2%}")
+                    
+                    # Track sector allocation for diversification
+                    sector = position.get("sector", "Unknown")
+                    sector_allocation[sector] = sector_allocation.get(sector, 0) + exposure_pct
+            
+            # Check sector concentration
+            for sector, allocation in sector_allocation.items():
+                if allocation > settings.max_sector_allocation:
+                    logger.warning(f"Sector concentration risk - {sector}: {allocation:.2%} (max: {settings.max_sector_allocation:.2%})")
+                    state["circuit_breakers"]["sector_concentration"] = True
             
             # Calculate risk metrics
             from agents.state import RiskMetrics
@@ -294,12 +313,22 @@ class TradingWorkflow:
             portfolio_value = state["portfolio"].get("equity", 100000.0)  # Default to 100k if not set
             risk_profile = state["trading_config"].get("risk_profile", "moderate")
             
-            # Use LLM-enhanced portfolio construction
+            # Get expanded candidate symbols for diversified portfolio
+            try:
+                from simple_market_screener import SimpleMarketScreener
+                screener = SimpleMarketScreener()
+                all_candidate_symbols = screener.get_all_stocks()
+                logger.info(f"Using expanded candidate universe of {len(all_candidate_symbols)} stocks")
+            except Exception as e:
+                logger.warning(f"Failed to get expanded stock universe, using watchlist: {e}")
+                all_candidate_symbols = state["watchlist"]
+            
+            # Use LLM-enhanced portfolio construction with expanded universe
             recommendation = await construct_llm_portfolio(
-                candidate_symbols=state["watchlist"],
+                candidate_symbols=all_candidate_symbols[:100],  # Limit to top 100 for performance
                 portfolio_value=portfolio_value,
                 risk_profile=risk_profile,
-                max_positions=8
+                max_positions=settings.target_portfolio_size
             )
             
             # Update market regime in state
@@ -449,19 +478,80 @@ class TradingWorkflow:
             portfolio_value = state["portfolio"].get("equity", 0)
             max_position_size = state["risk_limits"]["max_position_size"]
             
-            optimized_signals = []
-            for signal in active_signals[:3]:  # Top 3 signals
-                # Calculate position size based on portfolio
-                if portfolio_value > 0:
-                    max_trade_value = portfolio_value * max_position_size
+            # Use diversified portfolio management for better optimization
+            try:
+                from agents.diversified_portfolio import diversified_portfolio_manager
+                
+                # Construct diversified portfolio if needed
+                if len(state["portfolio"].get("positions", {})) < settings.min_portfolio_size:
+                    logger.info("Constructing diversified portfolio with target size: {}".format(settings.target_portfolio_size))
                     
-                    # Estimate shares based on current price
-                    symbol_data = state["market_data"]["symbols"].get(signal.symbol)
-                    if symbol_data:
-                        current_price = symbol_data["price"]
-                        suggested_qty = max_trade_value / current_price
-                        signal.quantity = min(suggested_qty, 100)  # Cap at 100 shares
+                    target_portfolio = await diversified_portfolio_manager.construct_diversified_portfolio(
+                        portfolio_value=portfolio_value,
+                        risk_tolerance="moderate"
+                    )
+                    
+                    # Generate rebalancing orders
+                    current_positions = state["portfolio"].get("positions", {})
+                    rebalancing_orders = await diversified_portfolio_manager.generate_rebalancing_orders(
+                        current_positions, portfolio_value
+                    )
+                    
+                    # Convert rebalancing orders to signals
+                    from agents.state import TradingSignal
+                    optimized_signals = []
+                    
+                    for order in rebalancing_orders[:settings.max_portfolio_size]:  # Limit to max portfolio size
+                        signal = TradingSignal(
+                            symbol=order['symbol'],
+                            action=order['side'],
+                            confidence=0.8,  # High confidence for diversification
+                            price_target=0.0,  # Market order
+                            stop_loss=0.0,
+                            quantity=order['quantity'],
+                            reasoning=order['reason']
+                        )
                         optimized_signals.append(signal)
+                        
+                else:
+                    # Traditional optimization for existing portfolios
+                    optimized_signals = []
+                    max_new_positions = min(len(active_signals), 5)  # Limit new positions
+                    
+                    for signal in active_signals[:max_new_positions]:
+                        # Calculate position size based on diversified approach
+                        if portfolio_value > 0:
+                            # Use smaller position sizes for better diversification
+                            target_weight = min(settings.max_position_size, 1.0 / settings.target_portfolio_size * 2)
+                            max_trade_value = portfolio_value * target_weight
+                            
+                            # Estimate shares based on current price
+                            symbol_data = state["market_data"]["symbols"].get(signal.symbol)
+                            if symbol_data:
+                                current_price = symbol_data["price"]
+                                suggested_qty = max_trade_value / current_price
+                                signal.quantity = max(1, int(suggested_qty))  # At least 1 share
+                                optimized_signals.append(signal)
+                                
+            except Exception as diversified_error:
+                logger.warning(f"Diversified portfolio management failed, using fallback: {diversified_error}")
+                
+                # Fallback to original approach with updated limits
+                optimized_signals = []
+                max_signals = min(len(active_signals), 8)  # Increased from 3 to 8
+                
+                for signal in active_signals[:max_signals]:
+                    if portfolio_value > 0:
+                        # Use smaller position sizes for better diversification
+                        diversified_max_position = settings.max_position_size
+                        max_trade_value = portfolio_value * diversified_max_position
+                        
+                        symbol_data = state["market_data"]["symbols"].get(signal.symbol)
+                        if symbol_data:
+                            current_price = symbol_data["price"]
+                            suggested_qty = max_trade_value / current_price
+                            signal.quantity = max(1, int(suggested_qty))
+                            optimized_signals.append(signal)
             
             # Update state with optimized signals
             state["signals"] = state["signals"][:-len(active_signals)] + optimized_signals

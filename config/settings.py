@@ -27,10 +27,18 @@ class TradingSettings(BaseSettings):
     # Trading Parameters
     trading_mode: str = Field(default="paper", env="TRADING_MODE")
     max_portfolio_risk: float = Field(default=0.05, env="MAX_PORTFOLIO_RISK")
-    max_position_size: float = Field(default=0.15, env="MAX_POSITION_SIZE")
+    max_position_size: float = Field(default=0.04, env="MAX_POSITION_SIZE")  # Reduced to 4% for 25-50 stocks (1/25 = 4%)
+    min_position_size: float = Field(default=0.01, env="MIN_POSITION_SIZE")  # Minimum 1% position
     stop_loss_percent: float = Field(default=0.08, env="STOP_LOSS_PERCENT")
     rebalance_frequency: int = Field(default=3600, env="REBALANCE_FREQUENCY")
     min_rebalance_threshold: float = Field(default=0.05, env="MIN_REBALANCE_THRESHOLD")
+    
+    # Portfolio Diversification
+    target_portfolio_size: int = Field(default=35, env="TARGET_PORTFOLIO_SIZE")  # Target 35 stocks
+    min_portfolio_size: int = Field(default=25, env="MIN_PORTFOLIO_SIZE")  # Minimum 25 stocks
+    max_portfolio_size: int = Field(default=50, env="MAX_PORTFOLIO_SIZE")  # Maximum 50 stocks
+    max_sector_allocation: float = Field(default=0.25, env="MAX_SECTOR_ALLOCATION")  # Max 25% per sector
+    max_asset_class_allocation: float = Field(default=0.40, env="MAX_ASSET_CLASS_ALLOCATION")  # Max 40% per asset class
     
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")

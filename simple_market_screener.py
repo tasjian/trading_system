@@ -21,22 +21,72 @@ class SimpleMarketScreener:
     def __init__(self):
         """Initialize the simple market screener."""
         
-        # Curated stock universe by category
+        # Expanded stock universe by asset class and sector for better diversification
         self.stock_universe = {
-            'conservative': [
-                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'JPM', 'UNH', 'JNJ', 'V', 'PG', 'XOM',
-                'HD', 'CVX', 'MA', 'BAC', 'ABBV', 'PFE', 'COST', 'DIS', 'TMO', 'KO'
+            'large_cap_tech': [
+                'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'NVDA', 'TSLA',
+                'AVGO', 'ORCL', 'CRM', 'ADBE', 'NFLX', 'QCOM', 'AMD', 'INTC'
             ],
-            'moderate': [
-                'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'AVGO',
-                'CRM', 'ADBE', 'NFLX', 'PYPL', 'SNOW', 'AMD', 'ORCL', 'QCOM',
-                'SBUX', 'ROKU', 'ZM', 'SHOP'
+            'large_cap_healthcare': [
+                'UNH', 'JNJ', 'PFE', 'ABBV', 'TMO', 'DHR', 'BMY', 'MDT',
+                'AMGN', 'GILD', 'CVS', 'CI', 'ANTM', 'HUM', 'REGN', 'VRTX'
             ],
-            'aggressive': [
-                'TSLA', 'NVDA', 'META', 'SNOW', 'PLTR', 'COIN', 'RBLX', 'U',
-                'CRWD', 'DDOG', 'OKTA', 'TEAM', 'TWLO', 'ZS', 'BILL', 'DKNG',
-                'HOOD', 'SOFI', 'RIVN', 'AMD', 'ROKU', 'ZM', 'PYPL', 'SQ'
+            'large_cap_financials': [
+                'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'AXP', 'USB',
+                'PNC', 'TFC', 'COF', 'SCHW', 'BK', 'STT', 'BLK', 'SPGI'
+            ],
+            'large_cap_consumer': [
+                'V', 'MA', 'HD', 'PG', 'KO', 'PEP', 'COST', 'WMT',
+                'DIS', 'MCD', 'SBUX', 'NKE', 'LOW', 'TGT', 'CL', 'KMB'
+            ],
+            'large_cap_industrials': [
+                'CAT', 'BA', 'HON', 'UPS', 'RTX', 'LMT', 'MMM', 'GE',
+                'UBER', 'FDX', 'DE', 'NOC', 'ITW', 'CSX', 'NSC', 'UNP'
+            ],
+            'energy_materials': [
+                'XOM', 'CVX', 'COP', 'EOG', 'SLB', 'MPC', 'VLO', 'PSX',
+                'FCG', 'DVN', 'LIN', 'APD', 'SHW', 'ECL', 'FCX', 'NEM'
+            ],
+            'utilities_reits': [
+                'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'XEL', 'SRE',
+                'AMT', 'CCI', 'EQIX', 'PLD', 'PSA', 'EQR', 'AVB', 'O'
+            ],
+            'mid_cap_growth': [
+                'SNOW', 'CRWD', 'DDOG', 'OKTA', 'TEAM', 'TWLO', 'ZS', 'BILL',
+                'PLTR', 'U', 'RBLX', 'COIN', 'HOOD', 'SOFI', 'SQ', 'PYPL'
+            ],
+            'mid_cap_value': [
+                'F', 'GM', 'T', 'VZ', 'KHC', 'INTC', 'IBM', 'GIS',
+                'K', 'CAG', 'CPB', 'HSY', 'SJM', 'CLX', 'CHD', 'PG'
+            ],
+            'small_cap_growth': [
+                'ROKU', 'ZM', 'SHOP', 'SQ', 'PYPL', 'PINS', 'SNAP', 'SPOT',
+                'UBER', 'LYFT', 'DASH', 'ABNB', 'AI', 'SMCI', 'ARM', 'RIVN'
             ]
+        }
+        
+        # Asset class mapping for diversification
+        self.asset_classes = {
+            'large_cap_growth': ['large_cap_tech', 'mid_cap_growth'],
+            'large_cap_value': ['large_cap_financials', 'large_cap_industrials', 'mid_cap_value'],
+            'healthcare': ['large_cap_healthcare'],
+            'consumer': ['large_cap_consumer'],
+            'energy_materials': ['energy_materials'],
+            'utilities_reits': ['utilities_reits'],
+            'small_mid_cap': ['mid_cap_growth', 'mid_cap_value', 'small_cap_growth']
+        }
+        
+        # Sector mapping for sector-based diversification
+        self.sectors = {
+            'Technology': ['large_cap_tech', 'mid_cap_growth'],
+            'Healthcare': ['large_cap_healthcare'],
+            'Financials': ['large_cap_financials'],
+            'Consumer': ['large_cap_consumer'],
+            'Industrials': ['large_cap_industrials'],
+            'Energy': ['energy_materials'],
+            'Utilities': ['utilities_reits'],
+            'Communication': ['large_cap_tech'],
+            'Materials': ['energy_materials']
         }
     
     async def get_stock_data(self, symbol: str) -> Dict:
@@ -68,6 +118,50 @@ class SimpleMarketScreener:
         except Exception as e:
             logger.warning(f"Failed to get data for {symbol}: {e}")
             return None
+    
+    def get_all_stocks(self) -> List[str]:
+        """Get all stocks from the universe."""
+        all_stocks = set()
+        for category, stocks in self.stock_universe.items():
+            all_stocks.update(stocks)
+        return list(all_stocks)
+    
+    def get_diversified_stock_selection(self, target_size: int = 35) -> Dict[str, List[str]]:
+        """Select stocks for a diversified portfolio across asset classes and sectors."""
+        from config.settings import settings
+        
+        selection = {}
+        total_selected = 0
+        
+        # Define allocation targets for each asset class (percentages)
+        asset_class_targets = {
+            'large_cap_growth': 0.30,  # 30%
+            'large_cap_value': 0.25,   # 25%
+            'healthcare': 0.15,        # 15%
+            'consumer': 0.10,          # 10%
+            'energy_materials': 0.08,  # 8%
+            'utilities_reits': 0.07,   # 7%
+            'small_mid_cap': 0.05      # 5%
+        }
+        
+        # Calculate number of stocks per asset class
+        for asset_class, target_pct in asset_class_targets.items():
+            num_stocks = max(1, int(target_size * target_pct))
+            
+            # Get stocks from categories in this asset class
+            available_stocks = []
+            for category in self.asset_classes[asset_class]:
+                available_stocks.extend(self.stock_universe[category])
+            
+            # Remove duplicates and select top stocks
+            available_stocks = list(set(available_stocks))
+            selected_stocks = available_stocks[:num_stocks]
+            
+            selection[asset_class] = selected_stocks
+            total_selected += len(selected_stocks)
+        
+        logger.info(f"Selected {total_selected} stocks across {len(selection)} asset classes")
+        return selection
     
     def calculate_simple_score(self, data: Dict, risk_level: str) -> float:
         """Calculate a simple scoring system for stocks."""
