@@ -12,6 +12,7 @@ from config.settings import settings, validate_settings
 from agents.workflow import trading_workflow
 from tools.alpaca_client import alpaca_client
 from compliance.regulatory_compliance import ensure_regulatory_compliance
+from utils.daily_summary_scheduler import daily_scheduler, record_trade_for_summary
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +35,7 @@ class TradingSystemApp:
         self.session_id = str(uuid.uuid4())
         self.cycle_count = 0
         self.last_cycle_time = None
+        self.daily_summary_task = None
         
         # Validate configuration
         validate_settings()
@@ -45,6 +47,9 @@ class TradingSystemApp:
         
         # Safety checks
         self._perform_startup_checks()
+        
+        # Initialize daily summary tracking
+        asyncio.create_task(daily_scheduler.initialize_day_tracking())
         
         logger.info(f"Trading System initialized - Session: {self.session_id}")
         logger.info(f"Trading Mode: {settings.trading_mode}")
@@ -127,6 +132,10 @@ class TradingSystemApp:
                 signals = result.get("signals_generated", 0)
                 orders = result.get("orders_executed", 0)
                 
+                # Record trades for daily summary
+                for _ in range(orders):
+                    record_trade_for_summary()
+                
                 logger.info(f"Cycle completed: Portfolio=${portfolio_value:.2f}, "
                           f"Positions={positions}, Signals={signals}, Orders={orders}")
             else:
@@ -152,6 +161,10 @@ class TradingSystemApp:
         """
         logger.info(f"Starting continuous trading mode (interval: {cycle_interval}s)")
         self.running = True
+        
+        # Start daily summary scheduler
+        self.daily_summary_task = asyncio.create_task(daily_scheduler.start_scheduler())
+        logger.info("📧 Daily summary scheduler started")
         
         try:
             while self.running:
@@ -211,6 +224,12 @@ class TradingSystemApp:
         """Shutdown the trading system gracefully."""
         logger.info("Shutting down trading system...")
         self.running = False
+        
+        # Stop daily summary scheduler
+        if self.daily_summary_task and not self.daily_summary_task.done():
+            daily_scheduler.stop_scheduler()
+            self.daily_summary_task.cancel()
+            logger.info("📧 Daily summary scheduler stopped")
         
         try:
             # Cancel all pending orders as safety measure
@@ -276,6 +295,9 @@ class TradingSystemApp:
                     side=action.lower()
                 )
                 logger.info(f"Order placed: {action} {quantity} {symbol}")
+                
+                # Record trade for daily summary
+                record_trade_for_summary()
             
             return {"status": "success", "order": result}
             
@@ -342,6 +364,7 @@ async def main():
     print("  'buy SYMBOL QTY' - Manual buy order")
     print("  'sell SYMBOL QTY' - Manual sell order") 
     print("  'close SYMBOL' - Close position")
+    print("  'summary' - Send test daily summary email")
     print("  'stop' - Stop system")
     print("  'help' - Show this help")
     print("\n")
@@ -391,6 +414,17 @@ async def main():
                 else:
                     print("Usage: close SYMBOL")
                     
+            elif command == "summary":
+                print("Sending test daily summary email...")
+                try:
+                    success = await daily_scheduler.test_daily_summary()
+                    if success:
+                        print("✅ Daily summary email sent successfully!")
+                    else:
+                        print("❌ Failed to send daily summary email.")
+                except Exception as e:
+                    print(f"❌ Error sending daily summary: {e}")
+                    
             elif command == "help":
                 print("\nAvailable commands:")
                 print("  cycle - Run single trading cycle")
@@ -399,6 +433,7 @@ async def main():
                 print("  buy SYMBOL QTY - Manual buy order")
                 print("  sell SYMBOL QTY - Manual sell order")
                 print("  close SYMBOL - Close position")
+                print("  summary - Send test daily summary email")
                 print("  stop - Stop system")
                 
             elif command:

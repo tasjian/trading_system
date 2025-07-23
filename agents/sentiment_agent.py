@@ -15,6 +15,7 @@ import logging
 import json
 import time
 import re
+import random
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Union
@@ -42,11 +43,50 @@ except ImportError:
     Forbidden = Exception  
     REDDIT_AVAILABLE = False
 
+# TikTok scraping with Playwright
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    async_playwright = None
+    PLAYWRIGHT_AVAILABLE = False
+
 # LLM Integration
 from tools.llm_client import llm_client, LLMResponse
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+class TikTokStealthConfig:
+    """Configuration for TikTok anti-bot measures."""
+    
+    USER_AGENTS = [
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    ]
+    
+    VIEWPORT_SIZES = [
+        {'width': 1920, 'height': 1080},
+        {'width': 1366, 'height': 768},
+        {'width': 1536, 'height': 864},
+        {'width': 1440, 'height': 900},
+        {'width': 1280, 'height': 720}
+    ]
+    
+    @staticmethod
+    def get_random_user_agent():
+        return random.choice(TikTokStealthConfig.USER_AGENTS)
+    
+    @staticmethod 
+    def get_random_viewport():
+        return random.choice(TikTokStealthConfig.VIEWPORT_SIZES)
+    
+    @staticmethod
+    def get_random_delay(min_seconds=1, max_seconds=5):
+        return random.uniform(min_seconds, max_seconds)
 
 class SentimentScore(Enum):
     """Sentiment classification levels."""
@@ -68,14 +108,16 @@ class TrendSignal(Enum):
 class SocialPost:
     """Individual social media post data structure."""
     id: str
-    platform: str  # 'reddit', 'twitter', 'stocktwits'
+    platform: str  # 'reddit', 'twitter', 'stocktwits', 'tiktok'
     content: str
     author: str
     timestamp: datetime
-    upvotes: int = 0
+    upvotes: int = 0  # likes for TikTok, upvotes for Reddit
     comments: int = 0
     url: str = ""
     subreddit: str = ""  # For Reddit posts
+    hashtags: List[str] = field(default_factory=list)  # For TikTok hashtags
+    views: int = 0  # TikTok views
     
 @dataclass
 class ExtractedEntity:
@@ -117,15 +159,20 @@ class SocialMediaIngestionLayer:
         self.reddit_client = None
         self.twitter_client = None
         self.stocktwits_client = None
+        self.tiktok_playwright = None
         self.content_cache = {}
+        self.html_cache = {}  # For caching raw HTML responses
         self.rate_limits = {
             'reddit': {'calls': 0, 'reset_time': time.time()},
             'twitter': {'calls': 0, 'reset_time': time.time()},
-            'stocktwits': {'calls': 0, 'reset_time': time.time()}
+            'stocktwits': {'calls': 0, 'reset_time': time.time()},
+            'tiktok': {'calls': 0, 'reset_time': time.time()}
         }
+        self.tiktok_stealth = TikTokStealthConfig()
         
         # Initialize clients
         self._init_reddit_client()
+        self._init_tiktok_scraper()
         # self._init_twitter_client()  # Add when needed
         # self._init_stocktwits_client()  # Add when needed
         
@@ -163,6 +210,15 @@ class SocialMediaIngestionLayer:
         except Exception as e:
             logger.error(f"Failed to initialize Reddit client: {e}")
             self.reddit_client = None
+    
+    def _init_tiktok_scraper(self):
+        """Initialize TikTok scraper availability check."""
+        if not PLAYWRIGHT_AVAILABLE:
+            logger.warning("⚠️ Playwright not installed, TikTok scraping disabled. Run: pip install playwright")
+            self.tiktok_playwright = None
+        else:
+            self.tiktok_playwright = True
+            logger.info("✅ TikTok scraper (Playwright) available")
     
     async def fetch_reddit_posts(self, 
                                 subreddits: List[str] = None,
@@ -216,12 +272,320 @@ class SocialMediaIngestionLayer:
         logger.info(f"Fetched {len(posts)} filtered Reddit posts")
         return posts
     
+    async def fetch_tiktok_posts(self,
+                                hashtags: List[str] = None,
+                                keywords: List[str] = None, 
+                                max_posts: int = 50) -> List[SocialPost]:
+        """Fetch TikTok posts using advanced anti-bot stealth measures."""
+        if not self.tiktok_playwright or not PLAYWRIGHT_AVAILABLE:
+            logger.warning("TikTok scraper not available")
+            return []
+            
+        if not hashtags:
+            hashtags = ['stocks', 'investing', 'trading', 'finance', 'stonks', 'wallstreet']
+            
+        if not keywords:
+            keywords = ['buy', 'sell', 'calls', 'puts', 'bull', 'bear', 'moon', 'diamond', 'hodl']
+        
+        posts = []
+        
+        try:
+            # Enhanced rate limiting check
+            current_time = time.time()
+            rate_limit = self.rate_limits['tiktok']
+            
+            if current_time - rate_limit['reset_time'] > 3600:  # Reset every hour
+                rate_limit['calls'] = 0
+                rate_limit['reset_time'] = current_time
+                
+            # More conservative rate limiting to avoid detection
+            if rate_limit['calls'] >= 3:  # Reduced from 5 to 3
+                logger.warning("TikTok rate limit exceeded, skipping")
+                return []
+                
+            rate_limit['calls'] += 1
+            
+            # Check cache first
+            cache_key = f"tiktok_{','.join(sorted(hashtags))}"
+            if cache_key in self.html_cache:
+                cache_entry = self.html_cache[cache_key]
+                if time.time() - cache_entry['timestamp'] < 3600:  # 1 hour cache
+                    logger.info("Using cached TikTok data")
+                    return cache_entry['posts']
+            
+            async with async_playwright() as p:
+                # Enhanced stealth browser configuration
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox', 
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--no-first-run',
+                        '--no-default-browser-check',
+                        '--disable-background-timer-throttling',
+                        '--disable-renderer-backgrounding',
+                        '--disable-features=TranslateUI',
+                        '--disable-ipc-flooding-protection',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-web-security',
+                        '--disable-features=VizDisplayCompositor'
+                    ]
+                )
+                
+                # Create browser context with randomized settings
+                viewport = self.tiktok_stealth.get_random_viewport()
+                user_agent = self.tiktok_stealth.get_random_user_agent()
+                
+                context = await browser.new_context(
+                    viewport=viewport,
+                    user_agent=user_agent,
+                    locale='en-US',
+                    timezone_id='America/New_York',
+                    permissions=['geolocation'],
+                    extra_http_headers={
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1'
+                    }
+                )
+                
+                page = await context.new_page()
+                
+                # Add stealth JavaScript to mask automation
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['en-US', 'en']
+                    });
+                    
+                    window.chrome = {
+                        runtime: {}
+                    };
+                """)
+                
+                # Random initial delay to seem more human
+                await asyncio.sleep(self.tiktok_stealth.get_random_delay(2, 5))
+                
+                for hashtag in hashtags[:2]:  # Further reduced from 3 to 2 hashtags
+                    try:
+                        logger.info(f"Scraping TikTok hashtag: #{hashtag}")
+                        
+                        # Try different TikTok URL formats
+                        urls_to_try = [
+                            f"https://www.tiktok.com/tag/{hashtag}",
+                            f"https://www.tiktok.com/hashtag/{hashtag}",
+                            f"https://www.tiktok.com/search?q=%23{hashtag}"
+                        ]
+                        
+                        success = False
+                        for url in urls_to_try:
+                            try:
+                                # Navigate with longer timeout and better error handling
+                                response = await page.goto(url, 
+                                                         wait_until='networkidle', 
+                                                         timeout=30000)
+                                
+                                if response and response.status < 400:
+                                    success = True
+                                    logger.info(f"Successfully loaded: {url}")
+                                    break
+                                    
+                            except Exception as nav_error:
+                                logger.debug(f"Failed to load {url}: {nav_error}")
+                                continue
+                        
+                        if not success:
+                            logger.warning(f"Failed to load any URL for #{hashtag}")
+                            continue
+                        
+                        # Random human-like delay after page load
+                        await asyncio.sleep(self.tiktok_stealth.get_random_delay(3, 7))
+                        
+                        # Try to detect if we're blocked
+                        page_title = await page.title()
+                        if 'blocked' in page_title.lower() or 'captcha' in page_title.lower():
+                            logger.warning("TikTok blocking detected, stopping scraping")
+                            break
+                        
+                        # Cache the raw HTML for audit
+                        html_content = await page.content()
+                        self.html_cache[f"{hashtag}_{int(time.time())}"] = {
+                            'html': html_content,
+                            'timestamp': time.time(),
+                            'url': url
+                        }
+                        
+                        # Human-like scrolling with random patterns
+                        scroll_patterns = [
+                            [(0, 800), (0, 1200), (0, 600)],
+                            [(0, 1000), (0, 1500), (0, 800), (0, 400)],
+                            [(0, 600), (0, 1100), (0, 900)]
+                        ]
+                        
+                        pattern = random.choice(scroll_patterns)
+                        for dx, dy in pattern:
+                            await page.mouse.wheel(dx, dy)
+                            await asyncio.sleep(self.tiktok_stealth.get_random_delay(1.5, 3.5))
+                        
+                        # Try multiple extraction strategies
+                        extraction_strategies = [
+                            self._extract_tiktok_posts_strategy1,
+                            self._extract_tiktok_posts_strategy2, 
+                            self._extract_tiktok_posts_strategy3
+                        ]
+                        
+                        hashtag_posts = []
+                        for strategy in extraction_strategies:
+                            try:
+                                strategy_posts = await strategy(page, hashtag, keywords, max_posts // len(hashtags))
+                                if strategy_posts:
+                                    hashtag_posts = strategy_posts
+                                    logger.info(f"Strategy {strategy.__name__} found {len(strategy_posts)} posts")
+                                    break
+                            except Exception as strategy_error:
+                                logger.debug(f"Strategy {strategy.__name__} failed: {strategy_error}")
+                                continue
+                        
+                        posts.extend(hashtag_posts)
+                        logger.info(f"Found {len(hashtag_posts)} posts for #{hashtag}")
+                        
+                        # Longer random delay between hashtags
+                        await asyncio.sleep(self.tiktok_stealth.get_random_delay(5, 10))
+                        
+                    except Exception as hashtag_error:
+                        logger.warning(f"Error scraping TikTok hashtag #{hashtag}: {hashtag_error}")
+                        continue
+                
+                await context.close()
+                await browser.close()
+                
+                # Cache the results
+                self.html_cache[cache_key] = {
+                    'posts': posts,
+                    'timestamp': time.time()
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in TikTok scraping: {e}")
+        
+        logger.info(f"Fetched {len(posts)} TikTok posts with financial keywords")
+        return posts
+    
+    async def _extract_tiktok_posts_strategy1(self, page, hashtag: str, keywords: List[str], max_posts: int) -> List[SocialPost]:
+        """Primary extraction strategy using data-e2e selectors."""
+        posts = []
+        video_cards = await page.query_selector_all("div[data-e2e='search-video-item'], div[data-e2e*='video-item']")
+        
+        for i, card in enumerate(video_cards[:max_posts]):
+            try:
+                text_content = await card.inner_text()
+                if not text_content or not any(kw.lower() in text_content.lower() for kw in keywords):
+                    continue
+                    
+                # Extract author
+                author_elem = await card.query_selector("[data-e2e='video-author-uniqueid'], [data-e2e*='author']")
+                author = await author_elem.inner_text() if author_elem else f"tiktok_user_{i}"
+                
+                post = self._create_tiktok_post(text_content, author, hashtag, i)
+                posts.append(post)
+                
+            except Exception as e:
+                logger.debug(f"Strategy 1 card error: {e}")
+                continue
+                
+        return posts
+    
+    async def _extract_tiktok_posts_strategy2(self, page, hashtag: str, keywords: List[str], max_posts: int) -> List[SocialPost]:
+        """Fallback strategy using CSS class selectors."""
+        posts = []
+        selectors = ["div[class*='video']", "div[class*='item']", "article", "[class*='content']"]
+        
+        for selector in selectors:
+            elements = await page.query_selector_all(selector)
+            if elements:
+                break
+        else:
+            return posts
+            
+        for i, elem in enumerate(elements[:max_posts]):
+            try:
+                text_content = await elem.inner_text()
+                if not text_content or not any(kw.lower() in text_content.lower() for kw in keywords):
+                    continue
+                    
+                post = self._create_tiktok_post(text_content, f"tiktok_user_{i}", hashtag, i)
+                posts.append(post)
+                
+            except Exception as e:
+                logger.debug(f"Strategy 2 element error: {e}")
+                continue
+                
+        return posts
+    
+    async def _extract_tiktok_posts_strategy3(self, page, hashtag: str, keywords: List[str], max_posts: int) -> List[SocialPost]:
+        """Last resort: extract from page text content."""
+        posts = []
+        try:
+            full_text = await page.inner_text('body')
+            
+            # Split into chunks that might represent posts
+            text_chunks = [chunk.strip() for chunk in full_text.split('\n\n') if len(chunk.strip()) > 20]
+            
+            for i, chunk in enumerate(text_chunks[:max_posts]):
+                if any(kw.lower() in chunk.lower() for kw in keywords):
+                    post = self._create_tiktok_post(chunk, f"tiktok_user_{i}", hashtag, i)
+                    posts.append(post)
+                    
+        except Exception as e:
+            logger.debug(f"Strategy 3 error: {e}")
+            
+        return posts
+    
+    def _create_tiktok_post(self, content: str, author: str, hashtag: str, index: int) -> SocialPost:
+        """Create a standardized TikTok post object."""
+        # Generate unique ID
+        content_hash = hashlib.md5(f"{content}{author}{hashtag}".encode()).hexdigest()[:12]
+        
+        # Extract hashtags
+        hashtag_pattern = r'#\w+'
+        extracted_hashtags = re.findall(hashtag_pattern, content)
+        if hashtag not in [h.lstrip('#') for h in extracted_hashtags]:
+            extracted_hashtags.append(f"#{hashtag}")
+        
+        return SocialPost(
+            id=f"tiktok_{content_hash}",
+            platform='tiktok',
+            content=content[:500],  # Limit content length
+            author=author,
+            timestamp=datetime.now(),
+            upvotes=0,  # Likes not extractable
+            comments=0,  # Comments not extractable 
+            url=f"https://www.tiktok.com/tag/{hashtag}",
+            hashtags=extracted_hashtags,
+            views=0  # Views not extractable
+        )
+    
     async def fetch_social_content(self, 
                                   platforms: List[str] = None,
                                   tickers: List[str] = None) -> List[SocialPost]:
         """Unified method to fetch content from multiple platforms."""
         if not platforms:
-            platforms = ['reddit']  # Start with Reddit, expand later
+            platforms = ['reddit', 'tiktok']  # Include both Reddit and TikTok by default
             
         all_posts = []
         
@@ -234,6 +598,19 @@ class SocialMediaIngestionLayer:
             
             reddit_posts = await self.fetch_reddit_posts(keywords=keywords)
             all_posts.extend(reddit_posts)
+        
+        if 'tiktok' in platforms:
+            # Create TikTok-specific hashtags and keywords
+            hashtags = ['stocks', 'investing', 'trading', 'finance', 'stonks', 'wallstreet']
+            keywords = ['buy', 'sell', 'calls', 'puts', 'bull', 'bear', 'moon', 'diamond', 'hodl']
+            if tickers:
+                # Add ticker symbols as hashtags and keywords
+                hashtags.extend([ticker.lower() for ticker in tickers])
+                keywords.extend(tickers)
+                keywords.extend([f"${ticker}" for ticker in tickers])
+            
+            tiktok_posts = await self.fetch_tiktok_posts(hashtags=hashtags, keywords=keywords)
+            all_posts.extend(tiktok_posts)
         
         # Add Twitter/StockTwits here when implemented
         # if 'twitter' in platforms:
@@ -686,7 +1063,7 @@ class ConsumerSentimentAgent:
         try:
             # Layer 1: Ingest social content
             posts = await self.ingestion_layer.fetch_social_content(
-                platforms=platforms or ['reddit'],
+                platforms=platforms or ['reddit', 'tiktok'],
                 tickers=tickers
             )
             

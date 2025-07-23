@@ -12,6 +12,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import ssl
 import os
+import pytz
+from datetime import datetime, time
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -34,6 +36,34 @@ class TransactionAlert:
     reasoning: str
     agent_source: str
     metadata: Dict[str, Any]
+
+@dataclass
+class Position:
+    """Position data structure for daily summary."""
+    symbol: str
+    quantity: float
+    market_value: float
+    unrealized_pnl: float
+    percent_change: float
+    side: str  # 'long' or 'short'
+
+@dataclass
+class DailySummary:
+    """Daily trading summary data structure."""
+    date: str
+    portfolio_value: float
+    cash_balance: float
+    total_equity: float
+    day_change: float
+    day_change_percent: float
+    daily_return_percent: float  # Daily rate of return as percentage
+    ytd_return_percent: float    # Year-to-date rate of return as percentage
+    positions: List[Position]
+    total_positions: int
+    trades_today: int
+    portfolio_performance: str
+    risk_metrics: Dict[str, Any]
+    market_status: str
 
 class EmailWebhookNotifier:
     """Email notification system using multiple webhook services."""
@@ -365,6 +395,420 @@ class EmailWebhookNotifier:
         
         logger.info("Webhook configuration updated")
     
+    def is_market_closed(self) -> bool:
+        """Check if the market is currently closed."""
+        est = pytz.timezone('US/Eastern')
+        now = datetime.now(est)
+        
+        # Market is closed on weekends
+        if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            return True
+        
+        # Market hours: 9:30 AM - 4:00 PM EST
+        market_open = time(9, 30)  # 9:30 AM
+        market_close = time(16, 0)  # 4:00 PM
+        
+        current_time = now.time()
+        
+        # Market is closed if current time is outside market hours
+        return current_time < market_open or current_time >= market_close
+    
+    def get_market_status(self) -> str:
+        """Get current market status string."""
+        if self.is_market_closed():
+            est = pytz.timezone('US/Eastern')
+            now = datetime.now(est)
+            
+            if now.weekday() >= 5:  # Weekend
+                return "Market Closed (Weekend)"
+            else:
+                current_time = now.time()
+                market_open = time(9, 30)
+                
+                if current_time < market_open:
+                    return "Market Closed (Pre-Market)"
+                else:
+                    return "Market Closed (After-Hours)"
+        else:
+            return "Market Open"
+    
+    async def send_daily_summary(self, summary: DailySummary) -> Dict[str, bool]:
+        """Send daily trading summary email at market close."""
+        logger.info("Sending daily trading summary")
+        
+        results = {}
+        
+        # Generate email content
+        subject, body = self._generate_daily_summary_content(summary)
+        
+        # Try webhook services first (faster)
+        webhook_tasks = []
+        for service_name, config in self.webhook_services.items():
+            if service_name == "smtp_gmail":
+                continue  # Handle SMTP separately
+                
+            if config["enabled"] and config["url"]:
+                webhook_tasks.append(
+                    self._send_daily_webhook_notification(service_name, config, summary, subject, body)
+                )
+        
+        # Execute webhook notifications concurrently
+        if webhook_tasks:
+            webhook_results = await asyncio.gather(*webhook_tasks, return_exceptions=True)
+            for i, result in enumerate(webhook_results):
+                service_name = list(self.webhook_services.keys())[i]
+                results[service_name] = not isinstance(result, Exception)
+                if isinstance(result, Exception):
+                    logger.error(f"Daily summary webhook {service_name} failed: {result}")
+        
+        # Try SMTP as fallback
+        smtp_success = await self._send_daily_smtp_notification(subject, body, summary)
+        results["smtp_gmail"] = smtp_success
+        
+        # Log overall success
+        successful_methods = sum(results.values())
+        logger.info(f"Daily summary sent via {successful_methods}/{len(results)} methods")
+        
+        return results
+    
+    def _generate_daily_summary_content(self, summary: DailySummary) -> tuple[str, str]:
+        """Generate daily summary email subject and HTML body."""
+        
+        # Generate subject
+        subject = "Trading_system daily summary"
+        
+        # Determine performance color and emoji
+        if summary.day_change > 0:
+            perf_color = "#28a745"  # Green
+            perf_emoji = "📈"
+            perf_text = "UP"
+        elif summary.day_change < 0:
+            perf_color = "#dc3545"  # Red  
+            perf_emoji = "📉"
+            perf_text = "DOWN"
+        else:
+            perf_color = "#6c757d"  # Gray
+            perf_emoji = "➡️"
+            perf_text = "FLAT"
+        
+        # Generate positions table
+        positions_html = ""
+        if summary.positions:
+            for position in summary.positions:
+                side_emoji = "🟢" if position.side == "long" else "🔴"
+                pnl_color = "#28a745" if position.unrealized_pnl >= 0 else "#dc3545"
+                
+                positions_html += f"""
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">
+                        {side_emoji} {position.symbol}
+                    </td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">
+                        {position.quantity:,.1f}
+                    </td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">
+                        ${position.market_value:,.2f}
+                    </td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right; color: {pnl_color};">
+                        ${position.unrealized_pnl:,.2f}
+                    </td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right; color: {pnl_color};">
+                        {position.percent_change:+.1f}%
+                    </td>
+                </tr>
+                """
+        else:
+            positions_html = """
+            <tr>
+                <td colspan="5" style="padding: 20px; text-align: center; color: #6c757d;">
+                    No positions currently held
+                </td>
+            </tr>
+            """
+        
+        # Generate HTML body
+        body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>{subject}</title>
+            <style>
+                body {{
+                    font-family: 'Arial', sans-serif;
+                    line-height: 1.6;
+                    margin: 0;
+                    padding: 0;
+                    background-color: #f4f4f4;
+                }}
+                .container {{
+                    max-width: 800px;
+                    margin: 20px auto;
+                    background: white;
+                    border-radius: 10px;
+                    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+                    overflow: hidden;
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    text-align: center;
+                    padding: 30px 20px;
+                }}
+                .content {{
+                    padding: 30px;
+                }}
+                .summary-box {{
+                    background: #f8f9fa;
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin: 20px 0;
+                    border-left: 4px solid #667eea;
+                }}
+                .performance-box {{
+                    background: {perf_color}10;
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin: 20px 0;
+                    border-left: 4px solid {perf_color};
+                }}
+                .positions-table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                    background: white;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }}
+                .positions-table th {{
+                    background: #f8f9fa;
+                    color: #495057;
+                    font-weight: 600;
+                    padding: 12px 8px;
+                    text-align: left;
+                    border-bottom: 2px solid #dee2e6;
+                }}
+                .metric {{
+                    display: inline-block;
+                    margin: 10px 15px;
+                    text-align: center;
+                }}
+                .metric-value {{
+                    display: block;
+                    font-size: 24px;
+                    font-weight: bold;
+                    margin-bottom: 5px;
+                }}
+                .metric-label {{
+                    display: block;
+                    font-size: 12px;
+                    color: #6c757d;
+                    text-transform: uppercase;
+                }}
+                .footer {{
+                    background: #f8f9fa;
+                    text-align: center;
+                    padding: 20px;
+                    color: #6c757d;
+                    border-top: 1px solid #dee2e6;
+                }}
+                .risk-metrics {{
+                    background: #fff3cd;
+                    border-radius: 8px;
+                    padding: 15px;
+                    margin: 20px 0;
+                    border-left: 4px solid #ffc107;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📊 Daily Trading Summary</h1>
+                    <p style="font-size: 18px; margin: 10px 0 0 0;">{summary.date} - {summary.market_status}</p>
+                </div>
+                
+                <div class="content">
+                    <div class="performance-box">
+                        <h2 style="color: {perf_color}; margin-top: 0;">
+                            {perf_emoji} Portfolio Performance: {perf_text}
+                        </h2>
+                        <div style="display: flex; flex-wrap: wrap; justify-content: space-around;">
+                            <div class="metric">
+                                <span class="metric-value" style="color: {perf_color};">
+                                    ${summary.portfolio_value:,.2f}
+                                </span>
+                                <span class="metric-label">Portfolio Value</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-value" style="color: {perf_color};">
+                                    ${summary.day_change:+,.2f}
+                                </span>
+                                <span class="metric-label">Day Change ($)</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-value" style="color: {perf_color};">
+                                    {summary.daily_return_percent:+.2f}%
+                                </span>
+                                <span class="metric-label">Daily Return</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-value" style="color: {perf_color if summary.ytd_return_percent >= 0 else '#dc3545'};">
+                                    {summary.ytd_return_percent:+.2f}%
+                                </span>
+                                <span class="metric-label">YTD Return</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="summary-box">
+                        <h3>💼 Account Summary</h3>
+                        <div style="display: flex; flex-wrap: wrap; justify-content: space-around;">
+                            <div class="metric">
+                                <span class="metric-value">${summary.total_equity:,.2f}</span>
+                                <span class="metric-label">Total Equity</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-value">${summary.cash_balance:,.2f}</span>
+                                <span class="metric-label">Cash Balance</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-value">{summary.total_positions}</span>
+                                <span class="metric-label">Active Positions</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-value">{summary.trades_today}</span>
+                                <span class="metric-label">Trades Today</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="positions-section">
+                        <h3>📈 Current Positions</h3>
+                        <table class="positions-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th style="text-align: right;">Quantity</th>
+                                    <th style="text-align: right;">Market Value</th>
+                                    <th style="text-align: right;">Unrealized P&L</th>
+                                    <th style="text-align: right;">Change %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {positions_html}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="risk-metrics">
+                        <h3>⚠️ Risk Metrics</h3>
+                        <p><strong>Portfolio Performance:</strong> {summary.portfolio_performance}</p>
+                        <ul>
+                            <li>Maximum position risk: {summary.risk_metrics.get('max_position_risk', 'N/A')}</li>
+                            <li>Overall portfolio risk: {summary.risk_metrics.get('portfolio_risk', 'N/A')}</li>
+                            <li>Risk assessment: {summary.risk_metrics.get('risk_level', 'Moderate')}</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>🤖 Generated by AI Trading System | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                    <p>This daily summary was sent to: {self.recipient_email}</p>
+                    <p style="font-size: 10px;">Trading involves risk. All trades are executed in paper mode for safety.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return subject, body
+    
+    async def _send_daily_webhook_notification(self, service_name: str, config: Dict, 
+                                             summary: DailySummary, subject: str, body: str) -> bool:
+        """Send daily summary via webhook service."""
+        try:
+            payload = {
+                "recipient": self.recipient_email,
+                "subject": subject,
+                "body": body,
+                "summary_data": {
+                    "date": summary.date,
+                    "portfolio_value": summary.portfolio_value,
+                    "cash_balance": summary.cash_balance,
+                    "total_equity": summary.total_equity,
+                    "day_change": summary.day_change,
+                    "day_change_percent": summary.day_change_percent,
+                    "daily_return_percent": summary.daily_return_percent,
+                    "ytd_return_percent": summary.ytd_return_percent,
+                    "total_positions": summary.total_positions,
+                    "trades_today": summary.trades_today,
+                    "portfolio_performance": summary.portfolio_performance,
+                    "market_status": summary.market_status,
+                    "risk_metrics": summary.risk_metrics
+                },
+                "service": "AI Trading System - Daily Summary",
+                "type": "daily_summary",
+                "priority": "normal"
+            }
+            
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(
+                    config["method"],
+                    config["url"],
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ {service_name} daily summary webhook sent successfully")
+                        return True
+                    else:
+                        logger.error(f"❌ {service_name} daily summary webhook failed with status {response.status}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"❌ {service_name} daily summary webhook error: {e}")
+            return False
+    
+    async def _send_daily_smtp_notification(self, subject: str, body: str, summary: DailySummary) -> bool:
+        """Send daily summary via SMTP."""
+        smtp_config = self.webhook_services["smtp_gmail"]
+        
+        if not smtp_config["enabled"] or not smtp_config["email"] or not smtp_config["password"]:
+            logger.warning("SMTP not configured for daily summary, skipping")
+            return False
+        
+        try:
+            # Create message
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = smtp_config["email"]
+            msg['To'] = self.recipient_email
+            
+            # Add HTML body
+            html_part = MIMEText(body, 'html')
+            msg.attach(html_part)
+            
+            # Create secure SSL context
+            context = ssl.create_default_context()
+            
+            # Send email
+            with smtplib.SMTP(smtp_config["smtp_server"], smtp_config["port"]) as server:
+                server.starttls(context=context)
+                server.login(smtp_config["email"], smtp_config["password"])
+                text = msg.as_string()
+                server.sendmail(smtp_config["email"], [self.recipient_email], text)
+            
+            logger.info("✅ Daily summary SMTP email sent successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Daily summary SMTP email failed: {e}")
+            return False
+    
     async def test_notification_system(self) -> Dict[str, bool]:
         """Test the notification system with a sample alert."""
         logger.info("Testing notification system...")
@@ -430,6 +874,82 @@ async def send_transaction_email(symbol: str, action: str, quantity: float,
     )
     
     results = await email_notifier.send_transaction_notification(alert)
+    return any(results.values())
+
+async def send_daily_summary_email(portfolio_value: float, cash_balance: float, 
+                                 total_equity: float, day_change: float,
+                                 positions_data: List[Dict], trades_today: int = 0,
+                                 portfolio_performance: str = "Stable") -> bool:
+    """
+    Convenience function to send daily summary email.
+    
+    Args:
+        portfolio_value: Current total portfolio value
+        cash_balance: Available cash balance
+        total_equity: Total equity value
+        day_change: Dollar change for the day
+        positions_data: List of position dictionaries with symbol, quantity, market_value, etc.
+        trades_today: Number of trades executed today
+        portfolio_performance: Performance description
+        
+    Returns:
+        bool: True if at least one notification method succeeded
+    """
+    
+    # Convert positions data to Position objects
+    positions = []
+    for pos_data in positions_data:
+        position = Position(
+            symbol=pos_data.get('symbol', ''),
+            quantity=pos_data.get('quantity', 0.0),
+            market_value=pos_data.get('market_value', 0.0),
+            unrealized_pnl=pos_data.get('unrealized_pnl', 0.0),
+            percent_change=pos_data.get('percent_change', 0.0),
+            side=pos_data.get('side', 'long')
+        )
+        positions.append(position)
+    
+    # Calculate day change percentage
+    day_change_percent = (day_change / (portfolio_value - day_change)) * 100 if portfolio_value != day_change else 0.0
+    
+    # Calculate daily return percentage (same as day_change_percent for now)
+    daily_return_percent = day_change_percent
+    
+    # Calculate YTD return percentage (placeholder - would need historical data)
+    # For now, use a simple approximation based on current performance
+    # In a real implementation, this would compare current portfolio value to start-of-year value
+    ytd_return_percent = daily_return_percent * 252  # Approximate using daily return * trading days
+    if ytd_return_percent > 100:  # Cap at reasonable maximum
+        ytd_return_percent = min(ytd_return_percent, 50.0)
+    elif ytd_return_percent < -100:
+        ytd_return_percent = max(ytd_return_percent, -50.0)
+    
+    # Create risk metrics
+    risk_metrics = {
+        'max_position_risk': f"{max([abs(p.market_value / portfolio_value) * 100 for p in positions] + [0]):.1f}%" if positions else "0.0%",
+        'portfolio_risk': f"{abs(day_change / portfolio_value) * 100:.1f}%" if portfolio_value > 0 else "0.0%",
+        'risk_level': 'Low' if abs(day_change_percent) < 1 else 'Moderate' if abs(day_change_percent) < 5 else 'High'
+    }
+    
+    # Create daily summary
+    summary = DailySummary(
+        date=datetime.now().strftime('%Y-%m-%d'),
+        portfolio_value=portfolio_value,
+        cash_balance=cash_balance,
+        total_equity=total_equity,
+        day_change=day_change,
+        day_change_percent=day_change_percent,
+        daily_return_percent=daily_return_percent,
+        ytd_return_percent=ytd_return_percent,
+        positions=positions,
+        total_positions=len(positions),
+        trades_today=trades_today,
+        portfolio_performance=portfolio_performance,
+        risk_metrics=risk_metrics,
+        market_status=email_notifier.get_market_status()
+    )
+    
+    results = await email_notifier.send_daily_summary(summary)
     return any(results.values())
 
 if __name__ == "__main__":

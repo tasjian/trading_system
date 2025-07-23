@@ -54,6 +54,9 @@ prometheus-client==0.19.0
 praw==7.7.1  # Reddit API
 redis==5.0.1  # Inter-agent communication (optional)
 tweepy==4.14.0  # Twitter API (optional)
+playwright==1.40.0  # TikTok scraping
+playwright-stealth==1.0.6  # Advanced anti-bot detection
 
 # Additional utilities for sentiment analysis
 python-dateutil==2.8.2
+pytz==2023.3  # Timezone handling for market hours

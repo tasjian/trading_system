@@ -73,6 +73,13 @@ class TradingSettings(BaseSettings):
     sentiment_confidence_threshold: float = Field(default=0.6, env="SENTIMENT_CONFIDENCE_THRESHOLD")
     sentiment_volume_threshold: int = Field(default=5, env="SENTIMENT_VOLUME_THRESHOLD")
     
+    # TikTok Scraping Configuration
+    tiktok_enabled: bool = Field(default=True, env="TIKTOK_ENABLED")
+    tiktok_max_posts: int = Field(default=50, env="TIKTOK_MAX_POSTS")
+    tiktok_rate_limit: int = Field(default=5, env="TIKTOK_RATE_LIMIT")  # Max scraping sessions per hour
+    tiktok_hashtags: str = Field(default="stocks,investing,trading,finance,stonks,wallstreet", env="TIKTOK_HASHTAGS")
+    tiktok_timeout: int = Field(default=15000, env="TIKTOK_TIMEOUT")  # Page load timeout in ms
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
