@@ -596,13 +596,8 @@ class TradingWorkflow:
                         logger.info("Market closed, skipping order execution")
                         continue
                     
-                    # Execute the order
-                    order = alpaca_client.place_order(
-                        symbol=signal.symbol,
-                        qty=signal.quantity,
-                        side=signal.action,
-                        order_type="market"
-                    )
+                    # Execute the order with advanced order type support
+                    order = await self._execute_smart_order(signal, state)
                     
                     executed_orders.append({
                         "signal_id": signal.signal_id,
@@ -778,6 +773,91 @@ class TradingWorkflow:
                 "error": str(e),
                 "session_id": session_id
             }
+
+    async def _execute_smart_order(self, signal, state: TradingState) -> Dict:
+        """Execute order with intelligent order type selection."""
+        from tools.alpaca_client import alpaca_client
+        
+        try:
+            # Get market data for intelligent order selection
+            try:
+                market_data = alpaca_client.get_market_data(signal.symbol, limit=5)
+                current_price = float(market_data.iloc[-1]['close']) if not market_data.empty else None
+            except:
+                current_price = None
+            
+            # Determine order type based on signal confidence and market conditions
+            if signal.confidence > 0.8 and current_price:
+                # High confidence - use limit order with small spread
+                if signal.action == "buy":
+                    limit_price = current_price * 1.002  # 0.2% above market
+                else:
+                    limit_price = current_price * 0.998  # 0.2% below market
+                
+                return alpaca_client.place_order(
+                    symbol=signal.symbol,
+                    qty=signal.quantity,
+                    side=signal.action,
+                    order_type="limit",
+                    limit_price=limit_price,
+                    time_in_force="day"
+                )
+            
+            elif signal.confidence > 0.6 and signal.stop_loss > 0 and current_price:
+                # Medium confidence with stop loss - use advanced order manager
+                from order_types.advanced_orders import advanced_order_manager, AdvancedOrderRequest
+                
+                # Calculate stop loss and take profit prices
+                if signal.action == "buy":
+                    stop_loss_price = current_price * (1 - signal.stop_loss) if signal.stop_loss > 0 else None
+                    take_profit_price = current_price * (1 + signal.price_target) if signal.price_target > 0 else None
+                else:
+                    stop_loss_price = current_price * (1 + signal.stop_loss) if signal.stop_loss > 0 else None
+                    take_profit_price = current_price * (1 - signal.price_target) if signal.price_target > 0 else None
+                
+                order_request = AdvancedOrderRequest(
+                    symbol=signal.symbol,
+                    quantity=signal.quantity,
+                    side=signal.action,
+                    order_type="market",
+                    stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
+                    reasoning=signal.reasoning or "AI trading signal",
+                    confidence=signal.confidence,
+                    agent_source="workflow_smart_order"
+                )
+                
+                result = await advanced_order_manager.place_advanced_order(order_request)
+                if result.success:
+                    return {"id": result.order_id, "status": result.status, "advanced_order": True}
+                else:
+                    # Fallback to regular market order
+                    logger.warning(f"Advanced order failed for {signal.symbol}: {result.error_message}")
+                    return alpaca_client.place_order(
+                        symbol=signal.symbol,
+                        qty=signal.quantity,
+                        side=signal.action,
+                        order_type="market"
+                    )
+            
+            else:
+                # Low confidence or simple signal - use market order
+                return alpaca_client.place_order(
+                    symbol=signal.symbol,
+                    qty=signal.quantity,
+                    side=signal.action,
+                    order_type="market"
+                )
+                
+        except Exception as e:
+            logger.error(f"Smart order execution failed for {signal.symbol}: {e}")
+            # Fallback to basic market order
+            return alpaca_client.place_order(
+                symbol=signal.symbol,
+                qty=signal.quantity,
+                side=signal.action,
+                order_type="market"
+            )
 
 # Global workflow instance
 trading_workflow = TradingWorkflow()

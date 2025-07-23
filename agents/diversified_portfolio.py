@@ -17,7 +17,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.settings import settings
-from simple_market_screener import SimpleMarketScreener
+from enhanced_market_screener import EnhancedMarketScreener
 from tools.llm_client import llm_client
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ class DiversifiedPortfolioManager:
     
     def __init__(self):
         """Initialize the diversified portfolio manager."""
-        self.screener = SimpleMarketScreener()
+        self.screener = EnhancedMarketScreener()
         self.current_positions: Dict[str, PortfolioPosition] = {}
         self.target_positions: Dict[str, PortfolioPosition] = {}
         
@@ -74,10 +74,10 @@ class DiversifiedPortfolioManager:
         
         # Step 2: Get market data for all selected stocks
         all_stocks = []
-        for asset_class, stocks in stock_selection.items():
+        for industry, stocks in stock_selection.items():
             all_stocks.extend(stocks)
         
-        stock_data = await self._get_bulk_stock_data(all_stocks)
+        stock_data = await self.screener.get_bulk_stock_data(all_stocks)
         
         # Step 3: Calculate optimal weights using Modern Portfolio Theory principles
         optimal_weights = await self._calculate_optimal_weights(stock_data, stock_selection, risk_tolerance)
@@ -91,8 +91,8 @@ class DiversifiedPortfolioManager:
                 
                 target_positions[symbol] = PortfolioPosition(
                     symbol=symbol,
-                    asset_class=self._get_asset_class_for_symbol(symbol, stock_selection),
-                    sector=stock_info.get('sector', 'Unknown'),
+                    asset_class=self._get_industry_for_symbol(symbol, stock_selection),
+                    sector=stock_info.get('industry_description', stock_info.get('sector', 'Unknown')),
                     target_weight=weight,
                     current_weight=0.0,
                     quantity=int(position_value / stock_info.get('price', 1)),
@@ -280,6 +280,20 @@ class DiversifiedPortfolioManager:
                 return asset_class
         return 'unknown'
     
+    def _get_industry_for_symbol(self, symbol: str, stock_selection: Dict[str, List[str]]) -> str:
+        """Get industry classification for a symbol from the enhanced screener."""
+        # Use the enhanced screener's industry mapping
+        industry = self.screener.get_industry_for_symbol(symbol)
+        if industry != 'unknown':
+            return industry
+        
+        # Fallback to stock selection mapping
+        for industry_name, stocks in stock_selection.items():
+            if symbol in stocks:
+                return industry_name
+        
+        return 'unknown'
+    
     def calculate_diversification_metrics(self) -> DiversificationMetrics:
         """Calculate comprehensive diversification metrics."""
         
@@ -319,8 +333,9 @@ class DiversifiedPortfolioManager:
     
     async def generate_rebalancing_orders(self, 
                                         current_portfolio: Dict,
-                                        portfolio_value: float) -> List[Dict]:
-        """Generate orders to rebalance portfolio toward target allocation."""
+                                        portfolio_value: float,
+                                        use_advanced_orders: bool = True) -> List[Dict]:
+        """Generate orders to rebalance portfolio toward target allocation with advanced order types."""
         
         orders = []
         
@@ -332,42 +347,238 @@ class DiversifiedPortfolioManager:
             current_position = self.current_positions.get(symbol)
             
             if not current_position:
-                # New position - buy
+                # New position - buy with advanced order logic
                 if target_position.quantity > 0:
-                    orders.append({
-                        'symbol': symbol,
-                        'side': 'buy',
-                        'quantity': target_position.quantity,
-                        'order_type': 'market',
-                        'reason': f'New position - target weight {target_position.target_weight:.2%}'
-                    })
+                    order = await self._create_smart_buy_order(
+                        symbol, target_position, use_advanced_orders
+                    )
+                    orders.append(order)
             else:
                 # Existing position - rebalance
                 quantity_diff = target_position.quantity - current_position.quantity
                 
                 if abs(quantity_diff) > 0:  # Only rebalance if meaningful difference
                     side = 'buy' if quantity_diff > 0 else 'sell'
-                    orders.append({
-                        'symbol': symbol,
-                        'side': side,
-                        'quantity': abs(quantity_diff),
-                        'order_type': 'market',
-                        'reason': f'Rebalance - current {current_position.current_weight:.2%} to target {target_position.target_weight:.2%}'
-                    })
+                    order = await self._create_smart_rebalance_order(
+                        symbol, abs(quantity_diff), side, current_position, target_position, use_advanced_orders
+                    )
+                    orders.append(order)
         
         # Check for positions to close (not in target)
         for symbol, current_position in self.current_positions.items():
             if symbol not in self.target_positions and current_position.quantity > 0:
-                orders.append({
+                order = await self._create_smart_close_order(
+                    symbol, current_position, use_advanced_orders
+                )
+                orders.append(order)
+        
+        logger.info(f"Generated {len(orders)} rebalancing orders ({sum(1 for o in orders if o.get('order_type') != 'market')} advanced)")
+        return orders
+    
+    async def _create_smart_buy_order(self, symbol: str, target_position: PortfolioPosition, 
+                                    use_advanced_orders: bool) -> Dict:
+        """Create intelligent buy order with risk management."""
+        
+        if not use_advanced_orders:
+            return {
+                'symbol': symbol,
+                'side': 'buy',
+                'quantity': target_position.quantity,
+                'order_type': 'market',
+                'reason': f'New position - target weight {target_position.target_weight:.2%}'
+            }
+        
+        # Get current market price for advanced order logic
+        try:
+            from tools.alpaca_client import alpaca_client
+            market_data = alpaca_client.get_market_data(symbol, limit=5)
+            if market_data.empty:
+                # Fallback to market order
+                return self._create_market_order(symbol, 'buy', target_position.quantity, 
+                                               f'New position - target weight {target_position.target_weight:.2%}')
+            
+            current_price = float(market_data.iloc[-1]['close'])
+            
+            # Calculate intelligent order parameters
+            volatility = self._calculate_price_volatility(market_data)
+            confidence = target_position.confidence_score / 100.0
+            
+            # High confidence + low volatility = limit order with tight spread
+            # Lower confidence + high volatility = stop-limit with wider protection
+            if confidence > 0.7 and volatility < 0.02:  # High confidence, low volatility
+                limit_price = current_price * 1.005  # 0.5% above current price
+                return {
+                    'symbol': symbol,
+                    'side': 'buy',
+                    'quantity': target_position.quantity,
+                    'order_type': 'limit',
+                    'limit_price': limit_price,
+                    'stop_loss_price': current_price * 0.95,  # 5% stop loss
+                    'reason': f'Smart limit buy - confidence {confidence:.1%}, target weight {target_position.target_weight:.2%}'
+                }
+            
+            elif confidence > 0.5:  # Medium confidence
+                # Use stop-limit to protect against adverse movement
+                stop_price = current_price * 1.02   # Trigger 2% above current
+                limit_price = current_price * 1.025  # Execute at 2.5% above current
+                return {
+                    'symbol': symbol,
+                    'side': 'buy',
+                    'quantity': target_position.quantity,
+                    'order_type': 'stop_limit',
+                    'stop_price': stop_price,
+                    'limit_price': limit_price,
+                    'stop_loss_price': current_price * 0.92,  # 8% stop loss
+                    'reason': f'Smart stop-limit buy - confidence {confidence:.1%}, target weight {target_position.target_weight:.2%}'
+                }
+            
+            else:  # Lower confidence - be more cautious
+                return {
+                    'symbol': symbol,
+                    'side': 'buy',
+                    'quantity': target_position.quantity,
+                    'order_type': 'market',
+                    'stop_loss_price': current_price * 0.90,  # 10% stop loss
+                    'reason': f'Cautious market buy - confidence {confidence:.1%}, target weight {target_position.target_weight:.2%}'
+                }
+                
+        except Exception as e:
+            logger.warning(f"Smart order creation failed for {symbol}: {e}, using market order")
+            return self._create_market_order(symbol, 'buy', target_position.quantity, 
+                                           f'New position - target weight {target_position.target_weight:.2%}')
+    
+    async def _create_smart_rebalance_order(self, symbol: str, quantity: float, side: str,
+                                          current_position: PortfolioPosition, 
+                                          target_position: PortfolioPosition,
+                                          use_advanced_orders: bool) -> Dict:
+        """Create intelligent rebalance order."""
+        
+        if not use_advanced_orders:
+            return {
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'order_type': 'market',
+                'reason': f'Rebalance - current {current_position.current_weight:.2%} to target {target_position.target_weight:.2%}'
+            }
+        
+        # For rebalancing, prefer limit orders to get better execution
+        try:
+            from tools.alpaca_client import alpaca_client
+            market_data = alpaca_client.get_market_data(symbol, limit=5)
+            if market_data.empty:
+                return self._create_market_order(symbol, side, quantity, 'Rebalance order')
+            
+            current_price = float(market_data.iloc[-1]['close'])
+            
+            # For sells, try to get a better price; for buys, limit downside
+            if side == 'sell':
+                # Try to sell at slightly above market
+                limit_price = current_price * 1.003  # 0.3% above market
+                return {
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': quantity,
+                    'order_type': 'limit',
+                    'limit_price': limit_price,
+                    'time_in_force': 'day',  # Cancel at end of day if not filled
+                    'reason': f'Smart rebalance sell - current {current_position.current_weight:.2%} to target {target_position.target_weight:.2%}'
+                }
+            else:  # buy
+                # Buy with slight limit to avoid chasing price up
+                limit_price = current_price * 1.002  # 0.2% above market
+                return {
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': quantity,
+                    'order_type': 'limit',
+                    'limit_price': limit_price,
+                    'time_in_force': 'day',
+                    'reason': f'Smart rebalance buy - current {current_position.current_weight:.2%} to target {target_position.target_weight:.2%}'
+                }
+                
+        except Exception as e:
+            logger.warning(f"Smart rebalance order creation failed for {symbol}: {e}")
+            return self._create_market_order(symbol, side, quantity, 'Rebalance order')
+    
+    async def _create_smart_close_order(self, symbol: str, current_position: PortfolioPosition,
+                                      use_advanced_orders: bool) -> Dict:
+        """Create intelligent position close order."""
+        
+        if not use_advanced_orders:
+            return {
+                'symbol': symbol,
+                'side': 'sell',
+                'quantity': current_position.quantity,
+                'order_type': 'market',
+                'reason': 'Close position - not in target portfolio'
+            }
+        
+        # For closing positions, try to get the best price possible
+        try:
+            from tools.alpaca_client import alpaca_client
+            market_data = alpaca_client.get_market_data(symbol, limit=10)
+            if market_data.empty:
+                return self._create_market_order(symbol, 'sell', current_position.quantity, 'Close position')
+            
+            current_price = float(market_data.iloc[-1]['close'])
+            
+            # Check if position is profitable
+            cost_basis = current_position.market_value / current_position.quantity if current_position.quantity > 0 else current_price
+            is_profitable = current_price > cost_basis
+            
+            if is_profitable:
+                # Try to sell at premium if profitable
+                limit_price = current_price * 1.005  # 0.5% above market
+                return {
                     'symbol': symbol,
                     'side': 'sell',
                     'quantity': current_position.quantity,
-                    'order_type': 'market',
-                    'reason': 'Close position - not in target portfolio'
-                })
-        
-        logger.info(f"Generated {len(orders)} rebalancing orders")
-        return orders
+                    'order_type': 'limit',
+                    'limit_price': limit_price,
+                    'time_in_force': 'day',
+                    'reason': f'Profitable close - P&L: ${current_position.unrealized_pnl:.2f}'
+                }
+            else:
+                # Use trailing stop to minimize losses while allowing for recovery
+                trail_percent = 2.0  # 2% trailing stop
+                return {
+                    'symbol': symbol,
+                    'side': 'sell',
+                    'quantity': current_position.quantity,
+                    'order_type': 'trailing_stop',
+                    'trail_percent': trail_percent,
+                    'reason': f'Loss-limiting close - P&L: ${current_position.unrealized_pnl:.2f}'
+                }
+                
+        except Exception as e:
+            logger.warning(f"Smart close order creation failed for {symbol}: {e}")
+            return self._create_market_order(symbol, 'sell', current_position.quantity, 'Close position')
+    
+    def _create_market_order(self, symbol: str, side: str, quantity: float, reason: str) -> Dict:
+        """Create a basic market order."""
+        return {
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity,
+            'order_type': 'market',
+            'reason': reason
+        }
+    
+    def _calculate_price_volatility(self, market_data) -> float:
+        """Calculate simple price volatility from recent data."""
+        try:
+            if len(market_data) < 2:
+                return 0.05  # Default to 5% volatility
+            
+            prices = market_data['close'].values
+            returns = [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
+            
+            import numpy as np
+            return float(np.std(returns)) if returns else 0.05
+            
+        except Exception:
+            return 0.05  # Default volatility
     
     def _update_current_positions(self, current_portfolio: Dict, portfolio_value: float):
         """Update current positions from portfolio data."""
