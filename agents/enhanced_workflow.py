@@ -15,7 +15,7 @@ from agents.enhanced_state import (
     add_agent_communication, update_agent_context,
     prioritize_signals, should_interrupt_for_human, create_human_interrupt
 )
-from agents.enhanced_tools import trading_tool_registry, ToolContext
+from tools.enhanced_tools import trading_tool_registry, ToolContext
 from agents.agent_communication import trading_agent_team
 from config.settings import settings
 
@@ -50,6 +50,8 @@ class EnhancedTradingWorkflow:
         workflow.add_node("strategy_synthesis", self.strategy_synthesis_agent)
         workflow.add_node("execution_planning", self.execution_planning_agent)
         workflow.add_node("order_execution", self.order_execution_agent)
+        workflow.add_node("pairs_analysis", self.pairs_analysis_agent)
+        workflow.add_node("pairs_monitoring", self.pairs_monitoring_agent)
         workflow.add_node("portfolio_monitoring", self.portfolio_monitoring_agent)
         workflow.add_node("performance_review", self.performance_review_agent)
         workflow.add_node("human_intervention", self.human_intervention_node)
@@ -84,7 +86,8 @@ class EnhancedTradingWorkflow:
             }
         )
         
-        workflow.add_edge("portfolio_analysis", "signal_generation")
+        workflow.add_edge("portfolio_analysis", "pairs_analysis")
+        workflow.add_edge("pairs_analysis", "signal_generation")
         workflow.add_edge("signal_generation", "agent_coordination")
         
         # Agent coordination and decision synthesis
@@ -113,7 +116,8 @@ class EnhancedTradingWorkflow:
             }
         )
         
-        workflow.add_edge("order_execution", "portfolio_monitoring")
+        workflow.add_edge("order_execution", "pairs_monitoring")
+        workflow.add_edge("pairs_monitoring", "portfolio_monitoring")
         workflow.add_edge("portfolio_monitoring", "performance_review")
         
         # Performance review routing
@@ -652,6 +656,150 @@ class EnhancedTradingWorkflow:
         state["messages"].append(AIMessage(content="Human intervention completed"))
         return state
     
+    async def pairs_analysis_agent(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Pairs trading analysis agent for identifying cointegrated pairs."""
+        try:
+            state["current_agent"] = "pairs_analysis"
+            logger.info("Pairs Analysis Agent: Analyzing pairs trading opportunities")
+            
+            # Initialize pairs trading agent if not exists
+            if "pairs_trading_agent" not in state.get("agents", {}):
+                from agents.pairs_trading_agent import PairsTradingAgent
+                from tools.alpaca_client import alpaca_client
+                from langchain_openai import ChatOpenAI
+                
+                llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    api_key=settings.openai_api_key,
+                    temperature=0.1
+                )
+                
+                pairs_agent = PairsTradingAgent(
+                    llm=llm,
+                    alpaca_client=alpaca_client,
+                    strategy_config={
+                        'max_positions': 3,  # Conservative for live trading
+                        'position_size': 5000.0,
+                        'entry_zscore': 2.0,
+                        'stop_loss_zscore': 3.0
+                    }
+                )
+                
+                if "agents" not in state:
+                    state["agents"] = {}
+                state["agents"]["pairs_trading_agent"] = pairs_agent
+            
+            # Perform pairs analysis
+            pairs_agent = state["agents"]["pairs_trading_agent"]
+            analysis_result = await pairs_agent.analyze_pairs_opportunities(state)
+            
+            # Update state with pairs analysis
+            state["agent_outputs"]["pairs_analysis"] = analysis_result
+            
+            # Add pairs signals to signal queue
+            if analysis_result.get("pairs_found", 0) > 0:
+                state["signal_queue"].append({
+                    "agent": "pairs_analysis",
+                    "type": "pairs_opportunities",
+                    "data": analysis_result,
+                    "priority": 0.7,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # Update reasoning chain
+            state["reasoning_chain"].append({
+                "agent": "pairs_analysis",
+                "step": "pairs_opportunity_analysis",
+                "reasoning": analysis_result.get("analysis", ""),
+                "confidence": 0.8,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Agent communication
+            await add_agent_communication(
+                state,
+                from_agent="pairs_analysis",
+                to_agent="signal_generation",
+                message=f"Found {analysis_result.get('pairs_found', 0)} pairs opportunities",
+                priority="medium"
+            )
+            
+            state["messages"].append(AIMessage(
+                content=f"Pairs Analysis: {analysis_result.get('analysis', 'Analysis completed')}"
+            ))
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Pairs analysis agent error: {e}")
+            state["errors"].append(f"Pairs analysis failed: {str(e)}")
+            state["messages"].append(AIMessage(content="Pairs analysis encountered an error"))
+            return state
+    
+    async def pairs_monitoring_agent(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Pairs trading monitoring agent for active positions and signals."""
+        try:
+            state["current_agent"] = "pairs_monitoring"
+            logger.info("Pairs Monitoring Agent: Monitoring pairs positions and signals")
+            
+            # Get pairs trading agent
+            pairs_agent = state.get("agents", {}).get("pairs_trading_agent")
+            if not pairs_agent:
+                logger.warning("Pairs trading agent not initialized")
+                return state
+            
+            # Monitor existing pairs positions
+            monitoring_result = await pairs_agent.monitor_pairs_signals(state)
+            
+            # Update state
+            state["agent_outputs"]["pairs_monitoring"] = monitoring_result
+            
+            # Process any new signals
+            if monitoring_result.get("signals"):
+                for signal in monitoring_result["signals"]:
+                    state["signal_queue"].append({
+                        "agent": "pairs_monitoring",
+                        "type": "pairs_signal",
+                        "data": signal,
+                        "priority": 0.8,
+                        "timestamp": datetime.now().isoformat()
+                    })
+            
+            # Get portfolio status
+            portfolio_status = await pairs_agent.get_pairs_portfolio_status()
+            
+            # Update pairs-specific metrics
+            if "pairs_metrics" not in state:
+                state["pairs_metrics"] = {}
+            
+            state["pairs_metrics"].update({
+                "active_pairs": portfolio_status.get("active_pairs", 0),
+                "pairs_exposure": portfolio_status.get("total_exposure", 0),
+                "pairs_capacity": portfolio_status.get("max_pairs", 0) - portfolio_status.get("active_pairs", 0),
+                "last_update": datetime.now().isoformat()
+            })
+            
+            # Agent communication about pairs status
+            await add_agent_communication(
+                state,
+                from_agent="pairs_monitoring",
+                to_agent="portfolio_monitoring",
+                message=f"Pairs status: {portfolio_status.get('active_pairs', 0)} active positions",
+                priority="low"
+            )
+            
+            state["messages"].append(AIMessage(
+                content=f"Pairs Monitoring: {monitoring_result.get('analysis', 'Monitoring completed')}"
+            ))
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Pairs monitoring agent error: {e}")
+            state["errors"].append(f"Pairs monitoring failed: {str(e)}")
+            state["messages"].append(AIMessage(content="Pairs monitoring encountered an error"))
+            return state
+
     async def emergency_response_agent(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         state["current_agent"] = "emergency_response"
         state["workflow_stage"] = "halt"

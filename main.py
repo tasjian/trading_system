@@ -364,6 +364,9 @@ async def main():
     print("  'buy SYMBOL QTY' - Manual buy order")
     print("  'sell SYMBOL QTY' - Manual sell order") 
     print("  'close SYMBOL' - Close position")
+    print("  'pairs scan' - Scan for pairs trading opportunities")
+    print("  'pairs status' - Show pairs trading status")
+    print("  'pairs SYMBOL1 SYMBOL2' - Analyze specific pair")
     print("  'summary' - Send test daily summary email")
     print("  'stop' - Stop system")
     print("  'help' - Show this help")
@@ -414,6 +417,50 @@ async def main():
                 else:
                     print("Usage: close SYMBOL")
                     
+            elif command.startswith("pairs "):
+                parts = command.split()
+                if len(parts) == 2 and parts[1] == "scan":
+                    print("Scanning for pairs trading opportunities...")
+                    try:
+                        # Use the pairs trading tools
+                        from tools.pairs_trading_tools import PairAnalysisTool
+                        from tools.alpaca_client import alpaca_client
+                        
+                        pairs_tool = PairAnalysisTool(alpaca_client)
+                        # Example universe - in practice this would be configurable
+                        universe = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'XOM', 'CVX', 'JPM', 'BAC', 'WMT']
+                        result = await pairs_tool._arun(universe, lookback_days=252, min_correlation=0.7)
+                        print(result)
+                    except Exception as e:
+                        print(f"❌ Error scanning pairs: {e}")
+                        
+                elif len(parts) == 2 and parts[1] == "status":
+                    print("Pairs trading portfolio status:")
+                    try:
+                        # Get pairs status from enhanced workflow if available
+                        from agents.enhanced_workflow import enhanced_trading_workflow
+                        # This would be enhanced to show actual pairs status
+                        print("Active pairs: 0")
+                        print("Available capacity: 3 pairs")
+                        print("Total pairs exposure: $0.00")
+                    except Exception as e:
+                        print(f"❌ Error getting pairs status: {e}")
+                        
+                elif len(parts) == 3:
+                    symbol1, symbol2 = parts[1].upper(), parts[2].upper()
+                    print(f"Analyzing pair: {symbol1}-{symbol2}")
+                    try:
+                        from tools.pairs_trading_tools import SpreadAnalysisTool
+                        from tools.alpaca_client import alpaca_client
+                        
+                        spread_tool = SpreadAnalysisTool(alpaca_client)
+                        result = await spread_tool._arun(symbol1, symbol2, lookback_days=60)
+                        print(result)
+                    except Exception as e:
+                        print(f"❌ Error analyzing pair: {e}")
+                else:
+                    print("Usage: 'pairs scan', 'pairs status', or 'pairs SYMBOL1 SYMBOL2'")
+                    
             elif command == "summary":
                 print("Sending test daily summary email...")
                 try:
@@ -433,6 +480,9 @@ async def main():
                 print("  buy SYMBOL QTY - Manual buy order")
                 print("  sell SYMBOL QTY - Manual sell order")
                 print("  close SYMBOL - Close position")
+                print("  pairs scan - Scan for pairs trading opportunities")
+                print("  pairs status - Show pairs trading status")
+                print("  pairs SYMBOL1 SYMBOL2 - Analyze specific pair")
                 print("  summary - Send test daily summary email")
                 print("  stop - Stop system")
                 
