@@ -1,6 +1,6 @@
 # ML4T Trading System
 
-A comprehensive, AI-powered trading system built for machine learning education and algorithmic trading. The system provides professional-grade market analysis, automated trading execution, portfolio management, and strategy implementation.
+A comprehensive, AI-powered trading system built for algorithmic trading. The system provides professional-grade market analysis, automated trading execution, portfolio management, and strategy implementation.
 
 ## 🚀 Features
 
@@ -293,19 +293,11 @@ Cached/Mock Data
 - Verify API key permissions
 - Monitor system resource usage
 
-## 📚 Educational Use
-
-This system is designed for machine learning and algorithmic trading education:
 - **Paper Trading**: Safe environment for learning
 - **Strategy Development**: Framework for custom strategies
 - **Risk Management**: Professional risk controls
 - **Performance Analysis**: Comprehensive analytics
 
-## ⚠️ Disclaimer
-
-This software is for educational purposes only. Paper trading is recommended for learning and testing. Real money trading involves risk of loss. Always understand the risks before trading with real money.
-
-## 📄 License
 
 Educational use license. See LICENSE file for details.
 
