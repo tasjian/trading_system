@@ -110,7 +110,7 @@ class DailySummaryScheduler:
             # Determine portfolio performance description
             performance = self.get_performance_description(day_change, current_portfolio_value)
             
-            # Send the daily summary email
+            # Send the daily summary email (fee calculation is done inside the function)
             success = await send_daily_summary_email(
                 portfolio_value=current_portfolio_value,
                 cash_balance=account_data['cash_balance'],
@@ -249,7 +249,7 @@ class DailySummaryScheduler:
                     }
                 ]
             
-            # Send test summary
+            # Send test summary (fee calculation is done inside the function)
             success = await send_daily_summary_email(
                 portfolio_value=account_data['portfolio_value'],
                 cash_balance=account_data['cash_balance'],

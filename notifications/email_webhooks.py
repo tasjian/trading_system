@@ -64,6 +64,7 @@ class DailySummary:
     portfolio_performance: str
     risk_metrics: Dict[str, Any]
     market_status: str
+    fee_breakdown: Dict[str, Any] = None  # Fee breakdown information
 
 class EmailWebhookNotifier:
     """Email notification system using multiple webhook services."""
@@ -712,6 +713,11 @@ class EmailWebhookNotifier:
                             <li>Risk assessment: {summary.risk_metrics.get('risk_level', 'Moderate')}</li>
                         </ul>
                     </div>
+                    
+                    <div class="summary-box">
+                        <h3>💰 Trading Cost Analysis</h3>
+                        {self._generate_fee_section_html(summary.fee_breakdown)}
+                    </div>
                 </div>
                 
                 <div class="footer">
@@ -725,6 +731,95 @@ class EmailWebhookNotifier:
         """
         
         return subject, body
+    
+    def _generate_fee_section_html(self, fee_breakdown: Dict[str, Any]) -> str:
+        """Generate HTML section for trading fees."""
+        if not fee_breakdown:
+            return """
+            <div style="text-align: center; color: #28a745; padding: 20px;">
+                <h4>📊 Paper Trading - No Fees Charged</h4>
+                <p>All trading is conducted in paper mode with zero fees.</p>
+            </div>
+            """
+        
+        # Extract fee information
+        commission = fee_breakdown.get('commission_fees', 0.0)
+        finra_taf = fee_breakdown.get('finra_taf_fees', 0.0)
+        finra_cat = fee_breakdown.get('finra_cat_fees', 0.0)
+        sec_fees = fee_breakdown.get('sec_fees', 0.0)
+        total_fees = fee_breakdown.get('total_fees', 0.0)
+        transactions = fee_breakdown.get('transactions_count', 0)
+        sell_transactions = fee_breakdown.get('sell_transactions', 0)
+        
+        # Determine color based on total fees
+        fee_color = "#28a745" if total_fees < 1.0 else "#ffc107" if total_fees < 10.0 else "#dc3545"
+        
+        return f"""
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+            <div style="display: flex; flex-wrap: wrap; justify-content: space-around; margin-bottom: 15px;">
+                <div class="metric">
+                    <span class="metric-value" style="color: {fee_color};">
+                        ${total_fees:.4f}
+                    </span>
+                    <span class="metric-label">Total Fees</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-value" style="color: #6c757d;">
+                        {transactions}
+                    </span>
+                    <span class="metric-label">Transactions</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-value" style="color: #6c757d;">
+                        {sell_transactions}
+                    </span>
+                    <span class="metric-label">Sell Orders</span>
+                </div>
+            </div>
+            
+            <div style="background: white; padding: 15px; border-radius: 6px; margin: 10px 0;">
+                <h4 style="margin-top: 0; color: #495057;">🏛️ Alpaca Fee Structure</h4>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr style="border-bottom: 1px solid #dee2e6;">
+                        <td style="padding: 8px 0; font-weight: 500;">Commission (Stock/ETF):</td>
+                        <td style="padding: 8px 0; text-align: right; color: #28a745;">$0.00</td>
+                        <td style="padding: 8px 0; text-align: right; color: #6c757d; font-size: 12px;">Commission-free</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #dee2e6;">
+                        <td style="padding: 8px 0; font-weight: 500;">FINRA TAF (Sells):</td>
+                        <td style="padding: 8px 0; text-align: right;">${finra_taf:.4f}</td>
+                        <td style="padding: 8px 0; text-align: right; color: #6c757d; font-size: 12px;">$0.000166/share</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #dee2e6;">
+                        <td style="padding: 8px 0; font-weight: 500;">FINRA CAT (All):</td>
+                        <td style="padding: 8px 0; text-align: right;">${finra_cat:.4f}</td>
+                        <td style="padding: 8px 0; text-align: right; color: #6c757d; font-size: 12px;">$0.000046/transaction</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #dee2e6;">
+                        <td style="padding: 8px 0; font-weight: 500;">SEC Fees (Sells):</td>
+                        <td style="padding: 8px 0; text-align: right;">${sec_fees:.4f}</td>
+                        <td style="padding: 8px 0; text-align: right; color: #6c757d; font-size: 12px;">Regulatory minimum</td>
+                    </tr>
+                    <tr style="border-top: 2px solid #495057; font-weight: bold;">
+                        <td style="padding: 8px 0;">Total Estimated Fees:</td>
+                        <td style="padding: 8px 0; text-align: right; color: {fee_color};">${total_fees:.4f}</td>
+                        <td style="padding: 8px 0; text-align: right; color: #6c757d; font-size: 12px;">If positions traded</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div style="background: #e3f2fd; padding: 12px; border-radius: 6px; border-left: 4px solid #2196f3;">
+                <h5 style="margin: 0 0 8px 0; color: #1976d2;">💡 Cost Efficiency Notes</h5>
+                <ul style="margin: 0; padding-left: 20px; color: #424242; font-size: 13px;">
+                    <li><strong>Paper Trading:</strong> All current trading is fee-free for testing</li>
+                    <li><strong>Commission-Free:</strong> Alpaca charges $0 commission on all stock/ETF trades</li>
+                    <li><strong>Regulatory Only:</strong> Fees shown are mandatory regulatory pass-through costs</li>
+                    <li><strong>Extremely Low Cost:</strong> Total fees typically under $0.10 for entire portfolio</li>
+                    <li><strong>Perfect for Algo Trading:</strong> Cost structure ideal for high-frequency strategies</li>
+                </ul>
+            </div>
+        </div>
+        """
     
     async def _send_daily_webhook_notification(self, service_name: str, config: Dict, 
                                              summary: DailySummary, subject: str, body: str) -> bool:
@@ -896,6 +991,9 @@ async def send_daily_summary_email(portfolio_value: float, cash_balance: float,
         bool: True if at least one notification method succeeded
     """
     
+    # Import fee calculator
+    from utils.fee_calculator import fee_calculator
+    
     # Convert positions data to Position objects
     positions = []
     for pos_data in positions_data:
@@ -908,6 +1006,31 @@ async def send_daily_summary_email(portfolio_value: float, cash_balance: float,
             side=pos_data.get('side', 'long')
         )
         positions.append(position)
+    
+    # Calculate fees for positions
+    positions_dict = {}
+    for pos_data in positions_data:
+        symbol = pos_data.get('symbol', '')
+        if symbol:
+            positions_dict[symbol] = {
+                'shares': abs(pos_data.get('quantity', 0)),
+                'pnl': pos_data.get('unrealized_pnl', 0.0),
+                'side': pos_data.get('side', 'long')
+            }
+    
+    fee_breakdown_obj = fee_calculator.calculate_fees_for_positions(positions_dict)
+    
+    # Convert fee breakdown to dictionary for template
+    fee_breakdown = {
+        'commission_fees': fee_breakdown_obj.commission_fees,
+        'finra_taf_fees': fee_breakdown_obj.finra_taf_fees,
+        'finra_cat_fees': fee_breakdown_obj.finra_cat_fees,
+        'sec_fees': fee_breakdown_obj.sec_fees,
+        'total_fees': fee_breakdown_obj.total_fees,
+        'transactions_count': fee_breakdown_obj.transactions_count,
+        'sell_transactions': fee_breakdown_obj.sell_transactions,
+        'sell_shares': fee_breakdown_obj.sell_shares
+    }
     
     # Calculate day change percentage
     day_change_percent = (day_change / (portfolio_value - day_change)) * 100 if portfolio_value != day_change else 0.0
@@ -946,7 +1069,8 @@ async def send_daily_summary_email(portfolio_value: float, cash_balance: float,
         trades_today=trades_today,
         portfolio_performance=portfolio_performance,
         risk_metrics=risk_metrics,
-        market_status=email_notifier.get_market_status()
+        market_status=email_notifier.get_market_status(),
+        fee_breakdown=fee_breakdown
     )
     
     results = await email_notifier.send_daily_summary(summary)
@@ -977,3 +1101,169 @@ if __name__ == "__main__":
             print("⚠️ No notification methods succeeded. Check configuration.")
     
     asyncio.run(main())
+
+
+async def send_batch_transaction_email(batch) -> bool:
+    """Send batched transaction email notification."""
+    try:
+        logger.info(f"Sending batch transaction email for {len(batch.transactions)} transactions")
+        
+        # Create email notifier
+        notifier = EmailWebhookNotifier()
+        
+        # Generate batch email content
+        subject, body = _generate_batch_email_content(batch)
+        
+        # Send via SMTP (most reliable)
+        smtp_config = notifier.webhook_services["smtp_gmail"]
+        if smtp_config["enabled"] and smtp_config["email"] and smtp_config["password"]:
+            success = await notifier._send_smtp_notification(subject, body, None)
+            if success:
+                logger.info("✅ Batch transaction email sent successfully")
+                return True
+        
+        logger.warning("❌ Batch transaction email failed - SMTP not configured")
+        return False
+        
+    except Exception as e:
+        logger.error(f"Failed to send batch transaction email: {e}")
+        return False
+
+
+def _generate_batch_email_content(batch) -> tuple[str, str]:
+    """Generate batch transaction email subject and HTML body."""
+    
+    summary = batch.get_summary()
+    
+    # Generate subject
+    subject = f"🤖 AI Trading Batch: {summary['total_transactions']} transactions - ${summary['net_value']:,.0f} net"
+    
+    # Determine net performance color
+    net_color = "#28a745" if summary['net_value'] >= 0 else "#dc3545"
+    net_emoji = "📈" if summary['net_value'] >= 0 else "📉"
+    
+    # Generate transactions table
+    transactions_html = ""
+    for transaction in batch.transactions:
+        action_color = "#28a745" if transaction.action.lower() == 'buy' else "#dc3545"
+        action_emoji = "🟢" if transaction.action.lower() == 'buy' else "🔴"
+        
+        transactions_html += f"""
+        <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                <strong style="color: {action_color};">{action_emoji} {transaction.symbol}</strong>
+            </td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; color: {action_color};">
+                {transaction.action.upper()}
+            </td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                {transaction.quantity:,.0f}
+            </td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                ${transaction.price:.2f}
+            </td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold;">
+                ${transaction.total_value:,.2f}
+            </td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; font-size: 12px;">
+                {transaction.timestamp.strftime('%H:%M:%S')}
+            </td>
+        </tr>
+        """
+    
+    # Generate symbols summary
+    symbols_list = ', '.join(summary['symbols_traded'])
+    
+    # Generate HTML body
+    body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>AI Trading Batch Summary</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; background-color: #f4f4f4; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }}
+            .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 30px; }}
+            .batch-badge {{ display: inline-block; background: {net_color}; color: white; padding: 12px 24px; border-radius: 25px; font-weight: bold; font-size: 18px; margin: 10px 0; }}
+            .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
+            .summary-card {{ background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; border: 2px solid #e9ecef; }}
+            .summary-card h3 {{ margin: 0 0 10px 0; color: #495057; }}
+            .summary-card .value {{ font-size: 24px; font-weight: bold; color: #28a745; }}
+            .transactions-table {{ width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .transactions-table th {{ background: #343a40; color: white; padding: 15px 8px; text-align: left; }}
+            .transactions-table td {{ padding: 8px; border-bottom: 1px solid #eee; }}
+            .transactions-table tr:hover {{ background: #f8f9fa; }}
+            .net-summary {{ background: linear-gradient(45deg, {net_color}22, {net_color}44); padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid {net_color}; }}
+            .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🤖 AI Trading System</h1>
+                <div class="batch-badge">
+                    {net_emoji} Transaction Batch Summary
+                </div>
+                <p style="margin: 10px 0 0 0; opacity: 0.9;">
+                    {batch.start_time.strftime('%Y-%m-%d %H:%M:%S')} - {batch.end_time.strftime('%H:%M:%S')} UTC
+                </p>
+            </div>
+            
+            <div class="summary-grid">
+                <div class="summary-card">
+                    <h3>📊 Total Transactions</h3>
+                    <div class="value">{summary['total_transactions']}</div>
+                </div>
+                <div class="summary-card">
+                    <h3>🟢 Buy Orders</h3>
+                    <div class="value" style="color: #28a745;">{summary['buy_orders']}</div>
+                    <div style="font-size: 14px; color: #666;">${summary['total_buy_value']:,.0f}</div>
+                </div>
+                <div class="summary-card">
+                    <h3>🔴 Sell Orders</h3>
+                    <div class="value" style="color: #dc3545;">{summary['sell_orders']}</div>
+                    <div style="font-size: 14px; color: #666;">${summary['total_sell_value']:,.0f}</div>
+                </div>
+                <div class="summary-card">
+                    <h3>💰 Net Value</h3>
+                    <div class="value" style="color: {net_color};">${summary['net_value']:,.0f}</div>
+                </div>
+            </div>
+            
+            <div class="net-summary">
+                <h3>📈 Batch Summary</h3>
+                <p><strong>Symbols Traded:</strong> {symbols_list}</p>
+                <p><strong>Time Window:</strong> {summary['duration_seconds']:.0f} seconds</p>
+                <p><strong>Portfolio Value:</strong> ${summary['portfolio_value']:,.2f}</p>
+                <p><strong>Batch ID:</strong> {batch.batch_id}</p>
+            </div>
+            
+            <h3>📋 Transaction Details</h3>
+            <table class="transactions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Action</th>
+                        <th>Quantity</th>
+                        <th>Price</th>
+                        <th>Total Value</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {transactions_html}
+                </tbody>
+            </table>
+            
+            <div class="footer">
+                <p>🤖 Generated by AI Trading System | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p>This batch contained {len(batch.transactions)} transactions executed within {summary['duration_seconds']:.0f} seconds</p>
+                <p style="font-size: 10px;">Trading involves risk. All trades are executed in paper mode for safety.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return subject, body

@@ -1,344 +1,314 @@
-# 🤖 Agentic LLM Trading System
+# ML4T Trading System
 
-An advanced autonomous trading system using LangGraph multi-agent architecture with comprehensive risk management and Alpaca paper trading integration.
-
-## 🏗️ System Architecture
-
-Based on the architecture diagram, the system implements a multi-layered approach:
-
-### 1. Data Ingestion Layer
-- **Market Data**: Alpaca, Finnhub, Yahoo Finance APIs
-- **News & Sentiment**: NewsAPI, Reddit, Twitter feeds  
-- **Fundamentals**: SEC EDGAR filings integration
-
-### 2. Perception & Memory Layer
-- **Vector Database**: Pinecone/Weaviate/Chroma for market memory
-- **Strategy Engine**: Real-time evaluation and feedback loops
-
-### 3. Reasoning/Strategy Layer (LLM Agent Framework)
-- **Market Analysis Agent**: Data ingestion and technical analysis
-- **Risk Management Agent**: Portfolio risk assessment and limits  
-- **Strategy Agent**: Signal generation and trade decision logic
-- **Execution Agent**: Order management and portfolio tracking
-
-### 4. Execution Layer
-- **Alpaca Trading API**: Paper trading with full order management
-- **Portfolio & Orders**: Real-time position tracking and P&L
+A comprehensive, AI-powered trading system built for machine learning education and algorithmic trading. The system provides professional-grade market analysis, automated trading execution, portfolio management, and strategy implementation.
 
 ## 🚀 Features
 
-### Enhanced Multi-Agent Architecture
-- **LangGraph State Machine**: Orchestrates agent workflows
-- **Specialized Market Analysis Agents**: Technical, Fundamental, and Quantitative analysis
-- **Risk-Aware Routing**: Conditional workflows based on comprehensive risk assessment
-- **State Persistence**: Maintains trading session memory with market conditions
+### Core Capabilities
+- **Unified Market Intelligence**: Multi-source data aggregation with premium API integration
+- **Automated Trading**: Smart order execution with risk controls
+- **Portfolio Management**: Comprehensive portfolio analytics and rebalancing
+- **Pairs Trading**: Statistical arbitrage with cointegration testing
+- **Risk Management**: Multi-layer risk controls and position sizing
+- **Performance Analytics**: Real-time performance tracking and reporting
 
-### Advanced Market Analysis Agents
-- **Technical Analysis Agent**: Multi-strategy analysis (momentum, mean reversion, breakout)
-  - RSI, MACD, Bollinger Bands, ATR, Support/Resistance
-  - Ensemble decision making with confidence scoring
-  - Dynamic price targets and stop losses
-- **Fundamental Analysis Agent**: Market regime and sentiment analysis
-  - Market trend detection (bullish/bearish/sideways)
-  - Volatility regime assessment (low/medium/high)
-  - Sector rotation analysis and fear/greed proxy
-- **Quantitative Analysis Agent**: Statistical models and portfolio optimization
-  - Risk parity portfolio weighting
-  - Sharpe ratio optimization
-  - Maximum drawdown analysis
-  - Regime change detection
+### Data Sources
+- **Premium APIs**: Alpha Vantage, Finnhub, Financial Modeling Prep, News API
+- **Fallback Systems**: Yahoo Finance with multiple retrieval methods
+- **Real-time Data**: Live market data with intelligent caching
+- **News Sentiment**: Automated sentiment analysis from news sources
 
-### Advanced Trading Strategies
-- **Momentum Strategy**: Multi-timeframe momentum with volume confirmation
-- **Mean Reversion Strategy**: Bollinger Band and statistical mean reversion
-- **Pairs Trading**: Statistical arbitrage between correlated assets
-- **Portfolio Optimization**: Modern Portfolio Theory implementation
-- **Risk-Adjusted Sizing**: ATR-based position sizing with signal strength
+## 📋 Quick Start
 
-### Comprehensive Risk Management
-- **Multi-Layer Circuit Breakers**: Daily loss, concentration, volatility, correlation
-- **Dynamic Position Sizing**: Fixed fractional risk model with ATR stops
-- **Portfolio Heat Monitoring**: Total risk exposure tracking
-- **Regime-Aware Adjustments**: Risk parameters adapt to market conditions
-- **Advanced Stop Losses**: Volatility-based dynamic stops
-
-### Safety Controls
-- **Paper Trading Only**: All operations in simulation mode
-- **Pre-Trade Validation**: Comprehensive risk checks before execution
-- **Emergency Stops**: Manual and automatic halt mechanisms
-- **Comprehensive Logging**: Full audit trail of all operations
-
-## 📋 Prerequisites
-
-- Python 3.8+
-- Alpaca Paper Trading Account
-- OpenAI or Anthropic API Key (for LLM agents)
-
-## 🛠️ Installation
-
-1. **Clone and Setup**
+### Installation
 ```bash
+# Clone repository
+git clone <repository-url>
 cd trading_system
-pip install -r requirements.txt
-```
 
-2. **Configure Environment**
-```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
 cp .env.example .env
 # Edit .env with your API keys
 ```
 
-3. **Required API Keys**
-- `ALPACA_API_KEY`: Your Alpaca paper trading key
-- `ALPACA_SECRET_KEY`: Your Alpaca paper trading secret
-- `OPENAI_API_KEY`: OpenAI API key for LLM agents
-- `ANTHROPIC_API_KEY`: Alternative Anthropic API key
-
-## 🚦 Usage
-
-### Enhanced Demo Mode
+### Basic Usage
 ```bash
-python enhanced_demo.py
+# Run full automated trading cycle
+python simplified_main.py
+
+# Run interactive mode
+python simplified_main.py --interactive
+
+# Run specific components
+python -c "
+import asyncio
+from core import analyze_stock
+result = asyncio.run(analyze_stock('AAPL'))
+print(f'Signal: {result.signal.value}, Score: {result.score:.2f}')
+"
 ```
-Showcases all advanced features including:
-- Multi-agent market analysis
-- Quantitative strategy backtesting  
-- Enhanced signal generation
-- Comprehensive risk assessment
-- Real-time performance analytics
 
-### Interactive Mode
-```bash
-python main.py
+## 🏗️ Architecture
+
+### Simplified Structure
+```
+trading_system/
+├── core/                    # Unified core components
+│   ├── market_intelligence.py  # Market data & analysis
+│   └── trading_engine.py       # Trading execution & portfolio management
+├── simplified_main.py       # Main application
+├── config/                  # Configuration
+├── strategies/              # Trading strategies
+│   └── pairs_trading.py
+├── tools/                   # Trading tools & clients
+│   └── alpaca_client.py
+├── notifications/           # Email notifications
+└── enhanced_market_screener.py  # Stock selection
 ```
 
-Available commands:
-- `cycle` - Run single trading cycle with enhanced analysis
-- `auto` - Start continuous trading (5-minute intervals)
-- `status` - Show comprehensive system status
-- `buy SYMBOL QTY` - Manual buy order with risk validation
-- `sell SYMBOL QTY` - Manual sell order with risk validation
-- `close SYMBOL` - Close position
-- `stop` - Stop system
+### Core Components
 
-### Programmatic Usage
+#### Market Intelligence (`core/market_intelligence.py`)
+Unified system for market data and analysis:
+- **Multi-source Data**: Aggregates from premium APIs with fallbacks
+- **Technical Analysis**: RSI, moving averages, volume analysis
+- **Fundamental Analysis**: P/E ratios, growth metrics, financial health
+- **Sentiment Analysis**: News-based market sentiment
+- **Risk Assessment**: Volatility and risk scoring
 
-#### Enhanced Market Analysis
+#### Trading Engine (`core/trading_engine.py`)
+Unified trading execution and portfolio management:
+- **Order Execution**: Smart order routing with risk checks
+- **Portfolio Management**: Position tracking and rebalancing
+- **Strategy Execution**: Support for multiple trading strategies
+- **Risk Controls**: Position sizing and risk limits
+- **Performance Tracking**: Real-time performance metrics
+
+## 📊 Usage Examples
+
+### Market Analysis
 ```python
-from agents.market_analysis import market_analysis_factory
+from core import analyze_stock, analyze_portfolio
 
-# Get comprehensive portfolio recommendations
-analysis = market_analysis_factory.get_portfolio_recommendations(
-    symbols=["AAPL", "MSFT", "SPY"],
-    portfolio_value=100000
-)
+# Analyze single stock
+analysis = await analyze_stock('AAPL')
+print(f"Signal: {analysis.signal.value}")
+print(f"Confidence: {analysis.confidence.value}")
+print(f"Target: ${analysis.target_price:.2f}")
 
-# Access individual components
-symbol_analysis = analysis["symbol_analysis"]  # Technical analysis per symbol
-market_condition = analysis["market_condition"]  # Overall market regime
-optimal_weights = analysis["optimal_weights"]   # Portfolio optimization
-recommendations = analysis["recommendations"]   # Actionable insights
+# Analyze portfolio
+symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA']
+analyses = await analyze_portfolio(symbols)
+for analysis in analyses:
+    print(f"{analysis.symbol}: {analysis.signal.value} ({analysis.score:.2f})")
 ```
 
-#### Quantitative Strategy Testing
+### Trading Execution
 ```python
-from tools.advanced_trading import algorithmic_engine, MomentumStrategy
+from core import execute_signal, get_portfolio_metrics
 
-# Backtest strategies across multiple symbols
-results = algorithmic_engine.run_strategy_comparison(
-    symbols=["AAPL", "MSFT"],
-    lookback_days=252
-)
+# Execute trading signal
+analysis = await analyze_stock('AAPL')
+if analysis.confidence.value in ['high', 'very_high']:
+    order = await execute_signal(analysis)
+    print(f"Executed: {order.side} {order.quantity} {order.symbol}")
 
-# Get enhanced signals with risk management
-signals = algorithmic_engine.generate_enhanced_signals(
-    symbols=["AAPL", "MSFT", "SPY"],
-    portfolio_value=100000
-)
+# Get portfolio metrics
+metrics = await get_portfolio_metrics()
+print(f"Portfolio Value: ${metrics.total_value:,.2f}")
+print(f"Day P&L: ${metrics.day_pnl:,.2f}")
 ```
 
-#### Advanced Risk Management
+### Pairs Trading
 ```python
-from tools.risk_controls import risk_monitor
-from tools.advanced_trading import RiskManagementEngine
+from strategies.pairs_trading import PairsTradingStrategy
 
-# Comprehensive risk assessment
-assessment = risk_monitor.assess_portfolio_risk()
-print(f"Risk Level: {assessment['overall_risk']}")
-print(f"Risk Score: {assessment['risk_score']:.1f}/100")
+strategy = PairsTradingStrategy()
 
-# Calculate optimal position size
-risk_mgr = RiskManagementEngine()
-position_size = risk_mgr.calculate_position_size(
-    symbol="AAPL",
-    entry_price=150.0,
-    stop_loss=147.0,
-    portfolio_value=100000,
-    signal_strength=0.8
-)
+# Find suitable pairs
+pairs = strategy.find_pairs(['AAPL', 'MSFT', 'GOOGL', 'AMZN'])
+
+# Generate trading signals
+for pair in pairs:
+    signals = strategy.generate_signals(pair)
+    for signal in signals:
+        print(f"Pair: {pair['symbols']} | Signal: {signal['action']} | Z-score: {signal['z_score']:.2f}")
 ```
 
-#### Trading Workflow
+### Portfolio Rebalancing
 ```python
-from agents.workflow import trading_workflow
+from core import rebalance_portfolio
 
-# Run enhanced trading cycle
-result = await trading_workflow.run_cycle(
-    session_id="my_session",
-    input_message="Enhanced market analysis request"
-)
+# Define target allocation
+target_allocation = {
+    'AAPL': 0.25,   # 25%
+    'MSFT': 0.25,   # 25%
+    'GOOGL': 0.25,  # 25%
+    'SPY': 0.25     # 25%
+}
 
-# Access enhanced results
-print(f"Portfolio Value: ${result['portfolio_value']:.2f}")
-print(f"Market Trend: {result['final_state']['market_conditions'].market_trend}")
-print(f"Signals Generated: {result['signals_generated']}")
-print(f"Orders Executed: {result['orders_executed']}")
+# Execute rebalancing
+orders = await rebalance_portfolio(target_allocation)
+print(f"Rebalancing complete: {len(orders)} orders executed")
 ```
 
 ## ⚙️ Configuration
 
-### Risk Parameters (in `.env`)
+### Environment Variables
 ```bash
-MAX_PORTFOLIO_RISK=0.01    # 1% max risk per trade
-MAX_POSITION_SIZE=0.05     # 5% max position size  
-STOP_LOSS_PERCENT=0.03     # 3% stop loss
-MAX_DAILY_LOSS=0.02        # 2% daily loss limit
-MIN_CASH_RESERVE=0.1       # 10% cash reserve
+# Trading API (Alpaca - Paper Trading)
+ALPACA_API_KEY=your_alpaca_key
+ALPACA_SECRET_KEY=your_alpaca_secret
+ALPACA_BASE_URL=https://paper-api.alpaca.markets
+
+# Market Data APIs
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key
+FINNHUB_API_KEY=your_finnhub_key
+FMP_API_KEY=your_fmp_key
+NEWS_API_KEY=your_news_api_key
+
+# Email Notifications
+GMAIL_EMAIL=your_email@gmail.com
+GMAIL_APP_PASSWORD=your_app_password
+
+# Trading Parameters
+MAX_POSITION_SIZE=0.15          # 15% max position size
+STOP_LOSS_PERCENT=0.08          # 8% stop loss
+MIN_REBALANCE_THRESHOLD=0.05    # 5% rebalance threshold
 ```
 
-### Trading Settings
-```bash
-TRADING_MODE=paper         # Always use paper mode
-MAX_DAILY_TRADES=10        # Limit daily trades
-LOG_LEVEL=INFO            # Logging verbosity
+### Risk Parameters
+The system includes comprehensive risk management:
+- **Position Sizing**: Maximum 15% per position
+- **Stop Losses**: Automatic 8% stop losses
+- **Portfolio Risk**: Maximum 2% daily risk
+- **Diversification**: Cross-industry allocation requirements
+- **Buying Power**: Automatic buying power validation
+
+## 🔧 API Integration
+
+### Supported Data Providers
+1. **Alpha Vantage**: Technical indicators, fundamentals
+2. **Finnhub**: Real-time quotes, analyst data, insider trading
+3. **Financial Modeling Prep**: Detailed financial metrics
+4. **News API**: Real-time news sentiment analysis
+5. **Yahoo Finance**: Fallback data provider
+6. **Alpaca**: Trading execution and account management
+
+### Fallback System
+The system uses intelligent fallback ordering:
+```
+Market Data Request
+    ↓
+Premium APIs (Finnhub, FMP, Alpha Vantage)
+    ↓ (if fails)
+Yahoo Finance (Multiple methods)
+    ↓ (if fails)
+Cached/Mock Data
 ```
 
-## 🔍 Monitoring
+## 📈 Strategies
 
-### System Status
-```python
-from main import TradingSystemApp
+### Single Stock Analysis
+- Technical analysis (RSI, moving averages, MACD)
+- Fundamental screening (P/E, growth, margins)
+- News sentiment integration
+- Multi-factor scoring system
 
-app = TradingSystemApp()
-status = app.get_status()
+### Pairs Trading
+- Cointegration testing (Engle-Granger)
+- Z-score based entry/exit signals
+- Hedge ratio calculation
+- Mean reversion detection
 
-print(f"Portfolio: ${status['account']['equity']:.2f}")
-print(f"Positions: {status['portfolio']['positions']}")
-print(f"Risk Score: {status.get('risk_score', 'N/A')}")
-```
+### Portfolio Management
+- Risk-adjusted position sizing
+- Sector diversification requirements
+- Automatic rebalancing triggers
+- Performance optimization
 
-### Risk Assessment
-```python
-from tools.risk_controls import risk_monitor
+## 🚨 Risk Management
 
-assessment = risk_monitor.assess_portfolio_risk()
-print(f"Overall Risk: {assessment['overall_risk']}")
-print(f"Risk Score: {assessment['risk_score']:.1f}/100")
+### Pre-Trade Checks
+- Position size validation
+- Buying power verification
+- Account status checks
+- Market condition assessment
 
-for alert in assessment['alerts']:
-    print(f"⚠️ {alert.level}: {alert.message}")
-```
-
-## 📊 Trading Workflow
-
-1. **Market Monitor**: Updates account info, positions, market data
-2. **Risk Assessment**: Evaluates portfolio risk and checks limits  
-3. **Signal Generation**: Analyzes market data for trading opportunities
-4. **Strategy Optimization**: Prioritizes and sizes trading signals
-5. **Order Management**: Executes approved trades with safety checks
-6. **Portfolio Tracking**: Updates performance metrics and statistics
-
-## 📋 Regulatory Compliance
-
-This system complies with Alpaca Customer Agreement requirements:
-
-- **✅ Paper Trading Only:** System enforces paper trading mode for safety
-- **✅ Risk Management:** Comprehensive position and portfolio risk controls  
-- **✅ Order Validation:** Pre-trade checks and authorization validation
-- **✅ Record Keeping:** Complete audit trails and transaction logging
-- **⚠️ Self-directed Trading:** Automated operations with user oversight required
-
-See `COMPLIANCE.md` for detailed compliance documentation.
-
-## 🛡️ Safety Features
+### Real-Time Monitoring
+- Position exposure tracking
+- Risk metric calculation
+- Stop-loss management
+- Performance monitoring
 
 ### Circuit Breakers
-- **Daily Loss Limit**: Halts trading on excessive losses
-- **Position Concentration**: Prevents over-exposure to single assets
-- **Volatility Spike**: Stops trading during high volatility
-- **Liquidity Risk**: Ensures minimum cash reserves
-- **Correlation Risk**: Limits exposure to correlated assets
+- Daily loss limits
+- High volatility protection
+- Correlation risk detection
+- Account safety controls
 
-### Validation Layers
-1. **Pre-Trade Checks**: Buying power, position limits, asset tradability
-2. **Risk Validation**: Portfolio impact assessment
-3. **Market Status**: Ensures market is open for trading
-4. **Order Validation**: Confirms order parameters are valid
-
-### Emergency Controls
-- **Manual Override**: Stop system anytime with Ctrl+C
-- **Automatic Halt**: System stops on critical risk violations
-- **Order Cancellation**: All pending orders cancelled on shutdown
-- **Position Summary**: Final portfolio state logged on exit
-
-## 📈 Performance Tracking
+## 📊 Performance Tracking
 
 ### Metrics Tracked
-- Portfolio value and P&L
-- Win rate and profit factor  
+- Total return and P&L
+- Win/loss ratios
+- Sharpe ratio calculation
 - Maximum drawdown
-- Sharpe ratio
-- Position concentration
-- Trade frequency
+- Strategy-specific performance
+
+### Reporting
+- Real-time dashboard
+- Daily summary emails
+- Trade execution logs
+- Performance analytics
+
+## 🔍 Monitoring & Alerts
+
+### Email Notifications
+- Trade execution confirmations
+- Daily performance summaries
+- Risk alert notifications
+- System status updates
 
 ### Logging
-- All trades logged with timestamps
-- Risk assessments archived
-- Agent decisions recorded
-- Error conditions tracked
+- Comprehensive trade logs
+- Error tracking and alerts
+- Performance monitoring
+- System health checks
 
-## 🚨 Important Disclaimers
+## 🐛 Troubleshooting
 
-⚠️ **PAPER TRADING ONLY**: This system is configured for paper trading simulation only. Do not use with live trading accounts.
+### Common Issues
+1. **API Rate Limits**: System automatically handles rate limiting
+2. **Market Data Issues**: Fallback systems ensure data availability
+3. **Trading Errors**: Comprehensive error handling and recovery
+4. **Performance Issues**: Optimized concurrent processing
 
-⚠️ **NOT FINANCIAL ADVICE**: This is an educational/research system. All trading decisions are algorithmic and should not be considered financial advice.
+### Support
+- Check logs in `logs/` directory
+- Review configuration in `.env` file
+- Verify API key permissions
+- Monitor system resource usage
 
-⚠️ **RISK WARNING**: Algorithmic trading carries significant risks. Even in paper trading mode, monitor the system actively.
+## 📚 Educational Use
 
-⚠️ **COMPLIANCE**: Ensure compliance with your local financial regulations before any live trading modifications.
+This system is designed for machine learning and algorithmic trading education:
+- **Paper Trading**: Safe environment for learning
+- **Strategy Development**: Framework for custom strategies
+- **Risk Management**: Professional risk controls
+- **Performance Analysis**: Comprehensive analytics
 
-## 🔧 Development
+## ⚠️ Disclaimer
 
-### Adding New Strategies
-1. Create strategy function in `agents/workflow.py`
-2. Add to signal generation agent
-3. Configure risk parameters
-4. Test thoroughly in paper mode
+This software is for educational purposes only. Paper trading is recommended for learning and testing. Real money trading involves risk of loss. Always understand the risks before trading with real money.
 
-### Custom Risk Rules
-1. Modify `tools/risk_controls.py`
-2. Add new risk metrics
-3. Update circuit breaker logic
-4. Test risk scenarios
+## 📄 License
 
-### Integration Extensions
-1. Add new data sources in `tools/`
-2. Create new agent nodes
-3. Update workflow routing
-4. Extend tool collection
-
-## 📚 References
-
-- [Alpaca Trading API Documentation](https://alpaca.markets/docs/)
-- [LangChain Agent Framework](https://langchain.readthedocs.io/)
-- [LangGraph Multi-Agent Patterns](https://langchain-ai.github.io/langgraph/)
-
-## 📝 License
-
-This project is for educational purposes. See license terms for usage restrictions.
+Educational use license. See LICENSE file for details.
 
 ---
 
-**Happy Trading! 🚀📈**
-
-*Remember: Past performance does not guarantee future results. Trade responsibly.*
+*Built for ML4T - Machine Learning for Trading Education*

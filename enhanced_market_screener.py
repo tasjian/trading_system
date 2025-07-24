@@ -14,6 +14,7 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 import yfinance as yf
 from dataclasses import dataclass
+from core.market_intelligence import market_intelligence
 
 logger = logging.getLogger(__name__)
 
@@ -228,20 +229,28 @@ class EnhancedMarketScreener:
         return selection
     
     async def get_stock_data(self, symbol: str) -> Optional[Dict]:
-        """Get basic stock data with industry classification."""
+        """Get basic stock data with industry classification using reliable fallback system."""
         try:
-            ticker = yf.Ticker(symbol)
-            
-            # Get current price and basic info
-            hist = ticker.history(period="5d")
-            if hist.empty:
+            # Get current price using unified market intelligence
+            market_data = await market_intelligence.get_market_data(symbol)
+            if market_data.price <= 0:
                 return None
+            current_price = market_data.price
             
-            current_price = hist['Close'].iloc[-1]
-            prev_price = hist['Close'].iloc[0] if len(hist) > 1 else current_price
-            
-            # Get basic info
+            # Get historical data for change calculation (fallback to yfinance)
             try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period="5d")
+                if hist.empty:
+                    prev_price = current_price
+                else:
+                    prev_price = hist['Close'].iloc[0] if len(hist) > 1 else current_price
+            except:
+                prev_price = current_price
+            
+            # Get basic info (fallback to yfinance)
+            try:
+                ticker = yf.Ticker(symbol)
                 info = ticker.info
                 market_cap = info.get('marketCap', 0)
                 pe_ratio = info.get('trailingPE', 0)
@@ -263,7 +272,7 @@ class EnhancedMarketScreener:
                 'sector': sector,
                 'industry': self.get_industry_for_symbol(symbol),
                 'industry_description': self.get_industry_description(self.get_industry_for_symbol(symbol)),
-                'volume': float(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0
+                'volume': float(hist['Volume'].iloc[-1]) if hist is not None and 'Volume' in hist.columns and not hist.empty else 0
             }
             
         except Exception as e:

@@ -79,7 +79,7 @@ async def force_rebalance():
         for asset_class, allocation in metrics.asset_class_distribution.items():
             print(f"  {asset_class}: {allocation:.1%}")
         
-        # Generate rebalancing orders
+        # Generate rebalancing orders with buying power management
         print(f"\n📋 GENERATING REBALANCING ORDERS")
         print("-" * 40)
         
@@ -94,8 +94,17 @@ async def force_rebalance():
                 'sector': 'Unknown'  # Would need to lookup actual sector
             }
         
+        # Get available buying power
+        available_buying_power = account_info['buying_power']
+        print(f"Available Buying Power: ${available_buying_power:,.2f}")
+        
         rebalancing_orders = await diversified_portfolio_manager.generate_rebalancing_orders(
             current_portfolio_dict, current_portfolio_value
+        )
+        
+        # Apply buying power constraints to orders
+        rebalancing_orders = await _apply_buying_power_constraints(
+            rebalancing_orders, available_buying_power, alpaca_client
         )
         
         print(f"📝 Generated {len(rebalancing_orders)} rebalancing orders")
@@ -141,11 +150,16 @@ async def force_rebalance():
             successful_orders = 0
             failed_orders = 0
             
-            for i, order in enumerate(rebalancing_orders):
+            # Execute sell orders first to free up buying power
+            sell_orders = [o for o in rebalancing_orders if o['side'] == 'sell']
+            buy_orders = [o for o in rebalancing_orders if o['side'] == 'buy']
+            
+            print(f"Phase 1: Executing {len(sell_orders)} SELL orders to free up buying power...")
+            
+            for i, order in enumerate(sell_orders):
                 try:
-                    print(f"[{i+1}/{len(rebalancing_orders)}] {order['side'].upper()} {order['quantity']} {order['symbol']}")
+                    print(f"[{i+1}/{len(sell_orders)}] SELL {order['quantity']} {order['symbol']}")
                     
-                    # Execute the order
                     result = alpaca_client.place_order(
                         symbol=order['symbol'],
                         qty=order['quantity'],
@@ -165,7 +179,38 @@ async def force_rebalance():
                     failed_orders += 1
                     print(f"  ❌ Order error: {e}")
                 
-                # Small delay between orders
+                await asyncio.sleep(0.5)
+            
+            # Wait for sell orders to settle before buying
+            if sell_orders:
+                print(f"\n⏳ Waiting 5 seconds for sell orders to settle...")
+                await asyncio.sleep(5)
+            
+            print(f"\nPhase 2: Executing {len(buy_orders)} BUY orders...")
+            
+            for i, order in enumerate(buy_orders):
+                try:
+                    print(f"[{i+1}/{len(buy_orders)}] BUY {order['quantity']} {order['symbol']}")
+                    
+                    result = alpaca_client.place_order(
+                        symbol=order['symbol'],
+                        qty=order['quantity'],
+                        side=order['side'],
+                        order_type='market',
+                        time_in_force='day'
+                    )
+                    
+                    if result:
+                        successful_orders += 1
+                        print(f"  ✅ Order placed successfully")
+                    else:
+                        failed_orders += 1
+                        print(f"  ❌ Order failed")
+                        
+                except Exception as e:
+                    failed_orders += 1
+                    print(f"  ❌ Order error: {e}")
+                
                 await asyncio.sleep(0.5)
             
             print(f"\n📊 REBALANCING COMPLETE")
@@ -191,6 +236,69 @@ async def force_rebalance():
     print(f"\n" + "=" * 60)
     print("🏁 FORCE REBALANCE COMPLETE")
     print("=" * 60)
+
+
+async def _apply_buying_power_constraints(orders: List[Dict], available_buying_power: float, alpaca_client) -> List[Dict]:
+    """Apply buying power constraints to rebalancing orders."""
+    
+    print(f"📊 Applying buying power constraints...")
+    
+    # Separate buy and sell orders
+    buy_orders = [o for o in orders if o['side'] == 'buy']
+    sell_orders = [o for o in orders if o['side'] == 'sell']
+    
+    # Calculate total buy order value needed
+    total_buy_value = 0
+    for order in buy_orders:
+        try:
+            # Get current price for the symbol
+            market_data = alpaca_client.get_market_data(order['symbol'], limit=1)
+            if not market_data.empty:
+                current_price = market_data.iloc[-1]['close']
+                order_value = order['quantity'] * current_price
+                total_buy_value += order_value
+                order['estimated_value'] = order_value
+            else:
+                # If no market data, estimate conservatively
+                order['estimated_value'] = order['quantity'] * 100  # Conservative estimate
+                total_buy_value += order['estimated_value']
+        except Exception as e:
+            logger.warning(f"Could not get price for {order['symbol']}: {e}")
+            order['estimated_value'] = order['quantity'] * 100
+            total_buy_value += order['estimated_value']
+    
+    print(f"Total buy order value needed: ${total_buy_value:,.2f}")
+    print(f"Available buying power: ${available_buying_power:,.2f}")
+    
+    # If we need more buying power than available, prioritize orders
+    if total_buy_value > available_buying_power:
+        print(f"⚠️ Insufficient buying power. Prioritizing buy orders...")
+        
+        # Sort buy orders by importance (could be by sector diversity, position size, etc.)
+        buy_orders.sort(key=lambda x: x.get('importance', 0.5), reverse=True)
+        
+        # Select orders that fit within buying power
+        selected_buy_orders = []
+        used_buying_power = 0
+        
+        for order in buy_orders:
+            estimated_value = order.get('estimated_value', 0)
+            if used_buying_power + estimated_value <= available_buying_power:
+                selected_buy_orders.append(order)
+                used_buying_power += estimated_value
+            else:
+                print(f"⏭️ Skipping {order['symbol']} buy order (insufficient buying power)")
+        
+        print(f"✅ Selected {len(selected_buy_orders)}/{len(buy_orders)} buy orders")
+        print(f"💰 Will use ${used_buying_power:,.2f} of ${available_buying_power:,.2f} buying power")
+        
+        # Return all sell orders plus prioritized buy orders
+        return sell_orders + selected_buy_orders
+    
+    else:
+        print(f"✅ Sufficient buying power for all orders")
+        return orders
+
 
 if __name__ == "__main__":
     asyncio.run(force_rebalance())

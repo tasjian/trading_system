@@ -202,13 +202,13 @@ class AlpacaClient:
             
             logger.info(f"Order placed: {side} {qty} {symbol} at {order_type}")
             
-            # Send email notification asynchronously
+            # Send batched email notification asynchronously
             try:
-                asyncio.create_task(self._send_transaction_notification(
+                asyncio.create_task(self._send_batched_transaction_notification(
                     order, symbol, qty, side, order_type, limit_price
                 ))
             except Exception as notification_error:
-                logger.warning(f"Email notification failed: {notification_error}")
+                logger.warning(f"Batched email notification failed: {notification_error}")
             
             return {
                 "id": order.id,
@@ -368,13 +368,17 @@ class AlpacaClient:
             logger.error(f"Failed to get market calendar: {e}")
             raise
     
-    async def _send_transaction_notification(self, order, symbol: str, qty: float, 
-                                           side: str, order_type: str, 
-                                           limit_price: Optional[float] = None) -> None:
-        """Send email notification for completed transaction."""
+    async def _send_batched_transaction_notification(self, order, symbol: str, qty: float, 
+                                                   side: str, order_type: str, 
+                                                   limit_price: Optional[float] = None) -> None:
+        """Send batched email notification for completed transaction."""
         try:
             # Import here to avoid circular imports
-            from notifications.email_webhooks import send_transaction_email
+            from notifications.email_batch_manager import send_batched_transaction_notification, email_batch_manager
+            
+            # Ensure batch processor is running
+            if not email_batch_manager.running:
+                email_batch_manager.start_batch_processor()
             
             # Get current portfolio value
             account_info = self.get_account_info()
@@ -396,8 +400,8 @@ class AlpacaClient:
             reasoning += f"Order type: {order_type}. Status: {order.status}. "
             reasoning += f"Submitted at: {order.submitted_at}"
             
-            # Send notification
-            await send_transaction_email(
+            # Send to batching system
+            await send_batched_transaction_notification(
                 symbol=symbol,
                 action=side,
                 quantity=qty,
@@ -408,10 +412,10 @@ class AlpacaClient:
                 agent_source="alpaca_trading_client"
             )
             
-            logger.info(f"Transaction notification sent for {symbol} {side}")
+            logger.info(f"Transaction added to batch queue: {symbol} {side}")
             
         except Exception as e:
-            logger.error(f"Failed to send transaction notification: {e}")
+            logger.error(f"Failed to add transaction to batch queue: {e}")
 
 # Global client instance
 alpaca_client = AlpacaClient()

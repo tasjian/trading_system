@@ -588,15 +588,58 @@ class EnhancedTradingWorkflow:
             return "hold"
     
     def performance_routing_logic(self, state: EnhancedTradingState) -> Literal["continue", "rebalance", "investigate"]:
-        """Route based on performance review."""
-        portfolio_size = len(state.get("positions", {}))
-        target_size = state["trading_config"].get("target_positions", 35)
-        
-        if abs(portfolio_size - target_size) > 10:  # Significant deviation
-            return "rebalance"
-        elif len(state.get("error_log", [])) > 5:  # Many errors
-            return "investigate"
-        else:
+        """Route based on performance review and rebalancing conditions."""
+        try:
+            # Get current portfolio information
+            portfolio_size = len(state.get("positions", {}))
+            target_size = state["trading_config"].get("target_positions", 35)
+            
+            # Check for rebalancing triggers from performance review
+            performance_data = state.get("agent_outputs", {}).get("performance_review", {})
+            
+            # Trigger 1: Portfolio size significantly different from target
+            size_deviation = abs(portfolio_size - target_size)
+            if size_deviation > 10:
+                logger.info(f"Rebalancing triggered: Portfolio size deviation {size_deviation} > 10")
+                return "rebalance"
+            
+            # Trigger 2: Portfolio concentration risk too high
+            concentration_risk = performance_data.get("concentration_risk", 0)
+            if concentration_risk > 0.4:  # More than 40% in single position
+                logger.info(f"Rebalancing triggered: Concentration risk {concentration_risk:.2%} > 40%")
+                return "rebalance"
+            
+            # Trigger 3: Poor diversification score
+            diversification_score = performance_data.get("diversification_score", 1.0)
+            if diversification_score < 0.5:
+                logger.info(f"Rebalancing triggered: Poor diversification score {diversification_score:.2f} < 0.5")
+                return "rebalance"
+            
+            # Trigger 4: Large unrealized losses requiring rebalancing
+            total_unrealized_pnl = performance_data.get("total_unrealized_pnl", 0)
+            portfolio_value = state.get("portfolio", {}).get("equity", 100000)
+            if total_unrealized_pnl < -0.1 * portfolio_value:  # More than 10% loss
+                logger.info(f"Rebalancing triggered: Large unrealized losses {total_unrealized_pnl:.2f}")
+                return "rebalance"
+            
+            # Trigger 5: Time-based rebalancing (weekly)
+            last_rebalance = state.get("last_rebalance_time")
+            if last_rebalance:
+                from datetime import datetime, timedelta
+                last_rebalance_dt = datetime.fromisoformat(last_rebalance) if isinstance(last_rebalance, str) else last_rebalance
+                if datetime.now() - last_rebalance_dt > timedelta(days=7):
+                    logger.info(f"Rebalancing triggered: Weekly rebalancing due")
+                    return "rebalance"
+            
+            # Investigate if many errors
+            if len(state.get("errors", [])) > 5:
+                logger.info(f"Investigation triggered: {len(state.get('errors', []))} errors")
+                return "investigate"
+            
+            return "continue"
+            
+        except Exception as e:
+            logger.error(f"Error in performance routing logic: {e}")
             return "continue"
     
     def human_decision_routing(self, state: EnhancedTradingState) -> Literal["continue", "restart", "halt", "emergency"]:
@@ -612,11 +655,112 @@ class EnhancedTradingWorkflow:
         return state
     
     async def signal_generation_agent(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        state["current_agent"] = "signal_generation" 
-        # Generate signals and add to queue
-        prioritize_signals(state)
-        state["messages"].append(AIMessage(content=f"Signals generated: {len(state['signal_queue'])}"))
-        return state
+        """Enhanced signal generation including rebalancing signals."""
+        try:
+            state["current_agent"] = "signal_generation"
+            logger.info("Signal Generation Agent: Generating trading signals")
+            
+            # Check if we're in a rebalancing cycle
+            performance_data = state.get("agent_outputs", {}).get("performance_review", {})
+            rebalancing_recommended = performance_data.get("rebalancing_recommended", False)
+            
+            if rebalancing_recommended:
+                logger.info("Generating rebalancing signals...")
+                await self._generate_rebalancing_signals(state)
+            else:
+                logger.info("Generating regular trading signals...")
+                await self._generate_regular_signals(state)
+            
+            # Prioritize all signals
+            prioritize_signals(state)
+            
+            signal_count = len(state.get("signal_queue", []))
+            state["messages"].append(AIMessage(
+                content=f"Signal generation completed: {signal_count} signals generated"
+            ))
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Signal generation agent error: {e}")
+            state["errors"].append(f"Signal generation failed: {str(e)}")
+            state["messages"].append(AIMessage(content="Signal generation encountered an error"))
+            return state
+    
+    async def _generate_rebalancing_signals(self, state: EnhancedTradingState):
+        """Generate signals for portfolio rebalancing."""
+        try:
+            # Import rebalancing functionality
+            from agents.diversified_portfolio import diversified_portfolio_manager
+            from tools.alpaca_client import alpaca_client
+            
+            # Get current portfolio
+            account_info = alpaca_client.get_account_info()
+            current_positions = alpaca_client.get_positions()
+            portfolio_value = account_info.get("portfolio_value", 0)
+            
+            logger.info(f"Generating rebalancing signals for portfolio value: ${portfolio_value:,.2f}")
+            
+            # Convert positions to expected format
+            current_portfolio_dict = {}
+            for pos in current_positions:
+                symbol = pos.get("symbol", "")
+                current_portfolio_dict[symbol] = {
+                    "quantity": pos.get("qty", 0),
+                    "market_value": pos.get("market_value", 0),
+                    "unrealized_pnl": pos.get("unrealized_pl", 0),
+                    "sector": "Unknown"
+                }
+            
+            # Generate rebalancing orders
+            rebalancing_orders = await diversified_portfolio_manager.generate_rebalancing_orders(
+                current_portfolio_dict, portfolio_value
+            )
+            
+            # Convert rebalancing orders to signals
+            for order in rebalancing_orders:
+                signal = {
+                    "agent": "rebalancing",
+                    "type": "rebalance",
+                    "symbol": order["symbol"],
+                    "action": order["side"],
+                    "quantity": order["quantity"],
+                    "reasoning": f"Portfolio rebalancing: {order.get('reason', 'Diversification')}",
+                    "confidence": 0.8,
+                    "priority": 0.9,  # High priority for rebalancing
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                state["signal_queue"].append(signal)
+            
+            logger.info(f"Generated {len(rebalancing_orders)} rebalancing signals")
+            
+            # Update rebalancing timestamp
+            state["last_rebalance_time"] = datetime.now().isoformat()
+            
+        except Exception as e:
+            logger.error(f"Error generating rebalancing signals: {e}")
+            state["errors"].append(f"Rebalancing signal generation failed: {str(e)}")
+    
+    async def _generate_regular_signals(self, state: EnhancedTradingState):
+        """Generate regular trading signals (non-rebalancing)."""
+        try:
+            # This would include your existing signal generation logic
+            # For now, keeping it simple
+            
+            logger.info("Generating regular trading signals...")
+            
+            # Example: Generate signals based on market conditions
+            # You would integrate your existing momentum, mean reversion, and pairs trading signals here
+            
+            # Placeholder for regular signal generation
+            # In practice, this would call your existing signal generation methods
+            
+            logger.info("Regular signal generation completed")
+            
+        except Exception as e:
+            logger.error(f"Error generating regular signals: {e}")
+            state["errors"].append(f"Regular signal generation failed: {str(e)}")
     
     async def strategy_synthesis_agent(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         state["current_agent"] = "strategy_synthesis"
@@ -639,9 +783,222 @@ class EnhancedTradingWorkflow:
         return state
     
     async def performance_review_agent(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        state["current_agent"] = "performance_review"
-        state["messages"].append(AIMessage(content="Performance review completed"))
-        return state
+        """Comprehensive performance review with rebalancing analysis."""
+        try:
+            state["current_agent"] = "performance_review"
+            logger.info("Performance Review Agent: Analyzing portfolio performance")
+            
+            # Get current portfolio data
+            from tools.alpaca_client import alpaca_client
+            
+            account_info = alpaca_client.get_account_info()
+            positions = alpaca_client.get_positions()
+            
+            # Calculate portfolio metrics
+            portfolio_value = account_info.get("portfolio_value", 0)
+            total_positions = len(positions)
+            total_unrealized_pnl = sum(pos.get("unrealized_pl", 0) for pos in positions)
+            
+            # Calculate concentration risk (largest position as % of portfolio)
+            concentration_risk = 0
+            if positions and portfolio_value > 0:
+                largest_position = max(positions, key=lambda p: abs(p.get("market_value", 0)))
+                concentration_risk = abs(largest_position.get("market_value", 0)) / portfolio_value
+            
+            # Calculate diversification score
+            diversification_score = self._calculate_diversification_score(positions, portfolio_value)
+            
+            # Analyze sector distribution
+            sector_analysis = self._analyze_sector_distribution(positions)
+            
+            # Check for rebalancing needs
+            target_positions = state["trading_config"].get("target_positions", 35)
+            rebalancing_needed = self._assess_rebalancing_needs(
+                positions, total_positions, target_positions, concentration_risk, diversification_score
+            )
+            
+            # Performance analysis
+            daily_pnl_pct = (total_unrealized_pnl / portfolio_value * 100) if portfolio_value > 0 else 0
+            
+            # Store performance data
+            performance_data = {
+                "total_positions": total_positions,
+                "target_positions": target_positions,
+                "portfolio_value": portfolio_value,
+                "total_unrealized_pnl": total_unrealized_pnl,
+                "daily_pnl_percent": daily_pnl_pct,
+                "concentration_risk": concentration_risk,
+                "diversification_score": diversification_score,
+                "sector_distribution": sector_analysis,
+                "rebalancing_recommended": rebalancing_needed,
+                "rebalancing_reasons": self._get_rebalancing_reasons(
+                    total_positions, target_positions, concentration_risk, diversification_score
+                ),
+                "performance_summary": self._generate_performance_summary(
+                    total_positions, daily_pnl_pct, concentration_risk, diversification_score
+                )
+            }
+            
+            # Update state
+            state["agent_outputs"]["performance_review"] = performance_data
+            
+            # Add reasoning to chain
+            state["reasoning_chain"].append({
+                "agent": "performance_review",
+                "step": "portfolio_performance_analysis",
+                "reasoning": performance_data["performance_summary"],
+                "confidence": 0.9,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Update last review time
+            state["last_performance_review"] = datetime.now().isoformat()
+            
+            # Agent communication about performance
+            await add_agent_communication(
+                state,
+                from_agent="performance_review",
+                to_agent="signal_generation",
+                message=f"Performance analysis: {'Rebalancing recommended' if rebalancing_needed else 'Portfolio performing well'}",
+                priority="high" if rebalancing_needed else "medium"
+            )
+            
+            message_content = f"Performance review completed. Portfolio: {total_positions} positions, "
+            message_content += f"Daily P&L: {daily_pnl_pct:.2f}%, "
+            message_content += f"Concentration risk: {concentration_risk:.2%}, "
+            message_content += f"Diversification: {diversification_score:.3f}"
+            
+            if rebalancing_needed:
+                message_content += " - REBALANCING RECOMMENDED"
+            
+            state["messages"].append(AIMessage(content=message_content))
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Performance review agent error: {e}")
+            state["errors"].append(f"Performance review failed: {str(e)}")
+            state["messages"].append(AIMessage(content="Performance review encountered an error"))
+            return state
+    
+    def _calculate_diversification_score(self, positions: List[Dict], portfolio_value: float) -> float:
+        """Calculate portfolio diversification score (0-1, higher is better)."""
+        if not positions or portfolio_value <= 0:
+            return 0.0
+        
+        try:
+            # Calculate Herfindahl-Hirschman Index (HHI) for diversification
+            # HHI = sum of squared market shares
+            hhi = 0
+            for position in positions:
+                market_value = abs(position.get("market_value", 0))
+                weight = market_value / portfolio_value
+                hhi += weight ** 2
+            
+            # Convert HHI to diversification score (1 - normalized HHI)
+            # Perfect diversification (equal weights) would have HHI = 1/n
+            # Maximum concentration (all in one) would have HHI = 1
+            max_diversification_hhi = 1 / len(positions) if positions else 1
+            normalized_hhi = (hhi - max_diversification_hhi) / (1 - max_diversification_hhi)
+            diversification_score = max(0, 1 - normalized_hhi)
+            
+            return diversification_score
+            
+        except Exception as e:
+            logger.warning(f"Error calculating diversification score: {e}")
+            return 0.5  # Default moderate score
+    
+    def _analyze_sector_distribution(self, positions: List[Dict]) -> Dict[str, float]:
+        """Analyze sector distribution of portfolio."""
+        if not positions:
+            return {}
+        
+        # This is simplified - in practice you'd lookup actual sectors
+        # For now, group by first letter of symbol as proxy
+        sector_values = {}
+        total_value = sum(abs(pos.get("market_value", 0)) for pos in positions)
+        
+        if total_value <= 0:
+            return {}
+        
+        for position in positions:
+            symbol = position.get("symbol", "")
+            market_value = abs(position.get("market_value", 0))
+            
+            # Simple sector approximation
+            if symbol.startswith(('A', 'M', 'G', 'N', 'T')):
+                sector = "Technology"
+            elif symbol.startswith(('X', 'E', 'C')):
+                sector = "Energy"
+            elif symbol.startswith(('J', 'B', 'W', 'G')):
+                sector = "Financial"
+            else:
+                sector = "Other"
+            
+            sector_values[sector] = sector_values.get(sector, 0) + market_value
+        
+        # Convert to percentages
+        return {sector: value / total_value for sector, value in sector_values.items()}
+    
+    def _assess_rebalancing_needs(self, positions: List[Dict], current_size: int, 
+                                 target_size: int, concentration_risk: float, 
+                                 diversification_score: float) -> bool:
+        """Assess if portfolio rebalancing is needed."""
+        reasons = []
+        
+        # Check portfolio size
+        if abs(current_size - target_size) > 10:
+            reasons.append(f"Portfolio size deviation: {current_size} vs target {target_size}")
+        
+        # Check concentration risk
+        if concentration_risk > 0.4:
+            reasons.append(f"High concentration risk: {concentration_risk:.2%}")
+        
+        # Check diversification
+        if diversification_score < 0.5:
+            reasons.append(f"Poor diversification: {diversification_score:.2f}")
+        
+        return len(reasons) > 0
+    
+    def _get_rebalancing_reasons(self, current_size: int, target_size: int,
+                                concentration_risk: float, diversification_score: float) -> List[str]:
+        """Get list of reasons why rebalancing might be needed."""
+        reasons = []
+        
+        if abs(current_size - target_size) > 10:
+            reasons.append(f"Portfolio size deviation: {current_size} positions vs target {target_size}")
+        
+        if concentration_risk > 0.4:
+            reasons.append(f"High concentration risk: {concentration_risk:.1%} in single position")
+        
+        if diversification_score < 0.5:
+            reasons.append(f"Poor diversification score: {diversification_score:.2f}")
+        
+        if not reasons:
+            reasons.append("Portfolio appears well-balanced")
+        
+        return reasons
+    
+    def _generate_performance_summary(self, positions: int, daily_pnl_pct: float,
+                                    concentration_risk: float, diversification_score: float) -> str:
+        """Generate human-readable performance summary."""
+        summary = f"Portfolio has {positions} positions with {daily_pnl_pct:+.2f}% daily P&L. "
+        
+        if concentration_risk > 0.4:
+            summary += f"High concentration risk detected ({concentration_risk:.1%}). "
+        elif concentration_risk > 0.25:
+            summary += f"Moderate concentration risk ({concentration_risk:.1%}). "
+        else:
+            summary += "Good position diversification. "
+        
+        if diversification_score > 0.7:
+            summary += "Strong portfolio diversification."
+        elif diversification_score > 0.5:
+            summary += "Adequate portfolio diversification."
+        else:
+            summary += "Portfolio diversification needs improvement."
+        
+        return summary
     
     async def human_intervention_node(self, state: EnhancedTradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Handle human intervention with interrupt."""
