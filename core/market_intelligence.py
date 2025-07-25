@@ -5,7 +5,7 @@ Consolidates all market data sources and analysis capabilities into a single,
 coherent system that provides:
 - Multi-source data aggregation with fallbacks
 - Technical and fundamental analysis
-- News sentiment analysis
+- LLM-powered sentiment analysis from news and earnings calls
 - Risk assessment and signal generation
 - Portfolio-level intelligence
 
@@ -28,6 +28,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from config.settings import settings
+from .llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
+from .earnings_scraper import EarningsCallScraper
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +101,20 @@ class UnifiedMarketIntelligence:
         self.fmp_key = os.getenv('FMP_API_KEY')
         self.news_key = os.getenv('NEWS_API_KEY')
         
+        # Initialize LLM sentiment analyzer and earnings scraper
+        self.sentiment_analyzer = LLMSentimentAnalyzer(
+            openai_api_key=settings.openai_api_key,
+            ollama_base_url=settings.ollama_base_url
+        )
+        self.earnings_scraper = EarningsCallScraper()
+        
         # Rate limiting
         self.last_calls = {
             'alpha_vantage': [],
             'finnhub': [],
             'fmp': [],
-            'news_api': []
+            'news_api': [],
+            'earnings_scraper': []
         }
         
         # Analysis weights
@@ -406,37 +416,35 @@ class UnifiedMarketIntelligence:
         return score / max(factors, 1) if factors > 0 else 0.0
     
     async def _analyze_sentiment(self, symbol: str) -> Optional[float]:
-        """News sentiment analysis."""
+        """Comprehensive LLM-powered sentiment analysis."""
         try:
-            if not self.news_key or not await self._check_rate_limit('news_api'):
-                return self._fallback_sentiment(symbol)
+            # Use the sentiment agent for comprehensive analysis
+            from agents.sentiment_agent import sentiment_agent
             
-            if not self.session:
-                self.session = aiohttp.ClientSession()
+            # Check cache first
+            cache_key = f"sentiment_analysis_{symbol}"
+            if cache_key in self.cache:
+                data, timestamp = self.cache[cache_key]
+                if (datetime.now() - timestamp).seconds < self.cache_duration:
+                    return data
             
-            # Get recent news
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'q': f'"{symbol}"',
-                'sortBy': 'publishedAt',
-                'language': 'en',
-                'pageSize': 10,
-                'from': (datetime.now() - timedelta(days=1)).isoformat(),
-                'apiKey': self.news_key
-            }
+            # Get comprehensive sentiment
+            comprehensive_sentiment = await sentiment_agent.analyze_comprehensive_sentiment(symbol)
             
-            async with self.session.get(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    articles = data.get('articles', [])
-                    
-                    if articles:
-                        return self._score_sentiment(articles)
+            if comprehensive_sentiment:
+                # Cache the result
+                self.cache[cache_key] = (comprehensive_sentiment.overall_score, datetime.now())
+                
+                logger.info(f"LLM sentiment for {symbol}: {comprehensive_sentiment.overall_sentiment} "
+                          f"({comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
+                
+                return comprehensive_sentiment.overall_score
             
+            # Fallback to simple momentum-based sentiment
             return self._fallback_sentiment(symbol)
             
         except Exception as e:
-            logger.warning(f"Sentiment analysis error for {symbol}: {e}")
+            logger.warning(f"LLM sentiment analysis error for {symbol}: {e}")
             return self._fallback_sentiment(symbol)
     
     def _fallback_sentiment(self, symbol: str) -> float:
@@ -455,29 +463,36 @@ class UnifiedMarketIntelligence:
         except:
             return 0.0
     
-    def _score_sentiment(self, articles: List[Dict]) -> float:
-        """Score news sentiment."""
-        positive_words = ['profit', 'growth', 'increase', 'positive', 'strong', 'beat', 'exceeded']
-        negative_words = ['loss', 'decline', 'decrease', 'negative', 'weak', 'miss', 'failed']
-        
-        sentiment_scores = []
-        
-        for article in articles:
-            title = article.get('title', '').lower()
-            description = article.get('description', '').lower()
-            text = f"{title} {description}"
+    async def _get_news_articles(self, symbol: str) -> List[Dict]:
+        """Get news articles for sentiment analysis. Used by sentiment agent."""
+        try:
+            if not self.news_key or not await self._check_rate_limit('news_api'):
+                return []
             
-            pos_score = sum(1 for word in positive_words if word in text)
-            neg_score = sum(1 for word in negative_words if word in text)
+            if not self.session:
+                self.session = aiohttp.ClientSession()
             
-            if pos_score > neg_score:
-                sentiment_scores.append(0.5)
-            elif neg_score > pos_score:
-                sentiment_scores.append(-0.5)
-            else:
-                sentiment_scores.append(0.0)
-        
-        return np.mean(sentiment_scores) if sentiment_scores else 0.0
+            # Get recent news
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'q': f'"{symbol}"',
+                'sortBy': 'publishedAt',
+                'language': 'en',
+                'pageSize': 20,  # Get more articles for LLM analysis
+                'from': (datetime.now() - timedelta(days=2)).isoformat(),
+                'apiKey': self.news_key
+            }
+            
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get('articles', [])
+            
+            return []
+            
+        except Exception as e:
+            logger.warning(f"Error fetching news articles for {symbol}: {e}")
+            return []
     
     async def _analyze_market_structure(self, symbol: str) -> Optional[float]:
         """Market structure and momentum analysis."""

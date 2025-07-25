@@ -154,7 +154,7 @@ class UnifiedTradingEngine:
             # Calculate position sizes
             account_info = alpaca_client.get_account_info()
             portfolio_value = account_info['portfolio_value']
-            position_value = portfolio_value * 0.05  # 5% position size for pairs
+            position_value = portfolio_value * 0.20  # 20% position size for pairs
             
             # Get current prices
             price1_data = await market_intelligence.get_market_data(symbol1)
@@ -373,12 +373,13 @@ class UnifiedTradingEngine:
         try:
             account_info = alpaca_client.get_account_info()
             portfolio_value = account_info['portfolio_value']
+            buying_power = account_info['buying_power']
             
             if portfolio_value <= 0:
                 return 0.0
             
-            # Base position size
-            base_size = portfolio_value * 0.05  # 5% base position
+            # Base position size - use smaller of 15% portfolio or 80% buying power
+            base_size = min(portfolio_value * 0.15, buying_power * 0.8)
             
             # Adjust for confidence
             confidence_multiplier = {

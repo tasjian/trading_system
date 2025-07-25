@@ -56,7 +56,7 @@ def switch_to_conservative():
     
     # Replace aggressive settings with conservative
     content = content.replace('MAX_PORTFOLIO_RISK=0.05', 'MAX_PORTFOLIO_RISK=0.02')
-    content = content.replace('MAX_POSITION_SIZE=0.15', 'MAX_POSITION_SIZE=0.08')
+    content = content.replace('MAX_POSITION_SIZE=0.25', 'MAX_POSITION_SIZE=0.08')
     content = content.replace('STOP_LOSS_PERCENT=0.08', 'STOP_LOSS_PERCENT=0.05')
     content = content.replace('# Trading Configuration - Aggressive stance', '# Trading Configuration - Conservative stance')
     
@@ -81,7 +81,7 @@ def switch_to_aggressive():
     
     # Replace conservative settings with aggressive
     content = content.replace('MAX_PORTFOLIO_RISK=0.02', 'MAX_PORTFOLIO_RISK=0.05')
-    content = content.replace('MAX_POSITION_SIZE=0.08', 'MAX_POSITION_SIZE=0.15')
+    content = content.replace('MAX_POSITION_SIZE=0.08', 'MAX_POSITION_SIZE=0.25')
     content = content.replace('STOP_LOSS_PERCENT=0.05', 'STOP_LOSS_PERCENT=0.08')
     content = content.replace('# Trading Configuration - Conservative stance', '# Trading Configuration - Aggressive stance')
     

@@ -226,9 +226,9 @@ class DailySummaryScheduler:
                 # Use mock data for testing
                 logger.warning("Using mock data for testing")
                 account_data = {
-                    'portfolio_value': 100000.0,
+                    'portfolio_value': 1000.0,
                     'cash_balance': 25000.0,
-                    'total_equity': 100000.0
+                    'total_equity': 1000.0
                 }
                 positions_data = [
                     {

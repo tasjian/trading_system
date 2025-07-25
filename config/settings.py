@@ -27,7 +27,7 @@ class TradingSettings(BaseSettings):
     # Trading Parameters
     trading_mode: str = Field(default="paper", env="TRADING_MODE")
     max_portfolio_risk: float = Field(default=0.05, env="MAX_PORTFOLIO_RISK")
-    max_position_size: float = Field(default=0.04, env="MAX_POSITION_SIZE")  # Reduced to 4% for 25-50 stocks (1/25 = 4%)
+    max_position_size: float = Field(default=0.35, env="MAX_POSITION_SIZE")  # Reduced to 4% for 25-50 stocks (1/25 = 4%)
     min_position_size: float = Field(default=0.01, env="MIN_POSITION_SIZE")  # Minimum 1% position
     stop_loss_percent: float = Field(default=0.08, env="STOP_LOSS_PERCENT")
     rebalance_frequency: int = Field(default=3600, env="REBALANCE_FREQUENCY")
@@ -43,7 +43,7 @@ class TradingSettings(BaseSettings):
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
     max_daily_loss: float = Field(default=0.05, env="MAX_DAILY_LOSS")  # 5% daily loss limit
-    min_cash_reserve: float = Field(default=0.1, env="MIN_CASH_RESERVE")  # 10% cash reserve
+    min_cash_reserve: float = Field(default=0.02, env="MIN_CASH_RESERVE")  # 10% cash reserve
     
     # Logging
     log_level: str = Field(default="INFO", env="LOG_LEVEL")

@@ -200,7 +200,7 @@ class TradingSystemApp:
             
             # Check 2: Excessive daily loss
             equity = account_info["equity"]
-            initial_equity = 100000  # Assume initial value - should be stored properly
+            initial_equity = 1000  # Assume initial value - should be stored properly
             
             if initial_equity > 0:
                 daily_loss = (initial_equity - equity) / initial_equity

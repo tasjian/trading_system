@@ -1,11 +1,11 @@
 # LLM-Enhanced Trading System - Production Requirements
 
-# Core LangChain and LangGraph
-langchain==0.2.16
-langchain-core==0.2.41
-langchain-community==0.2.17
-langgraph==0.2.32
-langchain-openai==0.1.25
+# Core LangChain and LangGraph (compatible versions)
+langchain>=0.2.0,<0.3.0
+langchain-core>=0.2.0,<0.3.0
+langchain-community>=0.2.0,<0.3.0
+langgraph>=0.2.0,<0.3.0
+langchain-openai>=0.1.0,<0.2.0
 
 # Alpaca Trading API
 alpaca-trade-api==3.1.1
@@ -23,8 +23,8 @@ scikit-learn==1.3.2
 # Web Framework for Production
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.2
-pydantic-settings==2.1.0
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.0.0,<3.0.0
 
 # Environment and Configuration
 python-dotenv==1.0.0
@@ -60,3 +60,5 @@ playwright-stealth==1.0.6  # Advanced anti-bot detection
 # Additional utilities for sentiment analysis
 python-dateutil==2.8.2
 pytz==2023.3  # Timezone handling for market hours
+beautifulsoup4==4.12.2  # HTML parsing for earnings transcripts
+lxml==4.9.3  # XML/HTML parsing backend

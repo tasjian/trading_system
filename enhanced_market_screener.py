@@ -33,29 +33,33 @@ class EnhancedMarketScreener:
     def __init__(self):
         """Initialize enhanced screener with comprehensive industry coverage."""
         
+        # Price limit for better diversification with smaller portfolios
+        self.max_stock_price = 100.0
+        
         # Comprehensive stock universe organized by industry sectors
+        # Prioritizing lower-priced stocks (<$100) for better diversification
         self.industry_universe = {
             'defense_aerospace': {
                 'description': 'Defense contractors and aerospace companies',
                 'stocks': [
-                    'LMT', 'RTX', 'NOC', 'GD', 'LHX', 'HII', 'TXT', 'HON',
-                    'BA', 'LDOS', 'KTOS', 'AJRD', 'WWD', 'TDG', 'CW', 'HEI'
+                    'RTX', 'LHX', 'HII', 'TXT', 'LDOS', 'KTOS', 'AJRD', 'WWD', 
+                    'CW', 'HEI', 'LMT', 'NOC', 'GD', 'HON', 'BA', 'TDG'
                 ]
             },
             'healthcare_pharma': {
                 'description': 'Healthcare services, pharmaceuticals, and medical devices',
                 'stocks': [
-                    'UNH', 'JNJ', 'PFE', 'ABBV', 'TMO', 'DHR', 'BMY', 'MDT',
-                    'AMGN', 'GILD', 'CVS', 'CI', 'HUM', 'REGN', 'VRTX', 'ISRG',
-                    'ZBH', 'SYK', 'BSX', 'EW', 'HOLX', 'DXCM', 'ILMN', 'IQV'
+                    'PFE', 'BMY', 'GILD', 'CVS', 'JNJ', 'MDT', 'ABBV', 'CI', 
+                    'BSX', 'EW', 'ZBH', 'UNH', 'TMO', 'DHR', 'AMGN', 'HUM', 
+                    'REGN', 'VRTX', 'ISRG', 'SYK', 'HOLX', 'DXCM', 'ILMN', 'IQV'
                 ]
             },
             'financial_banking': {
-                'description': 'Banks, insurance, and financial services',
+                'description': 'Banks, insurance, and financial services',  
                 'stocks': [
-                    'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'AXP', 'USB',
-                    'PNC', 'TFC', 'COF', 'SCHW', 'BK', 'STT', 'BLK', 'SPGI',
-                    'ICE', 'CME', 'MCO', 'AON', 'MMC', 'AJG', 'BRO', 'CB'
+                    'BAC', 'WFC', 'C', 'USB', 'PNC', 'TFC', 'COF', 'SCHW',
+                    'BK', 'STT', 'AJG', 'BRO', 'CB', 'JPM', 'GS', 'MS', 
+                    'AXP', 'BLK', 'SPGI', 'ICE', 'CME', 'MCO', 'AON', 'MMC'
                 ]
             },
             'consumer_retail': {
@@ -169,9 +173,10 @@ class EnhancedMarketScreener:
         return self.industry_universe.get(industry, {}).get('description', 'Unknown Industry')
     
     def get_diversified_stock_selection(self, target_size: int) -> Dict[str, List[str]]:
-        """Select stocks for true cross-industry diversification."""
+        """Select stocks for true cross-industry diversification with price filtering."""
         
         logger.info(f"Selecting {target_size} stocks across industries for maximum diversification")
+        logger.info(f"Prioritizing stocks under ${self.max_stock_price} for better diversification")
         
         selection = {}
         total_selected = 0
@@ -184,10 +189,10 @@ class EnhancedMarketScreener:
                 min(allocation.max_stocks, int(target_size * allocation.target_percentage))
             )
             
-            # Get available stocks from this industry
+            # Get available stocks from this industry (prioritizes lower-priced stocks)
             available_stocks = self.industry_universe[industry]['stocks']
             
-            # Select stocks (for now, take first N stocks - could be enhanced with scoring)
+            # Select stocks (first N stocks which are already ordered by preference)
             selected_stocks = available_stocks[:target_count]
             
             if selected_stocks:
@@ -236,6 +241,11 @@ class EnhancedMarketScreener:
             if market_data.price <= 0:
                 return None
             current_price = market_data.price
+            
+            # Filter out stocks above price limit for better diversification
+            if current_price > self.max_stock_price:
+                logger.info(f"Filtering out {symbol} - price ${current_price:.2f} exceeds ${self.max_stock_price} limit")
+                return None
             
             # Get historical data for change calculation (fallback to yfinance)
             try:

@@ -917,7 +917,7 @@ class EmailWebhookNotifier:
             price=175.50,
             total_value=1755.00,
             timestamp=datetime.now(),
-            portfolio_value=100000.0,
+            portfolio_value=1000.0,
             confidence=0.85,
             reasoning="Test transaction notification from AI Trading System. This is a sample alert to verify the notification system is working correctly.",
             agent_source="test_system",

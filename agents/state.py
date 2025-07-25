@@ -100,10 +100,10 @@ def create_initial_state(session_id: Optional[str] = None) -> TradingState:
         order_history=[],
         risk_metrics=None,
         risk_limits={
-            "max_position_size": 0.05,  # 5% of portfolio
+            "max_position_size": 0.90,  # 90% of portfolio
             "max_daily_loss": 0.02,     # 2% daily loss limit
             "max_portfolio_risk": 0.01,  # 1% risk per trade
-            "min_cash_reserve": 0.1,     # 10% cash reserve
+            "min_cash_reserve": 0.02,    # 2% cash reserve
             "max_correlation": 0.7,      # Max correlation between positions
             "max_sector_exposure": 0.3   # 30% max per sector
         },

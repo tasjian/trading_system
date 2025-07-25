@@ -24,7 +24,7 @@ class BacktestConfig:
     """Configuration for pairs trading backtest"""
     start_date: str
     end_date: str
-    initial_capital: float = 100000.0
+    initial_capital: float = 1000.0
     commission_per_share: float = 0.005  # $0.005 per share
     market_impact: float = 0.001  # 0.1% market impact
     short_borrow_rate: float = 0.02  # 2% annual short borrow rate

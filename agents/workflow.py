@@ -310,7 +310,7 @@ class TradingWorkflow:
             from agents.llm_portfolio_management import construct_llm_portfolio
             
             # Get portfolio information
-            portfolio_value = state["portfolio"].get("equity", 100000.0)  # Default to 100k if not set
+            portfolio_value = state["portfolio"].get("equity", 1000.0)  # Default to 1k if not set
             risk_profile = state["trading_config"].get("risk_profile", "moderate")
             
             # Get expanded candidate symbols for diversified portfolio
@@ -396,7 +396,7 @@ class TradingWorkflow:
                 
                 analysis_results = market_analysis_factory.get_portfolio_recommendations(
                     symbols=state["watchlist"],
-                    portfolio_value=state["portfolio"].get("equity", 100000.0)
+                    portfolio_value=state["portfolio"].get("equity", 1000.0)
                 )
                 
                 # Basic signal conversion

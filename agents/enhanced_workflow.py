@@ -617,7 +617,7 @@ class EnhancedTradingWorkflow:
             
             # Trigger 4: Large unrealized losses requiring rebalancing
             total_unrealized_pnl = performance_data.get("total_unrealized_pnl", 0)
-            portfolio_value = state.get("portfolio", {}).get("equity", 100000)
+            portfolio_value = state.get("portfolio", {}).get("equity", 1000)
             if total_unrealized_pnl < -0.1 * portfolio_value:  # More than 10% loss
                 logger.info(f"Rebalancing triggered: Large unrealized losses {total_unrealized_pnl:.2f}")
                 return "rebalance"
