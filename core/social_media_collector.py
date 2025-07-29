@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 
-import praw
+import asyncpraw
 import tweepy
 from playwright.async_api import async_playwright
 import aiohttp
@@ -65,7 +65,7 @@ class RedditCollector:
         """Initialize Reddit API connection."""
         try:
             if settings.reddit_client_id and settings.reddit_client_secret:
-                self.reddit = praw.Reddit(
+                self.reddit = asyncpraw.Reddit(
                     client_id=settings.reddit_client_id,
                     client_secret=settings.reddit_client_secret,
                     user_agent=settings.reddit_user_agent,
@@ -91,7 +91,7 @@ class RedditCollector:
             # Search across multiple subreddits
             for subreddit_name in self.subreddits:
                 try:
-                    subreddit = self.reddit.subreddit(subreddit_name)
+                    subreddit = await self.reddit.subreddit(subreddit_name)
                     
                     # Search for symbol mentions
                     search_results = subreddit.search(
@@ -101,7 +101,7 @@ class RedditCollector:
                         limit=limit // len(self.subreddits)
                     )
                     
-                    for submission in search_results:
+                    async for submission in search_results:
                         post_time = datetime.fromtimestamp(submission.created_utc)
                         
                         if post_time < cutoff_time:
@@ -167,6 +167,11 @@ class RedditCollector:
     def _extract_mentions(self, text: str) -> List[str]:
         """Extract stock mentions from text."""
         return re.findall(r'\$([A-Z]{1,5})', text)
+    
+    async def close(self):
+        """Close Reddit connection."""
+        if self.reddit:
+            await self.reddit.close()
 
 
 class TwitterCollector:
@@ -205,8 +210,8 @@ class TwitterCollector:
         posts = []
         
         try:
-            # Search query for the symbol
-            query = f"${symbol} OR #{symbol} -is:retweet lang:en"
+            # Search query for the symbol (updated for Twitter API v2)
+            query = f"({symbol} OR #{symbol}) -is:retweet lang:en"
             end_time = datetime.now() - timedelta(hours=hours_back)
             
             tweets = tweepy.Paginator(
@@ -450,3 +455,7 @@ class SocialMediaCollector:
                 }
         
         return stats
+    
+    async def close(self):
+        """Close all connections."""
+        await self.reddit_collector.close()

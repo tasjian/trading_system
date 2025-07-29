@@ -45,15 +45,18 @@ class SentimentAnalysis(BaseModel):
 class LLMSentimentAnalyzer:
     """LLM-based sentiment analyzer for financial content."""
     
-    def __init__(self, openai_api_key: Optional[str] = None, ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, anthropic_api_key: Optional[str] = None, openai_api_key: Optional[str] = None, ollama_base_url: str = "http://localhost:11434"):
+        self.anthropic_api_key = anthropic_api_key
         self.openai_api_key = openai_api_key
         self.ollama_base_url = ollama_base_url
         self.session: Optional[aiohttp.ClientSession] = None
         
-        # Model preferences (try OpenAI first, fallback to Ollama)
+        # Model preferences (try Anthropic first, then Ollama, then OpenAI)
+        self.use_anthropic = bool(anthropic_api_key)
         self.use_openai = bool(openai_api_key)
+        self.anthropic_model = "claude-3-5-sonnet-20241022"
         self.openai_model = "gpt-4o-mini"  # Use the more available model
-        self.ollama_model = "llama3.1:8b"
+        self.ollama_model = "llama3:8b"  # Match the available model
         
     async def _ensure_session(self):
         """Ensure aiohttp session exists."""
@@ -163,6 +166,59 @@ Respond only with valid JSON."""
             logger.error(f"OpenAI API call failed: {e}")
             return None
     
+    async def _call_anthropic(self, prompt: str) -> Optional[Dict]:
+        """Call Anthropic Claude API for sentiment analysis."""
+        if not self.anthropic_api_key:
+            return None
+            
+        await self._ensure_session()
+        
+        try:
+            headers = {
+                "x-api-key": self.anthropic_api_key,
+                "content-type": "application/json",
+                "anthropic-version": "2023-06-01"
+            }
+            
+            payload = {
+                "model": self.anthropic_model,
+                "max_tokens": 1000,
+                "temperature": 0.3,
+                "system": "You are a financial sentiment analysis expert. Always respond with valid JSON only.",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
+            }
+            
+            async with self.session.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    content = data['content'][0]['text'].strip()
+                    
+                    # Try to parse JSON response
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        # Try to extract JSON from markdown code blocks
+                        if "```json" in content:
+                            json_start = content.find("```json") + 7
+                            json_end = content.find("```", json_start)
+                            json_str = content[json_start:json_end].strip()
+                            return json.loads(json_str)
+                        raise
+                        
+                else:
+                    logger.warning(f"Anthropic API error: {response.status}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Anthropic API call failed: {e}")
+            return None
+    
     async def _call_ollama(self, prompt: str) -> Optional[Dict]:
         """Call Ollama API for sentiment analysis."""
         await self._ensure_session()
@@ -260,14 +316,17 @@ Respond only with valid JSON."""
         
         prompt = self._create_sentiment_prompt(text, context)
         
-        # Try LLM analysis first
+        # Try LLM analysis first (Anthropic -> Ollama -> OpenAI)
         result = None
         
-        if self.use_openai:
-            result = await self._call_openai(prompt)
+        if self.use_anthropic:
+            result = await self._call_anthropic(prompt)
         
         if not result:
             result = await self._call_ollama(prompt)
+        
+        if not result and self.use_openai:
+            result = await self._call_openai(prompt)
         
         if not result:
             logger.warning("LLM analysis failed, using fallback method")

@@ -71,6 +71,7 @@ class SentimentAgent:
     def __init__(self):
         # Initialize components
         self.llm_analyzer = LLMSentimentAnalyzer(
+            anthropic_api_key=settings.anthropic_api_key,
             openai_api_key=settings.openai_api_key,
             ollama_base_url=settings.ollama_base_url
         )

@@ -18,10 +18,11 @@ class TradingSettings(BaseSettings):
     
     # LLM API Configuration
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+    anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     
     # Llama 3.1 Configuration (via Ollama)
     ollama_base_url: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="llama3.1:8b", env="OLLAMA_MODEL")
+    ollama_model: str = Field(default="llama3:8b", env="OLLAMA_MODEL")
     use_llama_fallback: bool = Field(default=True, env="USE_LLAMA_FALLBACK")
     
     # Trading Parameters
@@ -32,6 +33,11 @@ class TradingSettings(BaseSettings):
     stop_loss_percent: float = Field(default=0.08, env="STOP_LOSS_PERCENT")
     rebalance_frequency: int = Field(default=3600, env="REBALANCE_FREQUENCY")
     min_rebalance_threshold: float = Field(default=0.05, env="MIN_REBALANCE_THRESHOLD")
+    
+    # Monitoring Intervals (seconds)
+    balance_check_interval: int = Field(default=30, env="BALANCE_CHECK_INTERVAL")
+    risk_check_interval: int = Field(default=60, env="RISK_CHECK_INTERVAL")  
+    performance_log_interval: int = Field(default=900, env="PERFORMANCE_LOG_INTERVAL")
     
     # Portfolio Diversification
     target_portfolio_size: int = Field(default=35, env="TARGET_PORTFOLIO_SIZE")  # Target 35 stocks

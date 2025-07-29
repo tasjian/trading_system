@@ -137,10 +137,11 @@ class TradingWorkflow:
             
             logger.info("Sentiment Analysis Agent: Analyzing social media sentiment")
             
-            # Get current positions and candidate symbols
+            # Get current positions, candidate symbols, and watchlist
             current_positions = list(state.get("positions", {}).keys())
             candidate_symbols = state.get("candidate_symbols", [])
-            all_symbols = list(set(current_positions + candidate_symbols))
+            watchlist_symbols = state.get("watchlist", [])
+            all_symbols = list(set(current_positions + candidate_symbols + watchlist_symbols))
             
             if not all_symbols:
                 logger.warning("No symbols to analyze for sentiment")
@@ -304,25 +305,39 @@ class TradingWorkflow:
     async def signal_generation_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Generate trading signals using LLM-enhanced multi-agent portfolio construction."""
         try:
-            logger.info("Signal Generation Agent: Performing LLM-enhanced portfolio analysis")
+            logger.info("Signal Generation Agent: Performing portfolio analysis")
             
-            # Import LLM portfolio construction
-            from agents.llm_portfolio_management import construct_llm_portfolio
-            
-            # Get portfolio information
-            portfolio_value = state["portfolio"].get("equity", 1000.0)  # Default to 1k if not set
-            risk_profile = state["trading_config"].get("risk_profile", "moderate")
-            
-            # Get expanded candidate symbols for diversified portfolio
+            # Try LLM portfolio construction first
             try:
-                from simple_market_screener import SimpleMarketScreener
-                screener = SimpleMarketScreener()
-                all_candidate_symbols = screener.get_all_stocks()
-                logger.info(f"Using expanded candidate universe of {len(all_candidate_symbols)} stocks")
-            except Exception as e:
-                logger.warning(f"Failed to get expanded stock universe, using watchlist: {e}")
-                all_candidate_symbols = state["watchlist"]
-            
+                from agents.llm_portfolio_management import construct_llm_portfolio
+                return await self._llm_signal_generation(state, config)
+            except ImportError:
+                logger.info("LLM portfolio management not available, using fallback signal generation")
+                return await self._fallback_signal_generation(state, config)
+        
+        except Exception as e:
+            error_msg = f"Signal Generation Agent error: {e}"
+            logger.error(error_msg)
+            return add_error_to_state(state, error_msg)
+    
+    async def _llm_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """LLM-enhanced signal generation (original method)."""
+        from agents.llm_portfolio_management import construct_llm_portfolio
+        
+        # Get portfolio information
+        portfolio_value = state["portfolio"].get("equity", 1000.0)  # Default to 1k if not set
+        risk_profile = state["trading_config"].get("risk_profile", "moderate")
+        
+        # Get expanded candidate symbols for diversified portfolio
+        try:
+            from simple_market_screener import SimpleMarketScreener
+            screener = SimpleMarketScreener()
+            all_candidate_symbols = screener.get_all_stocks()
+            logger.info(f"Using expanded candidate universe of {len(all_candidate_symbols)} stocks")
+        except Exception as e:
+            logger.warning(f"Failed to get expanded stock universe, using watchlist: {e}")
+            all_candidate_symbols = state["watchlist"]
+        
             # Use LLM-enhanced portfolio construction with expanded universe
             recommendation = await construct_llm_portfolio(
                 candidate_symbols=all_candidate_symbols[:100],  # Limit to top 100 for performance
@@ -423,6 +438,61 @@ class TradingWorkflow:
             except Exception as fallback_error:
                 logger.error(f"Fallback analysis also failed: {fallback_error}")
                 return add_error_to_state(state, f"Both LLM and fallback analysis failed: {error_msg}")
+    
+    async def _fallback_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Simple fallback signal generation using basic market data analysis."""
+        try:
+            logger.info("Using simple fallback signal generation")
+            
+            portfolio_value = state["portfolio"].get("equity", 26100.0)
+            market_symbols = state["market_data"].get("symbols", {})
+            
+            if not market_symbols:
+                logger.warning("No market data available for signal generation")
+                state["signals"] = []
+                state["messages"].append(AIMessage(content="No signals generated - no market data"))
+                state["current_agent"] = "signal_generator"
+                return update_state_timestamp(state)
+            
+            # Generate simple buy signals for available symbols
+            signals = []
+            target_position_value = portfolio_value * 0.20  # 20% positions
+            
+            for symbol, data in list(market_symbols.items())[:3]:  # Limit to 3 positions
+                if data.get('price', 0) > 0:
+                    price = data['price']
+                    quantity = int(target_position_value / price)
+                    
+                    if quantity > 0:
+                        # Create basic trading signal
+                        from agents.state import TradingSignal
+                        signal = TradingSignal(
+                            symbol=symbol,
+                            action="buy",
+                            confidence=0.6,  # Moderate confidence
+                            price_target=price * 1.05,  # 5% upside target
+                            stop_loss=price * 0.95,     # 5% stop loss
+                            quantity=quantity,
+                            reasoning=f"Simple fallback signal: diversified position in {symbol}"
+                        )
+                        signals.append(signal)
+            
+            state["signals"] = signals
+            
+            signal_summary = f"Fallback analysis: {len(signals)} buy signals generated"
+            state["messages"].append(AIMessage(content=signal_summary))
+            
+            logger.info(f"Fallback signal generation: {len(signals)} signals created")
+            for signal in signals:
+                logger.info(f"  - {signal.symbol}: {signal.action} {signal.quantity} shares at ${signal.price_target:.2f}")
+            
+            state["current_agent"] = "signal_generator" 
+            return update_state_timestamp(state)
+            
+        except Exception as e:
+            error_msg = f"Fallback signal generation error: {e}"
+            logger.error(error_msg)
+            return add_error_to_state(state, error_msg)
     
     def _calculate_position_size(self, symbol: str, analysis, optimal_weights: Dict[str, float], 
                                portfolio_value: float) -> Optional[float]:

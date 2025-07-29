@@ -11,6 +11,7 @@ import logging
 import sys
 import os
 from datetime import datetime
+from typing import List, Dict, Any
 
 # Add the current directory to Python path so we can import modules
 current_dir = os.path.dirname(os.path.abspath(__file__))

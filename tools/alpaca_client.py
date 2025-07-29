@@ -123,32 +123,52 @@ class AlpacaClient:
     
     def get_market_data(self, symbol: str, timeframe: str = "1Day", 
                        limit: int = 100) -> pd.DataFrame:
-        """Get historical market data for a symbol."""
+        """Get market data for a symbol (using current quotes for free tier)."""
         try:
-            # Map timeframe string to Alpaca TimeFrame
-            tf_map = {
-                "1Min": TimeFrame.Minute,
-                "5Min": TimeFrame(5, TimeFrame.Minute),
-                "15Min": TimeFrame(15, TimeFrame.Minute),
-                "1Hour": TimeFrame.Hour,
-                "1Day": TimeFrame.Day
-            }
-            
-            timeframe_obj = tf_map.get(timeframe, TimeFrame.Day)
-            end_time = datetime.now()
-            start_time = end_time - timedelta(days=limit)
-            
-            bars = self.api.get_bars(
-                symbol,
-                timeframe_obj,
-                start=start_time.strftime('%Y-%m-%d'),
-                end=end_time.strftime('%Y-%m-%d'),
-                adjustment='raw'
-            )
-            
-            df = bars.df
-            df.reset_index(inplace=True)
-            return df
+            # For free tier - use current quote and yfinance for historical data
+            try:
+                # Try to get latest quote from Alpaca
+                quote = self.api.get_latest_trade(symbol)
+                price = float(quote.price)
+                volume = float(quote.size)
+                
+                # Create a simple dataframe with current data
+                import pandas as pd
+                df = pd.DataFrame({
+                    'timestamp': [datetime.now()],
+                    'open': [price],
+                    'high': [price],
+                    'low': [price], 
+                    'close': [price],
+                    'volume': [volume]
+                })
+                
+                logger.info(f"Got current quote for {symbol}: ${price:.2f}")
+                return df
+                
+            except Exception as quote_error:
+                logger.warning(f"Alpaca quote failed for {symbol}: {quote_error}")
+                
+                # Fallback to yfinance
+                try:
+                    import yfinance as yf
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period='1d', interval='1m')
+                    
+                    if not hist.empty:
+                        # Convert yfinance format to our expected format
+                        df = hist.reset_index()
+                        df.columns = [col.lower() for col in df.columns]
+                        df['timestamp'] = df['datetime'] if 'datetime' in df.columns else df.index
+                        
+                        logger.info(f"Got yfinance data for {symbol}: ${df.iloc[-1]['close']:.2f}")
+                        return df
+                    else:
+                        raise Exception("No yfinance data available")
+                        
+                except Exception as yf_error:
+                    logger.warning(f"YFinance fallback failed for {symbol}: {yf_error}")
+                    raise Exception(f"All market data sources failed for {symbol}")
             
         except Exception as e:
             logger.error(f"Failed to get market data for {symbol}: {e}")

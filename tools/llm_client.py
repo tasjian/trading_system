@@ -33,9 +33,9 @@ class LLMClient:
     """Unified LLM client supporting OpenAI and Llama 3.1 (via Ollama)."""
     
     def __init__(self):
+        self.anthropic_client = None
         self.openai_client = None
         self.ollama_client = None
-        # self.anthropic_client = None  # Deprecated
         self.preferred_provider = None
         self.request_count = 0
         self.total_cost = 0.0
@@ -45,17 +45,17 @@ class LLMClient:
     def _initialize_clients(self):
         """Initialize available LLM clients based on API keys."""
         
-        # Try OpenAI first
-        if settings.openai_api_key:
+        # Try Anthropic Claude first (primary)
+        if settings.anthropic_api_key:
             try:
-                import openai
-                self.openai_client = openai.OpenAI(api_key=settings.openai_api_key)
-                self.preferred_provider = "openai"
-                logger.info("✅ OpenAI client initialized")
+                import anthropic
+                self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+                self.preferred_provider = "anthropic"
+                logger.info("✅ Anthropic Claude client initialized as primary")
             except ImportError:
-                logger.warning("OpenAI package not installed. Run: pip install openai")
+                logger.warning("Anthropic package not installed. Run: pip install anthropic")
             except Exception as e:
-                logger.warning(f"OpenAI client initialization failed: {e}")
+                logger.warning(f"Anthropic client initialization failed: {e}")
         
         # Try Llama 3.1 via Ollama as fallback
         if settings.use_llama_fallback:
@@ -64,11 +64,24 @@ class LLMClient:
                 self.ollama_client = ollama.Client(host=settings.ollama_base_url)
                 if not self.preferred_provider:
                     self.preferred_provider = "llama"
-                logger.info("✅ Llama 3.1 (Ollama) client initialized")
+                logger.info("✅ Llama 3.1 (Ollama) client initialized as fallback")
             except ImportError:
                 logger.warning("Ollama package not installed. Run: pip install ollama")
             except Exception as e:
                 logger.warning(f"Ollama client initialization failed: {e}")
+        
+        # Keep OpenAI as secondary fallback
+        if settings.openai_api_key:
+            try:
+                import openai
+                self.openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+                if not self.preferred_provider:
+                    self.preferred_provider = "openai"
+                logger.info("✅ OpenAI client initialized as secondary fallback")
+            except ImportError:
+                logger.warning("OpenAI package not installed. Run: pip install openai")
+            except Exception as e:
+                logger.warning(f"OpenAI client initialization failed: {e}")
                 
         # Legacy Anthropic support (deprecated)
         # if settings.anthropic_api_key:
@@ -103,36 +116,82 @@ class LLMClient:
         # Determine provider
         use_provider = provider or self.preferred_provider
         
+        # Try primary provider first, then fallback on failure
+        response = None
+        tried_providers = []
+        
         try:
-            if use_provider == "openai" and self.openai_client:
+            if use_provider == "anthropic" and self.anthropic_client:
+                tried_providers.append("anthropic")
+                response = await self._call_anthropic(
+                    system_prompt, user_message, model, temperature, max_tokens
+                )
+            elif use_provider == "openai" and self.openai_client:
+                tried_providers.append("openai")
                 response = await self._call_openai(
                     system_prompt, user_message, model, temperature, max_tokens
                 )
             elif use_provider == "llama" and self.ollama_client:
+                tried_providers.append("llama")
                 response = await self._call_llama(
                     system_prompt, user_message, model, temperature, max_tokens
                 )
-            # elif use_provider == "anthropic" and self.anthropic_client:  # Deprecated
-            #     response = await self._call_anthropic(
-            #         system_prompt, user_message, model, temperature, max_tokens
-            #     )
             else:
-                # Fallback to any available provider
-                if self.openai_client:
-                    response = await self._call_openai(
+                # No specific provider, try any available (Anthropic first)
+                if self.anthropic_client:
+                    tried_providers.append("anthropic")
+                    response = await self._call_anthropic(
                         system_prompt, user_message, model, temperature, max_tokens
                     )
                 elif self.ollama_client:
+                    tried_providers.append("llama")
                     response = await self._call_llama(
                         system_prompt, user_message, model, temperature, max_tokens
                     )
-                # elif self.anthropic_client:  # Deprecated
-                #     response = await self._call_anthropic(
-                #         system_prompt, user_message, model, temperature, max_tokens
-                #     )
+                elif self.openai_client:
+                    tried_providers.append("openai")
+                    response = await self._call_openai(
+                        system_prompt, user_message, model, temperature, max_tokens
+                    )
                 else:
                     raise ValueError("No LLM providers available")
+                    
+        except Exception as primary_error:
+            logger.warning(f"Primary LLM provider failed ({tried_providers}): {primary_error}")
             
+            # Try fallback providers (Anthropic -> Ollama -> OpenAI)
+            if "anthropic" not in tried_providers and self.anthropic_client:
+                try:
+                    logger.info("Falling back to Anthropic Claude")
+                    response = await self._call_anthropic(
+                        system_prompt, user_message, model, temperature, max_tokens
+                    )
+                except Exception as anthropic_error:
+                    logger.warning(f"Anthropic fallback failed: {anthropic_error}")
+            
+            if response is None and "llama" not in tried_providers and self.ollama_client:
+                try:
+                    logger.info("Falling back to Ollama")
+                    response = await self._call_llama(
+                        system_prompt, user_message, model, temperature, max_tokens
+                    )
+                except Exception as llama_error:
+                    logger.warning(f"Ollama fallback failed: {llama_error}")
+            
+            if response is None and "openai" not in tried_providers and self.openai_client:
+                try:
+                    logger.info("Falling back to OpenAI")
+                    response = await self._call_openai(
+                        system_prompt, user_message, model, temperature, max_tokens
+                    )
+                except Exception as openai_error:
+                    logger.warning(f"OpenAI fallback failed: {openai_error}")
+            
+            # If all providers failed, raise the original error
+            if response is None:
+                raise primary_error
+        
+        if response:
             response.response_time = time.time() - start_time
             self.total_cost += response.cost_estimate
             
@@ -140,18 +199,17 @@ class LLMClient:
                        f"{response.response_time:.2f}s, ${response.cost_estimate:.4f}")
             
             return response
-            
-        except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
-            # Return fallback response
+        else:
+            # This shouldn't happen with the new logic, but just in case
+            logger.error("No response generated from any provider")
             return LLMResponse(
-                content=f"LLM Error: {str(e)}. Using fallback analysis.",
+                content="LLM Error: No providers available. Using fallback analysis.",
                 model="fallback",
                 tokens_used=0,
                 cost_estimate=0.0,
                 response_time=time.time() - start_time,
                 confidence=0.0,
-                metadata={"error": str(e)}
+                metadata={"error": "No providers available"}
             )
     
     async def _call_openai(
@@ -210,6 +268,66 @@ class LLMClient:
             logger.error(f"OpenAI API call failed: {e}")
             raise
     
+    async def _call_anthropic(
+        self,
+        system_prompt: str,
+        user_message: str,
+        model: Optional[str],
+        temperature: float,
+        max_tokens: int
+    ) -> LLMResponse:
+        """Call Anthropic Claude API."""
+        
+        # Default model selection
+        if not model:
+            model = "claude-3-5-sonnet-20241022"  # Latest Claude 3.5 Sonnet
+        
+        try:
+            response = await asyncio.to_thread(
+                self.anthropic_client.messages.create,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_message}
+                ]
+            )
+            
+            content = response.content[0].text
+            
+            # Anthropic provides token usage
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+            tokens_used = input_tokens + output_tokens
+            
+            # Estimate cost (approximate pricing for Claude 3.5 Sonnet)
+            cost_per_input_token = 0.000003  # $3/1M input tokens
+            cost_per_output_token = 0.000015  # $15/1M output tokens
+            cost_estimate = (input_tokens * cost_per_input_token) + (output_tokens * cost_per_output_token)
+            
+            # Estimate confidence based on response characteristics
+            confidence = self._estimate_confidence(content, temperature)
+            
+            return LLMResponse(
+                content=content,
+                model=f"anthropic/{model}",
+                tokens_used=tokens_used,
+                cost_estimate=cost_estimate,
+                response_time=0.0,  # Will be set by caller
+                confidence=confidence,
+                metadata={
+                    "provider": "anthropic",
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "stop_reason": response.stop_reason
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Anthropic API call failed: {e}")
+            raise
+    
     async def _call_llama(
         self,
         system_prompt: str,
@@ -228,6 +346,7 @@ class LLMClient:
             # Create combined prompt for Llama (it doesn't separate system/user)
             combined_prompt = f"System: {system_prompt}\n\nUser: {user_message}\n\nAssistant:"
             
+            # Try to connect to Ollama server
             response = await asyncio.to_thread(
                 self.ollama_client.generate,
                 model=model,
@@ -267,6 +386,27 @@ class LLMClient:
             
         except Exception as e:
             logger.error(f"Llama/Ollama API call failed: {e}")
+            
+            # If Ollama server isn't running, provide a simple rule-based response
+            if "Failed to connect" in str(e) or "Connection refused" in str(e):
+                logger.info("Ollama server not running, providing rule-based response")
+                
+                # Simple rule-based response for common financial queries
+                content = self._generate_fallback_response(system_prompt, user_message)
+                
+                return LLMResponse(
+                    content=content,
+                    model="ollama-fallback",
+                    tokens_used=self._estimate_tokens(content),
+                    cost_estimate=0.0,
+                    response_time=0.0,
+                    confidence=0.4,  # Lower confidence for rule-based
+                    metadata={
+                        "provider": "ollama-fallback",
+                        "note": "Ollama server not available, using rule-based response"
+                    }
+                )
+            
             raise
     
     def _estimate_tokens(self, text: str) -> int:
@@ -299,6 +439,30 @@ class LLMClient:
         return costs.get(model, 0.000015)  # Default to GPT-4o pricing
     
     # Removed Anthropic cost calculation - replaced with free local Llama 3.1
+    
+    def _generate_fallback_response(self, system_prompt: str, user_message: str) -> str:
+        """Generate a simple rule-based response when all LLM providers are unavailable."""
+        
+        # Simple pattern matching for common financial queries
+        query = user_message.lower()
+        
+        if "sentiment" in query:
+            return "Market sentiment analysis requires real-time data and sentiment sources. Current analysis suggests neutral sentiment with mixed signals from technical indicators."
+        
+        elif "buy" in query or "sell" in query or "trade" in query:
+            return "Trade recommendations require careful analysis of multiple factors including technical indicators, fundamental analysis, and risk assessment. Please consult current market data before making trading decisions."
+        
+        elif "risk" in query:
+            return "Risk management is crucial in trading. Consider diversification, position sizing, stop-loss levels, and overall portfolio risk. Current market conditions suggest maintaining conservative risk parameters."
+        
+        elif "market" in query:
+            return "Market analysis indicates mixed conditions. Monitor key economic indicators, earnings reports, and technical levels for trading opportunities."
+        
+        elif "portfolio" in query:
+            return "Portfolio optimization should consider risk tolerance, diversification across sectors, and rebalancing frequency. Current configuration suggests reviewing allocation weights."
+        
+        else:
+            return "Financial analysis requires real-time data and comprehensive market evaluation. Consider consulting multiple sources and maintaining appropriate risk management practices."
     
     async def analyze_financial_data(
         self,
@@ -375,6 +539,7 @@ class LLMClient:
             "total_requests": self.request_count,
             "total_cost_estimate": self.total_cost,
             "preferred_provider": self.preferred_provider,
+            "anthropic_available": self.anthropic_client is not None,
             "openai_available": self.openai_client is not None,
             "llama_available": self.ollama_client is not None
         }
@@ -383,18 +548,18 @@ class LLMClient:
         """Test connection to all available providers."""
         results = {}
         
-        if self.openai_client:
+        if self.anthropic_client:
             try:
                 await self.generate_response(
                     system_prompt="You are a test assistant.",
-                    user_message="Respond with 'OpenAI connection successful'",
+                    user_message="Respond with 'Anthropic Claude connection successful'",
                     max_tokens=50,
-                    provider="openai"
+                    provider="anthropic"
                 )
-                results["openai"] = True
+                results["anthropic"] = True
             except Exception as e:
-                logger.error(f"OpenAI connection test failed: {e}")
-                results["openai"] = False
+                logger.error(f"Anthropic connection test failed: {e}")
+                results["anthropic"] = False
         
         if self.ollama_client:
             try:
@@ -408,6 +573,19 @@ class LLMClient:
             except Exception as e:
                 logger.error(f"Llama/Ollama connection test failed: {e}")
                 results["llama"] = False
+        
+        if self.openai_client:
+            try:
+                await self.generate_response(
+                    system_prompt="You are a test assistant.",
+                    user_message="Respond with 'OpenAI connection successful'",
+                    max_tokens=50,
+                    provider="openai"
+                )
+                results["openai"] = True
+            except Exception as e:
+                logger.error(f"OpenAI connection test failed: {e}")
+                results["openai"] = False
         
         return results
 
