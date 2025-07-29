@@ -82,36 +82,24 @@ class LLMPortfolioManager:
         logger.info(f"Constructing LLM portfolio with {len(candidate_symbols)} candidates")
         logger.info(f"Portfolio value: ${portfolio_value:,.2f}, Risk profile: {risk_profile}")
         
-        # Step 1: Prioritize earnings symbols over enhanced screener selection
-        earnings_symbols = []
-        if sentiment_data:
-            # Identify symbols with earnings data - these get HIGHEST priority
-            earnings_symbols = [
-                symbol for symbol, data in sentiment_data.items() 
-                if (hasattr(data, 'has_recent_earnings') and data.has_recent_earnings) 
-                or (isinstance(data, dict) and data.get('has_recent_earnings', False))
-            ]
-            logger.info(f"Found {len(earnings_symbols)} earnings symbols with priority: {earnings_symbols}")
-        
-        # Get diversified stock selection from enhanced screener for remaining positions
-        remaining_positions = max(0, max_positions - len(earnings_symbols))
-        diversified_selection = enhanced_screener.get_diversified_stock_selection(remaining_positions)
+        # Step 1: Get diversified stock selection from enhanced screener
+        diversified_selection = enhanced_screener.get_diversified_stock_selection(max_positions)
         
         # Flatten the selection into a candidate list
         screener_symbols = []
         for industry_stocks in diversified_selection.values():
             screener_symbols.extend(industry_stocks)
         
-        # Combine: earnings symbols first, then screener symbols
-        selected_symbols = earnings_symbols + screener_symbols
+        # Include symbols with sentiment data alongside screener picks for comprehensive analysis
+        all_candidate_symbols = set(screener_symbols)
+        if sentiment_data:
+            # Add any symbols with comprehensive sentiment data to the analysis
+            sentiment_symbols = [s for s in sentiment_data.keys() if s in candidate_symbols]
+            all_candidate_symbols.update(sentiment_symbols)
+            logger.info(f"Including {len(sentiment_symbols)} symbols with sentiment data: {sentiment_symbols}")
         
-        # Limit to available candidates, prioritizing earnings symbols
-        final_candidates = []
-        for symbol in selected_symbols:
-            if symbol in candidate_symbols and symbol not in final_candidates:
-                final_candidates.append(symbol)
-                if len(final_candidates) >= max_positions:
-                    break
+        # Limit to available candidates
+        final_candidates = [s for s in all_candidate_symbols if s in candidate_symbols][:max_positions]
         
         logger.info(f"Selected {len(final_candidates)} candidates for analysis")
         
@@ -247,18 +235,20 @@ class LLMPortfolioManager:
             # Apply risk profile adjustments
             risk_adjustment = self._get_risk_adjustment(risk_profile, sentiment, market_info)
             
-            # CRITICAL: Boost earnings symbols significantly
-            earnings_bonus = 0.0
+            # Calculate comprehensive score including earnings as one factor
+            # Earnings data provides additional confidence and sentiment precision
+            earnings_quality_bonus = 0.0
             if sentiment.has_recent_earnings:
-                earnings_bonus = 0.5  # Major boost for earnings symbols
-                logger.info(f"Applying earnings bonus to {symbol}: +{earnings_bonus}")
+                # Modest bonus for having fresh earnings data (better sentiment accuracy)
+                earnings_quality_bonus = 0.1 * sentiment.confidence  # Up to 0.1 bonus based on confidence
+                logger.debug(f"Earnings data quality bonus for {symbol}: +{earnings_quality_bonus:.3f}")
             
-            # Weighted composite score with earnings bonus
+            # Weighted composite score balancing all data sources
             composite_score = (
                 sentiment_score * self.sentiment_weight +
                 fundamental_score * self.fundamental_weight +
                 technical_score * self.technical_weight
-            ) * risk_adjustment + earnings_bonus
+            ) * risk_adjustment + earnings_quality_bonus
             
             scored_stocks.append((symbol, composite_score))
         

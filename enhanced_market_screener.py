@@ -34,10 +34,11 @@ class EnhancedMarketScreener:
         """Initialize enhanced screener with comprehensive industry coverage."""
         
         # Price limit for better diversification with smaller portfolios
-        self.max_stock_price = 100.0
+        # Increased to allow major stocks for comprehensive sentiment analysis
+        self.max_stock_price = 1000.0
         
         # Comprehensive stock universe organized by industry sectors
-        # Prioritizing lower-priced stocks (<$100) for better diversification
+        # Now includes all major stocks for comprehensive sentiment-driven analysis
         self.industry_universe = {
             'defense_aerospace': {
                 'description': 'Defense contractors and aerospace companies',
@@ -176,7 +177,7 @@ class EnhancedMarketScreener:
         """Select stocks for true cross-industry diversification with price filtering."""
         
         logger.info(f"Selecting {target_size} stocks across industries for maximum diversification")
-        logger.info(f"Prioritizing stocks under ${self.max_stock_price} for better diversification")
+        logger.info(f"Including all stocks under ${self.max_stock_price} for comprehensive analysis")
         
         selection = {}
         total_selected = 0

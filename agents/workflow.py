@@ -427,31 +427,26 @@ class TradingWorkflow:
                     logger.warning(f"Failed to get simple stock universe, using watchlist: {e2}")
                     all_candidate_symbols = state["watchlist"]
         
-            # Prioritize symbols with sentiment data (especially earnings data)
-            prioritized_symbols = []
+            # Create comprehensive candidate universe including ALL symbols with sentiment data
+            comprehensive_candidates = set(all_candidate_symbols)
+            
+            # Include ANY symbol we have sentiment data for (not just earnings symbols)
+            if sentiment_data:
+                sentiment_symbols = [s for s in sentiment_data.keys() if s in state["watchlist"] or s in market_data_symbols]
+                comprehensive_candidates.update(sentiment_symbols)
+                logger.info(f"Added {len(sentiment_symbols)} symbols with sentiment data to candidate universe")
+            
+            # Convert to list for LLM processing
+            final_candidate_list = list(comprehensive_candidates)
+            
+            # Log candidate composition for transparency
+            earnings_count = sum(1 for s in final_candidate_list 
+                               if s in sentiment_data and getattr(sentiment_data[s], 'has_recent_earnings', False))
+            logger.info(f"Final candidate universe: {len(final_candidate_list)} symbols ({earnings_count} with earnings data)")
         
-            # First: symbols with earnings sentiment (highest priority)
-            earnings_symbols = [symbol for symbol, data in sentiment_data.items() 
-                              if (hasattr(data, 'has_recent_earnings') and data.has_recent_earnings) or 
-                                 (isinstance(data, dict) and data.get('has_recent_earnings')) and symbol in all_candidate_symbols]
-            prioritized_symbols.extend(earnings_symbols)
-        
-            # Second: symbols with strong sentiment signals
-            strong_sentiment_symbols = [signal['symbol'] for signal in sentiment_signals 
-                                      if signal['strength'] > 0.5 and signal['symbol'] in all_candidate_symbols
-                                      and signal['symbol'] not in prioritized_symbols]
-            prioritized_symbols.extend(strong_sentiment_symbols)
-        
-            # Third: remaining candidates
-            remaining_symbols = [s for s in all_candidate_symbols 
-                               if s not in prioritized_symbols]
-            prioritized_symbols.extend(remaining_symbols)
-        
-            logger.info(f"Prioritized symbols: {len(earnings_symbols)} with earnings, {len(strong_sentiment_symbols)} with strong sentiment, {len(remaining_symbols)} others")
-        
-            # Use LLM-enhanced portfolio construction with prioritized universe
+            # Use LLM-enhanced portfolio construction with comprehensive universe
             recommendation = await construct_llm_portfolio(
-                candidate_symbols=prioritized_symbols[:100],  # Limit to top 100 for performance
+                candidate_symbols=final_candidate_list[:100],  # Limit to top 100 for performance
                 portfolio_value=portfolio_value,
                 risk_profile=risk_profile,
                 max_positions=settings.target_portfolio_size,
