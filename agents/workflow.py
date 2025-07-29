@@ -131,11 +131,11 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze social media sentiment for active positions and candidate stocks."""
+        """Analyze comprehensive sentiment including earnings, social media, and news for active positions and candidate stocks."""
         try:
             from agents.sentiment_agent import sentiment_agent
             
-            logger.info("Sentiment Analysis Agent: Analyzing social media sentiment")
+            logger.info("Sentiment Analysis Agent: Running comprehensive sentiment analysis (earnings + social + news)")
             
             # Get current positions, candidate symbols, and watchlist
             current_positions = list(state.get("positions", {}).keys())
@@ -149,59 +149,129 @@ class TradingWorkflow:
                 state["current_agent"] = "sentiment_analyzer"
                 return update_state_timestamp(state)
             
-            # Run sentiment analysis cycle
-            sentiment_outputs = await sentiment_agent.run_sentiment_cycle(
-                tickers=all_symbols[:10],  # Limit to avoid rate limits
-                platforms=['reddit']
-            )
-            
-            # Process sentiment outputs
+            # Run comprehensive sentiment analysis for each symbol
             sentiment_data = {}
             sentiment_signals = []
             
-            for output in sentiment_outputs:
-                ticker = output.ticker
-                sentiment_data[ticker] = {
-                    'sentiment': output.overall_sentiment.value,
-                    'confidence': output.confidence,
-                    'volume': output.volume,
-                    'trend_signal': output.trend_signal.value,
-                    'key_insights': output.key_insights,
-                    'timestamp': output.timestamp.isoformat()
-                }
-                
-                # Generate sentiment-based trading signals
-                if output.confidence > 0.6:  # High confidence threshold
-                    if output.overall_sentiment.value in ['positive', 'very_positive']:
-                        if output.trend_signal.value in ['surge_positive', 'volume_spike']:
-                            sentiment_signals.append({
-                                'symbol': ticker,
-                                'signal': 'BUY',
-                                'strength': 0.7 if output.overall_sentiment.value == 'positive' else 0.9,
-                                'reason': f'Positive sentiment surge: {", ".join(output.key_insights[:2])}',
-                                'source': 'social_sentiment'
-                            })
-                    elif output.overall_sentiment.value in ['negative', 'very_negative']:
-                        if output.trend_signal.value in ['surge_negative', 'coordination_detected']:
-                            sentiment_signals.append({
-                                'symbol': ticker,
-                                'signal': 'SELL',
-                                'strength': 0.6 if output.overall_sentiment.value == 'negative' else 0.8,
-                                'reason': f'Negative sentiment surge: {", ".join(output.key_insights[:2])}',
-                                'source': 'social_sentiment'
-                            })
+            logger.info(f"Analyzing sentiment for {len(all_symbols)} symbols: {', '.join(all_symbols[:5])}{'...' if len(all_symbols) > 5 else ''}")
             
-            # Update state with sentiment data
+            for symbol in all_symbols[:10]:  # Limit to avoid overwhelming APIs
+                try:
+                    logger.info(f"Running comprehensive sentiment analysis for {symbol}")
+                    
+                    # Use the comprehensive sentiment analysis that includes earnings
+                    comprehensive_sentiment = await sentiment_agent.analyze_comprehensive_sentiment(symbol)
+                    
+                    if comprehensive_sentiment:
+                        sentiment_data[symbol] = {
+                            'overall_sentiment': comprehensive_sentiment.overall_sentiment,
+                            'overall_score': comprehensive_sentiment.overall_score,
+                            'confidence': comprehensive_sentiment.confidence,
+                            'data_sources_count': comprehensive_sentiment.data_sources_count,
+                            'news_articles_count': comprehensive_sentiment.news_articles_count,
+                            'social_posts_count': comprehensive_sentiment.social_posts_count,
+                            'has_recent_earnings': comprehensive_sentiment.has_recent_earnings,
+                            'key_themes': comprehensive_sentiment.key_themes[:3],  # Top 3 themes
+                            'risk_factors': comprehensive_sentiment.risk_factors[:2],  # Top 2 risks
+                            'opportunities': comprehensive_sentiment.opportunities[:2],  # Top 2 opportunities
+                            'timestamp': comprehensive_sentiment.timestamp.isoformat()
+                        }
+                        
+                        # Log detailed sentiment breakdown
+                        logger.info(f"{symbol} sentiment breakdown:")
+                        logger.info(f"  Overall: {comprehensive_sentiment.overall_sentiment} (score: {comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
+                        logger.info(f"  Sources: {comprehensive_sentiment.data_sources_count} (news: {comprehensive_sentiment.news_articles_count}, social: {comprehensive_sentiment.social_posts_count}, earnings: {'Yes' if comprehensive_sentiment.has_recent_earnings else 'No'})")
+                        logger.info(f"  Key themes: {', '.join(comprehensive_sentiment.key_themes[:3])}")
+                        
+                        # Generate trading signals based on comprehensive sentiment
+                        signal_strength = 0.0
+                        signal_type = None
+                        signal_reason = []
+                        
+                        # Earnings-based signals (highest priority)
+                        if comprehensive_sentiment.has_recent_earnings:
+                            if comprehensive_sentiment.overall_score > 0.4:
+                                signal_strength += 0.5
+                                signal_type = 'BUY'
+                                signal_reason.append('Positive earnings sentiment')
+                            elif comprehensive_sentiment.overall_score < -0.4:
+                                signal_strength += 0.5
+                                signal_type = 'SELL'
+                                signal_reason.append('Negative earnings sentiment')
+                        
+                        # Overall sentiment signals
+                        if comprehensive_sentiment.overall_sentiment in ['very_positive']:
+                            signal_strength += 0.4
+                            signal_type = 'BUY'
+                            signal_reason.append('Very positive overall sentiment')
+                        elif comprehensive_sentiment.overall_sentiment in ['positive']:
+                            signal_strength += 0.2
+                            signal_type = 'BUY'
+                            signal_reason.append('Positive overall sentiment')
+                        elif comprehensive_sentiment.overall_sentiment in ['very_negative']:
+                            signal_strength += 0.4
+                            signal_type = 'SELL'
+                            signal_reason.append('Very negative overall sentiment')
+                        elif comprehensive_sentiment.overall_sentiment in ['negative']:
+                            signal_strength += 0.2
+                            signal_type = 'SELL'
+                            signal_reason.append('Negative overall sentiment')
+                        
+                        # Confidence and data quality boosts
+                        if comprehensive_sentiment.confidence > 0.7:
+                            signal_strength += 0.1
+                            signal_reason.append('High confidence analysis')
+                        
+                        if comprehensive_sentiment.data_sources_count >= 3:
+                            signal_strength += 0.1
+                            signal_reason.append('Multiple data sources')
+                        
+                        # Generate signal if significant
+                        if signal_type and signal_strength > 0.3:
+                            sentiment_signals.append({
+                                'symbol': symbol,
+                                'signal': signal_type,
+                                'strength': min(signal_strength, 1.0),
+                                'reason': ', '.join(signal_reason),
+                                'source': 'comprehensive_sentiment',
+                                'has_earnings': comprehensive_sentiment.has_recent_earnings,
+                                'sentiment_score': comprehensive_sentiment.overall_score
+                            })
+                            
+                            logger.info(f"Generated {signal_type} signal for {symbol} (strength: {signal_strength:.2f}): {', '.join(signal_reason)}")
+                    
+                    else:
+                        logger.warning(f"No comprehensive sentiment data for {symbol}")
+                    
+                    # Rate limiting between symbols
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"Error analyzing sentiment for {symbol}: {e}")
+                    continue
+            
+            # Update state with comprehensive sentiment data
             state["sentiment_data"] = sentiment_data
             state["sentiment_signals"] = sentiment_signals
             
-            # Add to existing signals
+            # Add sentiment signals to existing trading signals
             existing_signals = state.get("trading_signals", [])
             existing_signals.extend(sentiment_signals)
             state["trading_signals"] = existing_signals
             
-            logger.info(f"Sentiment analysis complete: {len(sentiment_outputs)} tickers analyzed, "
+            logger.info(f"Comprehensive sentiment analysis complete: {len(sentiment_data)} symbols analyzed, "
                        f"{len(sentiment_signals)} sentiment signals generated")
+            
+            # Log summary of signals
+            if sentiment_signals:
+                buy_signals = [s for s in sentiment_signals if s['signal'] == 'BUY']
+                sell_signals = [s for s in sentiment_signals if s['signal'] == 'SELL']
+                earnings_signals = [s for s in sentiment_signals if s.get('has_earnings')]
+                
+                logger.info(f"Signal summary: {len(buy_signals)} BUY, {len(sell_signals)} SELL, {len(earnings_signals)} with earnings data")
+                
+                for signal in sentiment_signals:
+                    logger.info(f"  {signal['signal']} {signal['symbol']} (strength: {signal['strength']:.2f}{'*' if signal.get('has_earnings') else ''}): {signal['reason']}")
             
             state["current_agent"] = "sentiment_analyzer"
             return update_state_timestamp(state)
@@ -321,50 +391,92 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def _llm_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """LLM-enhanced signal generation (original method)."""
-        from agents.llm_portfolio_management import construct_llm_portfolio
-        
-        # Get portfolio information
-        portfolio_value = state["portfolio"].get("equity", 1000.0)  # Default to 1k if not set
-        risk_profile = state["trading_config"].get("risk_profile", "moderate")
-        
-        # Get expanded candidate symbols for diversified portfolio
+        """LLM-enhanced signal generation with sentiment integration."""
         try:
-            from simple_market_screener import SimpleMarketScreener
-            screener = SimpleMarketScreener()
-            all_candidate_symbols = screener.get_all_stocks()
-            logger.info(f"Using expanded candidate universe of {len(all_candidate_symbols)} stocks")
-        except Exception as e:
-            logger.warning(f"Failed to get expanded stock universe, using watchlist: {e}")
-            all_candidate_symbols = state["watchlist"]
+            from agents.llm_portfolio_management import construct_llm_portfolio
+            
+            logger.info("LLM Signal Generation: Integrating sentiment analysis with portfolio construction")
         
-            # Use LLM-enhanced portfolio construction with expanded universe
+            # Get portfolio information
+            portfolio_value = state["portfolio"].get("equity", 1000.0)  # Default to 1k if not set
+            risk_profile = state["trading_config"].get("risk_profile", "moderate")
+        
+            # Get sentiment data from previous analysis
+            sentiment_data = state.get("sentiment_data", {})
+            sentiment_signals = state.get("sentiment_signals", [])
+        
+            logger.info(f"Integrating sentiment data for {len(sentiment_data)} symbols")
+            if sentiment_signals:
+                earnings_signals = [s for s in sentiment_signals if s.get('has_earnings')]
+                logger.info(f"Found {len(sentiment_signals)} sentiment signals ({len(earnings_signals)} with earnings data)")
+        
+            # Get expanded candidate symbols for diversified portfolio
+            try:
+                from enhanced_market_screener import EnhancedMarketScreener
+                screener = EnhancedMarketScreener()
+                all_candidate_symbols = screener.get_all_stocks()
+                logger.info(f"Using enhanced candidate universe of {len(all_candidate_symbols)} stocks")
+            except Exception as e:
+                logger.warning(f"Failed to get enhanced stock universe: {e}")
+                try:
+                    from simple_market_screener import SimpleMarketScreener
+                    screener = SimpleMarketScreener()
+                    all_candidate_symbols = screener.get_all_stocks()
+                    logger.info(f"Using simple candidate universe of {len(all_candidate_symbols)} stocks")
+                except Exception as e2:
+                    logger.warning(f"Failed to get simple stock universe, using watchlist: {e2}")
+                    all_candidate_symbols = state["watchlist"]
+        
+            # Prioritize symbols with sentiment data (especially earnings data)
+            prioritized_symbols = []
+        
+            # First: symbols with earnings sentiment (highest priority)
+            earnings_symbols = [symbol for symbol, data in sentiment_data.items() 
+                              if (hasattr(data, 'has_recent_earnings') and data.has_recent_earnings) or 
+                                 (isinstance(data, dict) and data.get('has_recent_earnings')) and symbol in all_candidate_symbols]
+            prioritized_symbols.extend(earnings_symbols)
+        
+            # Second: symbols with strong sentiment signals
+            strong_sentiment_symbols = [signal['symbol'] for signal in sentiment_signals 
+                                      if signal['strength'] > 0.5 and signal['symbol'] in all_candidate_symbols
+                                      and signal['symbol'] not in prioritized_symbols]
+            prioritized_symbols.extend(strong_sentiment_symbols)
+        
+            # Third: remaining candidates
+            remaining_symbols = [s for s in all_candidate_symbols 
+                               if s not in prioritized_symbols]
+            prioritized_symbols.extend(remaining_symbols)
+        
+            logger.info(f"Prioritized symbols: {len(earnings_symbols)} with earnings, {len(strong_sentiment_symbols)} with strong sentiment, {len(remaining_symbols)} others")
+        
+            # Use LLM-enhanced portfolio construction with prioritized universe
             recommendation = await construct_llm_portfolio(
-                candidate_symbols=all_candidate_symbols[:100],  # Limit to top 100 for performance
+                candidate_symbols=prioritized_symbols[:100],  # Limit to top 100 for performance
                 portfolio_value=portfolio_value,
                 risk_profile=risk_profile,
-                max_positions=settings.target_portfolio_size
+                max_positions=settings.target_portfolio_size,
+                sentiment_data=sentiment_data  # Pass sentiment data to portfolio construction
             )
-            
+        
             # Update market regime in state
             state["market_conditions"] = recommendation.market_regime
-            
+        
             # Convert portfolio recommendation to trading signals
             signals = []
             for allocation in recommendation.allocations:
                 if allocation.target_weight > 0.01:  # Only meaningful allocations
                     # Import here to avoid circular imports
                     from agents.state import TradingSignal
-                    
+                
                     # Calculate quantity based on target weight
                     target_value = portfolio_value * allocation.target_weight
-                    
+                
                     # Get current price from market data
                     symbol_data = state["market_data"]["symbols"].get(allocation.symbol)
                     if symbol_data:
                         current_price = symbol_data["price"]
                         quantity = target_value / current_price
-                        
+                    
                         signal = TradingSignal(
                             symbol=allocation.symbol,
                             action=allocation.recommended_action,
@@ -375,16 +487,16 @@ class TradingWorkflow:
                             reasoning=f"LLM Portfolio Construction: {allocation.reasoning}"
                         )
                         signals.append(signal)
-            
+        
             # Add signals to state
             state["signals"].extend(signals)
-            
+        
             # Create comprehensive summary
             signal_summary = f"LLM Portfolio Analysis: {len(signals)} signals generated"
             signal_summary += f" | Market Regime: {recommendation.market_regime.value}"
             signal_summary += f" | Expected Return: {recommendation.expected_return:.1%}"
             signal_summary += f" | Confidence: {recommendation.confidence:.1%}"
-            
+        
             # Log detailed analysis results
             logger.info(f"LLM Portfolio Construction Results:")
             logger.info(f"  - Market Regime: {recommendation.market_regime.value}")
@@ -392,15 +504,15 @@ class TradingWorkflow:
             logger.info(f"  - Portfolio Confidence: {recommendation.confidence:.1%}")
             logger.info(f"  - Cash Allocation: {recommendation.cash_allocation:.1%}")
             logger.info(f"  - Signals Generated: {len(signals)}")
-            
+        
             for signal in signals:
                 logger.info(f"  - {signal.symbol}: {signal.action} ({signal.confidence:.2f} confidence, "
                           f"${signal.quantity * signal.price_target:.0f} value)")
-            
+        
             state["messages"].append(AIMessage(content=signal_summary))
             state["current_agent"] = "signal_generator"
             return update_state_timestamp(state)
-            
+        
         except Exception as e:
             error_msg = f"LLM Signal Generation Agent error: {e}"
             logger.error(error_msg)
@@ -589,18 +701,20 @@ class TradingWorkflow:
                     max_new_positions = min(len(active_signals), 5)  # Limit new positions
                     
                     for signal in active_signals[:max_new_positions]:
-                        # Calculate position size based on diversified approach
-                        if portfolio_value > 0:
-                            # Use smaller position sizes for better diversification
-                            target_weight = min(settings.max_position_size, 1.0 / settings.target_portfolio_size * 2)
-                            max_trade_value = portfolio_value * target_weight
+                        # Calculate position size based on available cash and diversification
+                        available_cash = state["portfolio"].get("cash", 0)
+                        if available_cash > 1000:  # Need at least $1000 to trade
+                            # Use conservative position sizes based on available cash
+                            num_positions = len(active_signals[:max_new_positions])
+                            cash_per_position = available_cash / max(num_positions, 1) * 0.9  # 90% of available cash divided equally
                             
                             # Estimate shares based on current price
                             symbol_data = state["market_data"]["symbols"].get(signal.symbol)
                             if symbol_data:
                                 current_price = symbol_data["price"]
-                                suggested_qty = max_trade_value / current_price
+                                suggested_qty = cash_per_position / current_price
                                 signal.quantity = max(1, int(suggested_qty))  # At least 1 share
+                                logger.info(f"Position sizing: {signal.symbol} = ${cash_per_position:.0f} / ${current_price:.2f} = {signal.quantity} shares")
                                 optimized_signals.append(signal)
                                 
             except Exception as diversified_error:
@@ -611,16 +725,18 @@ class TradingWorkflow:
                 max_signals = min(len(active_signals), 8)  # Increased from 3 to 8
                 
                 for signal in active_signals[:max_signals]:
-                    if portfolio_value > 0:
-                        # Use smaller position sizes for better diversification
-                        diversified_max_position = settings.max_position_size
-                        max_trade_value = portfolio_value * diversified_max_position
+                    # Use available cash instead of total portfolio value
+                    available_cash = state["portfolio"].get("cash", 0)
+                    if available_cash > 1000:
+                        # Conservative position sizing with available cash
+                        cash_per_position = available_cash / max(max_signals, 1) * 0.8  # 80% of cash divided equally
                         
                         symbol_data = state["market_data"]["symbols"].get(signal.symbol)
                         if symbol_data:
                             current_price = symbol_data["price"]
-                            suggested_qty = max_trade_value / current_price
+                            suggested_qty = cash_per_position / current_price
                             signal.quantity = max(1, int(suggested_qty))
+                            logger.info(f"Fallback sizing: {signal.symbol} = ${cash_per_position:.0f} / ${current_price:.2f} = {signal.quantity} shares")
                             optimized_signals.append(signal)
             
             # Update state with optimized signals
@@ -683,6 +799,7 @@ class TradingWorkflow:
             
             # Update state with executed orders
             state["order_history"].extend(executed_orders)
+            state["executed_orders"] = executed_orders  # For immediate testing access
             
             order_summary = f"Executed {len(executed_orders)} orders"
             state["messages"].append(AIMessage(content=order_summary))
@@ -864,26 +981,41 @@ class TradingWorkflow:
                 else:
                     limit_price = current_price * 0.998  # 0.2% below market
                 
-                return alpaca_client.place_order(
-                    symbol=signal.symbol,
-                    qty=signal.quantity,
-                    side=signal.action,
-                    order_type="limit",
-                    limit_price=limit_price,
-                    time_in_force="day"
-                )
+                # Round limit price to valid Alpaca increment (whole cents)
+                limit_price = round(limit_price, 2)
+                
+                # For fractional orders, use market order with DAY time in force
+                is_fractional = signal.quantity != int(signal.quantity)
+                if is_fractional:
+                    logger.info(f"Using market order for fractional quantity {signal.quantity} {signal.symbol}")
+                    return alpaca_client.place_order(
+                        symbol=signal.symbol,
+                        qty=signal.quantity,
+                        side=signal.action,
+                        order_type="market",
+                        time_in_force="day"
+                    )
+                else:
+                    return alpaca_client.place_order(
+                        symbol=signal.symbol,
+                        qty=signal.quantity,
+                        side=signal.action,
+                        order_type="limit",
+                        limit_price=limit_price,
+                        time_in_force="day"
+                    )
             
             elif signal.confidence > 0.6 and signal.stop_loss > 0 and current_price:
                 # Medium confidence with stop loss - use advanced order manager
                 from order_types.advanced_orders import advanced_order_manager, AdvancedOrderRequest
                 
-                # Calculate stop loss and take profit prices
+                # Calculate stop loss and take profit prices (rounded to cents)
                 if signal.action == "buy":
-                    stop_loss_price = current_price * (1 - signal.stop_loss) if signal.stop_loss > 0 else None
-                    take_profit_price = current_price * (1 + signal.price_target) if signal.price_target > 0 else None
+                    stop_loss_price = round(current_price * (1 - signal.stop_loss), 2) if signal.stop_loss > 0 else None
+                    take_profit_price = round(current_price * (1 + signal.price_target), 2) if signal.price_target > 0 else None
                 else:
-                    stop_loss_price = current_price * (1 + signal.stop_loss) if signal.stop_loss > 0 else None
-                    take_profit_price = current_price * (1 - signal.price_target) if signal.price_target > 0 else None
+                    stop_loss_price = round(current_price * (1 + signal.stop_loss), 2) if signal.stop_loss > 0 else None
+                    take_profit_price = round(current_price * (1 - signal.price_target), 2) if signal.price_target > 0 else None
                 
                 order_request = AdvancedOrderRequest(
                     symbol=signal.symbol,

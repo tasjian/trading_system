@@ -88,7 +88,7 @@ class RedditCollector:
         cutoff_time = datetime.now() - timedelta(hours=hours_back)
         
         try:
-            # Search across multiple subreddits
+            # Search across multiple subreddits with rate limit awareness
             for subreddit_name in self.subreddits:
                 try:
                     subreddit = await self.reddit.subreddit(subreddit_name)
@@ -132,7 +132,14 @@ class RedditCollector:
                         posts.append(post)
                         
                 except Exception as e:
-                    logger.warning(f"Error collecting from r/{subreddit_name}: {e}")
+                    # Handle rate limits and API errors gracefully per subreddit
+                    error_msg = str(e).lower()
+                    if "429" in error_msg or "rate limit" in error_msg or "too many requests" in error_msg:
+                        logger.warning(f"Reddit rate limit for r/{subreddit_name} - skipping subreddit")
+                    elif "timeout" in error_msg:
+                        logger.warning(f"Reddit timeout for r/{subreddit_name} - skipping subreddit")
+                    else:
+                        logger.warning(f"Reddit error for r/{subreddit_name}: {type(e).__name__} - skipping subreddit")
                     continue
             
             # Sort by timestamp descending
@@ -140,7 +147,14 @@ class RedditCollector:
             return posts[:limit]
             
         except Exception as e:
-            logger.error(f"Error collecting Reddit posts for {symbol}: {e}")
+            # Handle overall Reddit API failures
+            error_msg = str(e).lower()
+            if "429" in error_msg or "rate limit" in error_msg or "too many requests" in error_msg:
+                logger.warning(f"Reddit rate limit exceeded for {symbol} - returning empty result")
+            elif "timeout" in error_msg:
+                logger.warning(f"Reddit timeout for {symbol} - returning empty result")
+            else:
+                logger.warning(f"Reddit collection failed for {symbol}: {type(e).__name__} - returning empty result")
             return []
     
     def _mentions_symbol(self, text: str, symbol: str) -> bool:
@@ -185,16 +199,17 @@ class TwitterCollector:
         """Initialize Twitter API connection."""
         try:
             if settings.twitter_bearer_token:
+                # DO NOT wait on rate limits - fail fast instead
                 self.client = tweepy.Client(
                     bearer_token=settings.twitter_bearer_token,
-                    wait_on_rate_limit=True
+                    wait_on_rate_limit=False
                 )
-                logger.info("Twitter API initialized successfully")
+                logger.info("Twitter API initialized successfully (no rate limit blocking)")
             elif settings.twitter_api_key and settings.twitter_api_secret:
                 # Use API v1.1 if bearer token not available
                 auth = tweepy.OAuth2BearerHandler(settings.twitter_bearer_token)
-                self.client = tweepy.Client(auth=auth, wait_on_rate_limit=True)
-                logger.info("Twitter API initialized with OAuth")
+                self.client = tweepy.Client(auth=auth, wait_on_rate_limit=False)
+                logger.info("Twitter API initialized with OAuth (no rate limit blocking)")
             else:
                 logger.warning("Twitter API credentials not configured")
         except Exception as e:
@@ -250,8 +265,21 @@ class TwitterCollector:
             
             return sorted(posts, key=lambda x: x.timestamp, reverse=True)
             
+        except tweepy.TooManyRequests:
+            logger.warning(f"Twitter rate limit exceeded for {symbol} - returning empty result (no blocking)")
+            return []
+        except tweepy.Forbidden:
+            logger.warning(f"Twitter access forbidden for {symbol} - returning empty result")
+            return []
+        except tweepy.Unauthorized:
+            logger.warning(f"Twitter unauthorized for {symbol} - check API credentials")
+            return []
         except Exception as e:
-            logger.error(f"Error collecting Twitter posts for {symbol}: {e}")
+            # Check if it's a rate limit related error
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                logger.warning(f"Twitter rate limit detected for {symbol} - returning empty result")
+            else:
+                logger.warning(f"Twitter collection failed for {symbol}: {type(e).__name__} - returning empty result")
             return []
 
 
@@ -368,25 +396,36 @@ class SocialMediaCollector:
         
         results = {}
         
-        # Collect from all platforms concurrently
+        # Collect from all platforms concurrently with timeouts
         tasks = [
-            self._collect_reddit(symbol, limit_per_platform),
-            self._collect_twitter(symbol, limit_per_platform),
-            self._collect_tiktok(symbol, min(limit_per_platform, 20))  # TikTok is slower
+            asyncio.wait_for(self._collect_reddit(symbol, limit_per_platform), timeout=30.0),
+            asyncio.wait_for(self._collect_twitter(symbol, limit_per_platform), timeout=30.0),
+            asyncio.wait_for(self._collect_tiktok(symbol, min(limit_per_platform, 20)), timeout=60.0)  # TikTok needs more time
         ]
         
         platform_results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Process results
+        # Process results with better error handling
         platform_names = ['reddit', 'twitter', 'tiktok']
+        successful_platforms = []
+        
         for i, result in enumerate(platform_results):
             platform_name = platform_names[i]
             if isinstance(result, Exception):
-                logger.error(f"Error collecting from {platform_name}: {result}")
+                if isinstance(result, asyncio.TimeoutError):
+                    logger.warning(f"{platform_name.title()} data collection timed out - continuing without {platform_name} data")
+                elif "Rate limit" in str(result) or "429" in str(result):
+                    logger.warning(f"{platform_name.title()} rate limit reached - continuing without {platform_name} data")
+                else:
+                    logger.warning(f"Error collecting from {platform_name}: {type(result).__name__} - continuing without {platform_name} data")
                 results[platform_name] = []
             else:
                 results[platform_name] = result or []
-                logger.info(f"Collected {len(results[platform_name])} posts from {platform_name}")
+                if results[platform_name]:
+                    successful_platforms.append(platform_name)
+                    logger.info(f"✅ Collected {len(results[platform_name])} posts from {platform_name}")
+        
+        logger.info(f"Social media collection complete for {symbol}: {len(successful_platforms)}/3 platforms successful")
         
         # Cache results
         self.cache[cache_key] = (results, datetime.now())

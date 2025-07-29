@@ -360,33 +360,101 @@ Respond only with valid JSON."""
         
         return await asyncio.gather(*tasks, return_exceptions=True)
     
-    async def analyze_earnings_transcript(self, transcript: EarningsTranscript) -> Dict[str, SentimentAnalysis]:
-        """Analyze sentiment of earnings call transcript sections."""
+    async def analyze_earnings_transcript(self, transcript) -> Dict[str, SentimentAnalysis]:
+        """Analyze sentiment of earnings call transcript sections with enhanced prompts."""
         results = {}
         
-        # Analyze management presentation
-        if transcript.management_section:
-            results['management'] = await self.analyze_text(
-                transcript.management_section, 
-                "earnings_call"
-            )
-        
-        # Analyze Q&A section
-        if transcript.qa_section:
-            results['qa'] = await self.analyze_text(
-                transcript.qa_section,
-                "earnings_call"
-            )
-        
-        # Overall sentiment (first 3000 chars of full transcript)
-        if transcript.full_text:
-            summary_text = transcript.full_text[:3000]
-            results['overall'] = await self.analyze_text(
-                summary_text,
-                "earnings_call"
-            )
-        
-        return results
+        try:
+            # Overall earnings sentiment analysis
+            if transcript.full_text and len(transcript.full_text) > 500:
+                overall_prompt = f"""
+                Analyze the overall sentiment of this earnings call transcript for {transcript.symbol}:
+                
+                Company: {transcript.company_name}
+                Quarter: {transcript.quarter} {transcript.year}
+                Date: {transcript.date.strftime('%Y-%m-%d') if hasattr(transcript, 'date') else 'Recent'}
+                
+                Transcript Content (first 4000 characters):
+                {transcript.full_text[:4000]}
+                
+                Provide comprehensive analysis focusing on:
+                - Overall business performance vs expectations
+                - Management confidence and forward guidance
+                - Key financial metrics and growth trends
+                - Market position and competitive outlook
+                - Risk factors and operational challenges
+                - Investment attractiveness and stock implications
+                
+                Consider both the content and tone of management communications.
+                """
+                
+                results['overall'] = await self.analyze_text(overall_prompt, "earnings_call")
+            
+            # Management presentation analysis
+            if transcript.management_section and len(transcript.management_section) > 200:
+                mgmt_prompt = f"""
+                Analyze the management presentation section of {transcript.symbol}'s earnings call:
+                
+                Management Presentation:
+                {transcript.management_section[:3500]}
+                
+                Focus on:
+                - Management tone and confidence level
+                - Business performance highlights
+                - Strategic initiatives and execution
+                - Forward guidance and outlook
+                - Key operational metrics discussed
+                - Management's view on market conditions
+                
+                Assess the sentiment implications for stock performance.
+                """
+                
+                results['management'] = await self.analyze_text(mgmt_prompt, "earnings_call")
+            
+            # Q&A section analysis
+            if transcript.qa_section and len(transcript.qa_section) > 200:
+                qa_prompt = f"""
+                Analyze the Q&A section of {transcript.symbol}'s earnings call:
+                
+                Q&A Discussion:
+                {transcript.qa_section[:3500]}
+                
+                Focus on:
+                - Types of questions being asked by analysts
+                - Management responsiveness and transparency
+                - Areas of analyst concern or skepticism
+                - Confidence in addressing future challenges
+                - Clarity and specificity of answers
+                - Any defensive or evasive responses
+                
+                Determine overall investor sentiment based on the Q&A dynamics.
+                """
+                
+                results['qa'] = await self.analyze_text(qa_prompt, "earnings_call")
+            
+            # Key metrics analysis if available
+            if hasattr(transcript, 'key_metrics') and transcript.key_metrics:
+                metrics_text = ". ".join([f"{k}: {v}" for k, v in transcript.key_metrics.items()])
+                metrics_prompt = f"""
+                Analyze the sentiment implications of these key financial metrics from {transcript.symbol}'s earnings:
+                
+                Key Financial Metrics: {metrics_text}
+                
+                Evaluate:
+                - Performance vs historical trends
+                - Likely market reaction to these numbers
+                - Strength of financial position
+                - Growth trajectory implications
+                """
+                
+                results['metrics'] = await self.analyze_text(metrics_prompt, "earnings_call")
+            
+            logger.info(f"Completed earnings transcript analysis for {transcript.symbol}: {len(results)} sections analyzed")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in earnings transcript analysis: {e}")
+            return {}
     
     def aggregate_sentiment_scores(self, analyses: List[SentimentAnalysis]) -> float:
         """Aggregate multiple sentiment analyses into a single score."""

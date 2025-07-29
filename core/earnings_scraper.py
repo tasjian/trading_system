@@ -70,53 +70,72 @@ class EarningsCallScraper:
         await self._rate_limit()
         
         try:
-            # Search for the company's transcripts
-            search_query = f"{symbol} earnings call transcript"
-            search_params = {
-                'q': search_query,
-                'content_type': 'earnings-call-transcript'
-            }
+            transcript_links = []
+            cutoff_date = datetime.now() - timedelta(days=days_back)
             
-            async with self.session.get(
-                f"{self.base_url}/search/",
-                params=search_params
-            ) as response:
-                if response.status != 200:
-                    logger.warning(f"Search failed for {symbol}: {response.status}")
-                    return []
-                
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Extract transcript links
-                transcript_links = []
-                cutoff_date = datetime.now() - timedelta(days=days_back)
-                
-                # Look for earnings call transcript links
-                for link in soup.find_all('a', href=True):
-                    href = link.get('href', '')
-                    if 'earnings-call-transcript' in href and symbol.lower() in href.lower():
-                        full_url = urljoin(self.base_url, href)
+            # Get all current earnings transcript links from main page
+            async with self.session.get(self.search_url) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Look for earnings call transcript links using the proven pattern
+                    for link in soup.find_all('a', href=True):
+                        href = link.get('href', '')
+                        link_text = link.get_text(strip=True)
                         
-                        # Try to extract date from the link or surrounding text
-                        date_match = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', href)
-                        if date_match:
-                            try:
-                                transcript_date = datetime(
-                                    int(date_match.group(1)),
-                                    int(date_match.group(2)),
-                                    int(date_match.group(3))
-                                )
+                        # Check for earnings call transcript pattern
+                        if '/earnings/call-transcripts/' in href and link_text:
+                            # Extract symbol from link text (format: "Company (SYMBOL) Q# YYYY Earnings...")
+                            symbol_match = re.search(r'\(([A-Z]{2,5})\)', link_text)
+                            found_symbol = symbol_match.group(1) if symbol_match else None
+                            
+                            # Check if this is the symbol we're looking for
+                            if found_symbol and found_symbol.upper() == symbol.upper():
+                                full_url = urljoin(self.base_url, href)
+                                
+                                # Extract date from URL pattern: /YYYY/MM/DD/
+                                date_match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', href)
+                                transcript_date = None
+                                
+                                if date_match:
+                                    try:
+                                        transcript_date = datetime(
+                                            int(date_match.group(1)),
+                                            int(date_match.group(2)),
+                                            int(date_match.group(3))
+                                        )
+                                    except ValueError:
+                                        pass
+                                
+                                # If no date from URL, try to extract from text
+                                if not transcript_date:
+                                    # Look for quarter and year in text (e.g., "Q2 2025")
+                                    quarter_match = re.search(r'Q([1-4])\s+(\d{4})', link_text)
+                                    if quarter_match:
+                                        quarter = int(quarter_match.group(1))
+                                        year = int(quarter_match.group(2))
+                                        # Estimate quarter start month
+                                        month = (quarter - 1) * 3 + 1
+                                        transcript_date = datetime(year, month, 1)
+                                    else:
+                                        # Default to recent if no date found
+                                        transcript_date = datetime.now() - timedelta(days=30)
+                                
+                                # Check if within date range
                                 if transcript_date >= cutoff_date:
                                     transcript_links.append({
                                         'url': full_url,
                                         'date': transcript_date,
-                                        'title': link.get_text(strip=True)
+                                        'title': link_text,
+                                        'symbol': found_symbol
                                     })
-                            except ValueError:
-                                continue
-                
-                return sorted(transcript_links, key=lambda x: x['date'], reverse=True)
+            
+            # Sort by date, most recent first
+            transcript_links.sort(key=lambda x: x['date'], reverse=True)
+            
+            logger.info(f"Found {len(transcript_links)} transcripts for {symbol}")
+            return transcript_links
                 
         except Exception as e:
             logger.error(f"Error searching transcripts for {symbol}: {e}")
@@ -170,27 +189,71 @@ class EarningsCallScraper:
     
     def _extract_transcript_content(self, soup: BeautifulSoup) -> str:
         """Extract the main transcript content from the page."""
-        # Look for common transcript content containers
-        content_selectors = [
-            '.transcript-content',
-            '.earnings-transcript',
+        # Use the proven selector first - this works for current Motley Fool structure
+        content_div = soup.select_one('.article-body')
+        if content_div:
+            # Remove unwanted elements
+            for unwanted in content_div.find_all(['script', 'style', 'noscript', 'nav', 'header', 'footer']):
+                unwanted.decompose()
+            
+            content = content_div.get_text(separator='\n', strip=True)
+            if len(content) > 1000:  # Ensure substantial content
+                logger.info(f"Successfully extracted content using .article-body: {len(content):,} characters")
+                return content
+        
+        # Fallback selectors if the main one fails
+        fallback_selectors = [
             '.article-content',
             '.post-content',
-            'article'
+            '.entry-content',
+            '.content-body',
+            '[data-module="ArticleBody"]',
+            '.transcript-content'
         ]
         
-        for selector in content_selectors:
+        for selector in fallback_selectors:
             content_div = soup.select_one(selector)
             if content_div:
-                return content_div.get_text(separator='\n', strip=True)
+                # Remove unwanted elements
+                for unwanted in content_div.find_all(['script', 'style', 'noscript', 'nav', 'header', 'footer']):
+                    unwanted.decompose()
+                
+                content = content_div.get_text(separator='\n', strip=True)
+                if len(content) > 1000:
+                    logger.info(f"Successfully extracted content using {selector}: {len(content):,} characters")
+                    return content
         
-        # Fallback: look for the largest text block
-        text_blocks = soup.find_all(['div', 'article', 'section'])
-        largest_block = max(text_blocks, key=lambda x: len(x.get_text()), default=None)
+        # Look for any article tag
+        article = soup.find('article')
+        if article:
+            for unwanted in article.find_all(['script', 'style', 'noscript', 'nav', 'header', 'footer']):
+                unwanted.decompose()
+            content = article.get_text(separator='\n', strip=True)
+            if len(content) > 1000:
+                logger.info(f"Successfully extracted content using article tag: {len(content):,} characters")
+                return content
         
-        if largest_block:
-            return largest_block.get_text(separator='\n', strip=True)
+        # Last resort: look for the largest text block
+        text_blocks = soup.find_all(['div', 'section', 'main'])
+        content_candidates = []
         
+        for block in text_blocks:
+            # Skip navigation, headers, footers, ads
+            block_classes = ' '.join(block.get('class', [])).lower()
+            if any(skip_class in block_classes for skip_class in ['nav', 'header', 'footer', 'sidebar', 'ad', 'menu']):
+                continue
+                
+            text = block.get_text(separator='\n', strip=True)
+            if len(text) > 2000:  # Only consider substantial content
+                content_candidates.append((len(text), text))
+        
+        if content_candidates:
+            # Return the longest content block
+            content_candidates.sort(key=lambda x: x[0], reverse=True)
+            logger.info(f"Successfully extracted content using largest text block: {len(content_candidates[0][1]):,} characters")
+            return content_candidates[0][1]
+        
+        logger.warning("Failed to extract substantial transcript content")
         return ""
     
     def _extract_metadata(self, soup: BeautifulSoup, url: str, symbol: str) -> Dict:
@@ -237,16 +300,45 @@ class EarningsCallScraper:
         """Parse transcript into management presentation and Q&A sections."""
         content_lines = content.split('\n')
         
-        # Look for section markers
+        # Look for section markers with more comprehensive patterns
         management_start = -1
         qa_start = -1
         
         for i, line in enumerate(content_lines):
-            line_lower = line.lower()
-            if any(marker in line_lower for marker in ['prepared remarks', 'presentation', 'management discussion']):
+            line_lower = line.lower().strip()
+            
+            # Skip very short lines
+            if len(line_lower) < 5:
+                continue
+                
+            # Look for management section indicators
+            management_markers = [
+                'prepared remarks',
+                'management discussion', 
+                'presentation',
+                'opening statement',
+                'management commentary',
+                'company discussion',
+                'executive summary'
+            ]
+            
+            if any(marker in line_lower for marker in management_markers):
                 if management_start == -1:
                     management_start = i
-            elif any(marker in line_lower for marker in ['questions and answers', 'q&a', 'analyst questions']):
+                    logger.debug(f"Found management section at line {i}: {line_lower[:50]}...")
+            
+            # Look for Q&A section indicators
+            qa_markers = [
+                'questions and answers',
+                'q&a',
+                'question and answer',
+                'analyst questions',
+                'questions from analysts',
+                'operator',  # Often indicates start of Q&A
+                'thank you. we will now begin the question'
+            ]
+            
+            if any(marker in line_lower for marker in qa_markers):
                 qa_start = i
                 break
         

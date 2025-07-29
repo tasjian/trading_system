@@ -74,28 +74,68 @@ class LLMPortfolioManager:
         candidate_symbols: List[str], 
         portfolio_value: float, 
         risk_profile: str = "moderate",
-        max_positions: int = 35
+        max_positions: int = 35,
+        sentiment_data: Optional[Dict] = None
     ) -> PortfolioRecommendation:
         """Construct portfolio using LLM analysis with sentiment integration."""
         
         logger.info(f"Constructing LLM portfolio with {len(candidate_symbols)} candidates")
         logger.info(f"Portfolio value: ${portfolio_value:,.2f}, Risk profile: {risk_profile}")
         
-        # Step 1: Get diversified stock selection from enhanced screener
-        diversified_selection = enhanced_screener.get_diversified_stock_selection(max_positions)
+        # Step 1: Prioritize earnings symbols over enhanced screener selection
+        earnings_symbols = []
+        if sentiment_data:
+            # Identify symbols with earnings data - these get HIGHEST priority
+            earnings_symbols = [
+                symbol for symbol, data in sentiment_data.items() 
+                if (hasattr(data, 'has_recent_earnings') and data.has_recent_earnings) 
+                or (isinstance(data, dict) and data.get('has_recent_earnings', False))
+            ]
+            logger.info(f"Found {len(earnings_symbols)} earnings symbols with priority: {earnings_symbols}")
+        
+        # Get diversified stock selection from enhanced screener for remaining positions
+        remaining_positions = max(0, max_positions - len(earnings_symbols))
+        diversified_selection = enhanced_screener.get_diversified_stock_selection(remaining_positions)
         
         # Flatten the selection into a candidate list
-        selected_symbols = []
+        screener_symbols = []
         for industry_stocks in diversified_selection.values():
-            selected_symbols.extend(industry_stocks)
+            screener_symbols.extend(industry_stocks)
         
-        # Limit to available candidates
-        final_candidates = [s for s in selected_symbols if s in candidate_symbols][:max_positions]
+        # Combine: earnings symbols first, then screener symbols
+        selected_symbols = earnings_symbols + screener_symbols
+        
+        # Limit to available candidates, prioritizing earnings symbols
+        final_candidates = []
+        for symbol in selected_symbols:
+            if symbol in candidate_symbols and symbol not in final_candidates:
+                final_candidates.append(symbol)
+                if len(final_candidates) >= max_positions:
+                    break
         
         logger.info(f"Selected {len(final_candidates)} candidates for analysis")
         
-        # Step 2: Analyze sentiment for all candidates
-        sentiment_results = await self._analyze_candidate_sentiments(final_candidates)
+        # Step 2: Use provided sentiment data or analyze sentiment for all candidates
+        if sentiment_data:
+            logger.info(f"Using provided sentiment data for {len(sentiment_data)} symbols")
+            sentiment_results = {}
+            for symbol in final_candidates:
+                if symbol in sentiment_data:
+                    sentiment_results[symbol] = sentiment_data[symbol]
+                    data = sentiment_data[symbol]
+                    sentiment_str = data.overall_sentiment if hasattr(data, 'overall_sentiment') else data.get('overall_sentiment', 'N/A')
+                    has_earnings = data.has_recent_earnings if hasattr(data, 'has_recent_earnings') else data.get('has_recent_earnings', False)
+                    logger.info(f"Using sentiment for {symbol}: {sentiment_str} (earnings: {'Yes' if has_earnings else 'No'})")
+            
+            # Fill in missing sentiment data with fresh analysis for key candidates
+            missing_sentiment = [s for s in final_candidates if s not in sentiment_results]
+            if missing_sentiment:
+                logger.info(f"Analyzing sentiment for {len(missing_sentiment)} candidates without data")
+                additional_sentiment = await self._analyze_candidate_sentiments(missing_sentiment)
+                sentiment_results.update(additional_sentiment)
+        else:
+            logger.info("No pre-computed sentiment data provided, analyzing all candidates")
+            sentiment_results = await self._analyze_candidate_sentiments(final_candidates)
         
         # Step 3: Get market data for candidates
         market_data = await enhanced_screener.get_bulk_stock_data(final_candidates)
@@ -207,12 +247,18 @@ class LLMPortfolioManager:
             # Apply risk profile adjustments
             risk_adjustment = self._get_risk_adjustment(risk_profile, sentiment, market_info)
             
-            # Weighted composite score
+            # CRITICAL: Boost earnings symbols significantly
+            earnings_bonus = 0.0
+            if sentiment.has_recent_earnings:
+                earnings_bonus = 0.5  # Major boost for earnings symbols
+                logger.info(f"Applying earnings bonus to {symbol}: +{earnings_bonus}")
+            
+            # Weighted composite score with earnings bonus
             composite_score = (
                 sentiment_score * self.sentiment_weight +
                 fundamental_score * self.fundamental_weight +
                 technical_score * self.technical_weight
-            ) * risk_adjustment
+            ) * risk_adjustment + earnings_bonus
             
             scored_stocks.append((symbol, composite_score))
         
@@ -540,9 +586,10 @@ async def construct_llm_portfolio(
     candidate_symbols: List[str], 
     portfolio_value: float, 
     risk_profile: str = "moderate",
-    max_positions: int = 35
+    max_positions: int = 35,
+    sentiment_data: Optional[Dict] = None
 ) -> PortfolioRecommendation:
     """Convenience function for LLM portfolio construction."""
     return await llm_portfolio_manager.construct_llm_portfolio(
-        candidate_symbols, portfolio_value, risk_profile, max_positions
+        candidate_symbols, portfolio_value, risk_profile, max_positions, sentiment_data
     )

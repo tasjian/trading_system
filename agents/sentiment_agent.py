@@ -103,13 +103,13 @@ class SentimentAgent:
         
         logger.info(f"Starting comprehensive sentiment analysis for {symbol}")
         
-        # Collect data from all sources in parallel
-        news_task = self._analyze_news_sentiment(symbol)
-        social_task = self._analyze_social_sentiment(symbol)
-        earnings_task = self._analyze_earnings_sentiment(symbol)
-        market_task = self._analyze_market_sentiment(symbol)
+        # Collect data from all sources in parallel with timeouts
+        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=30.0)
+        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=45.0)
+        earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=60.0)
+        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=15.0)
         
-        # Execute all tasks
+        # Execute all tasks with graceful failure handling
         results = await asyncio.gather(
             news_task, social_task, earnings_task, market_task,
             return_exceptions=True
@@ -117,22 +117,49 @@ class SentimentAgent:
         
         news_sentiment, social_sentiment, earnings_sentiment, market_sentiment = results
         
-        # Handle exceptions
+        # Handle exceptions with detailed logging
+        data_sources_available = []
+        
         if isinstance(news_sentiment, Exception):
-            logger.error(f"News sentiment analysis failed: {news_sentiment}")
+            if isinstance(news_sentiment, asyncio.TimeoutError):
+                logger.warning(f"News sentiment analysis timed out for {symbol} - continuing without news data")
+            else:
+                logger.warning(f"News sentiment analysis failed for {symbol}: {type(news_sentiment).__name__} - continuing without news data")
             news_sentiment = None
+        else:
+            data_sources_available.append("news")
             
         if isinstance(social_sentiment, Exception):
-            logger.error(f"Social sentiment analysis failed: {social_sentiment}")
+            if isinstance(social_sentiment, asyncio.TimeoutError):
+                logger.warning(f"Social sentiment analysis timed out for {symbol} - continuing without social data")
+            else:
+                logger.warning(f"Social sentiment analysis failed for {symbol}: {type(social_sentiment).__name__} - continuing without social data")
             social_sentiment = {}
+        else:
+            if social_sentiment:
+                data_sources_available.append("social")
             
         if isinstance(earnings_sentiment, Exception):
-            logger.error(f"Earnings sentiment analysis failed: {earnings_sentiment}")
+            if isinstance(earnings_sentiment, asyncio.TimeoutError):
+                logger.warning(f"Earnings sentiment analysis timed out for {symbol} - continuing without earnings data")
+            else:
+                logger.warning(f"Earnings sentiment analysis failed for {symbol}: {type(earnings_sentiment).__name__} - continuing without earnings data")
             earnings_sentiment = {}
+        else:
+            if earnings_sentiment:
+                data_sources_available.append("earnings")
+                logger.info(f"✅ Successfully integrated Motley Fool earnings data for {symbol}")
             
         if isinstance(market_sentiment, Exception):
-            logger.error(f"Market sentiment analysis failed: {market_sentiment}")
+            if isinstance(market_sentiment, asyncio.TimeoutError):
+                logger.warning(f"Market sentiment analysis timed out for {symbol} - continuing without market data")
+            else:
+                logger.warning(f"Market sentiment analysis failed for {symbol}: {type(market_sentiment).__name__} - continuing without market data")
             market_sentiment = None
+        else:
+            data_sources_available.append("market")
+        
+        logger.info(f"Data sources available for {symbol}: {', '.join(data_sources_available)} ({len(data_sources_available)}/4 sources)")
         
         # Aggregate sentiments
         overall_score, overall_sentiment, confidence = self._aggregate_sentiments(
@@ -240,14 +267,25 @@ class SentimentAgent:
     async def _analyze_earnings_sentiment(self, symbol: str) -> Dict[str, SentimentAnalysis]:
         """Analyze sentiment from earnings call transcripts."""
         try:
-            # Get latest earnings transcript
+            # Get latest earnings transcript from Motley Fool
             transcript = await self.earnings_scraper.get_latest_transcript(symbol)
             
             if not transcript:
+                logger.info(f"No recent earnings transcript found for {symbol}")
                 return {}
             
-            # Analyze different sections of the transcript
-            return await self.llm_analyzer.analyze_earnings_transcript(transcript)
+            logger.info(f"Analyzing earnings transcript for {symbol}: {transcript.company_name} {transcript.quarter} {transcript.year}")
+            logger.info(f"Transcript content: {len(transcript.full_text):,} characters, Management: {len(transcript.management_section):,}, Q&A: {len(transcript.qa_section):,}")
+            
+            # Analyze different sections of the transcript using our enhanced LLM
+            earnings_sentiment = await self.llm_analyzer.analyze_earnings_transcript(transcript)
+            
+            # Log results
+            for section, sentiment in earnings_sentiment.items():
+                if isinstance(sentiment, SentimentAnalysis):
+                    logger.info(f"Earnings {section} sentiment for {symbol}: {sentiment.sentiment} (score: {sentiment.score:.3f}, confidence: {sentiment.confidence:.3f})")
+            
+            return earnings_sentiment
             
         except Exception as e:
             logger.error(f"Error analyzing earnings sentiment for {symbol}: {e}")
@@ -368,6 +406,14 @@ class SentimentAgent:
         else:
             overall_score = sum(s * w for s, w in zip(scores, weights)) / total_weight
             overall_confidence = sum(c * w for c, w in zip(confidences, weights)) / total_weight
+        
+        # Adjust confidence based on number of available data sources
+        data_source_count = len(scores)
+        if data_source_count < 4:  # We have 4 possible sources
+            # Reduce confidence for missing data sources
+            source_penalty = (4 - data_source_count) * 0.1  # 10% penalty per missing source
+            overall_confidence = max(0.1, overall_confidence - source_penalty)
+            logger.info(f"Adjusted confidence from missing data sources: -{source_penalty:.1%} penalty for {4-data_source_count} missing sources")
         
         # Convert score to sentiment label
         if overall_score > 0.5:
