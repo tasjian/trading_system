@@ -498,4 +498,13 @@ class SocialMediaCollector:
     
     async def close(self):
         """Close all connections."""
-        await self.reddit_collector.close()
+        try:
+            await self.reddit_collector.close()
+        except Exception as e:
+            logger.warning(f"Error closing Reddit collector: {e}")
+        
+        # Twitter client doesn't need special cleanup - it uses requests internally
+        # TikTok collector uses playwright which auto-closes browsers
+        
+        # Clear cache to free memory
+        self.cache.clear()
