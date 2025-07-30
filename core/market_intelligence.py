@@ -149,8 +149,7 @@ class UnifiedMarketIntelligence:
     
     async def _get_price_premium(self, symbol: str) -> Optional[float]:
         """Get price from premium APIs."""
-        if not self.session:
-            self.session = aiohttp.ClientSession()
+        await self._ensure_session()
         
         # Try Finnhub first (fastest)
         if self.finnhub_key and await self._check_rate_limit('finnhub'):
@@ -348,7 +347,7 @@ class UnifiedMarketIntelligence:
             if self.fmp_key and await self._check_rate_limit('fmp'):
                 try:
                     if not self.session:
-                        self.session = aiohttp.ClientSession()
+                        await self._ensure_session()
                     
                     url = f"https://financialmodelingprep.com/api/v3/key-metrics/{symbol}"
                     params = {'apikey': self.fmp_key}
@@ -470,7 +469,7 @@ class UnifiedMarketIntelligence:
                 return []
             
             if not self.session:
-                self.session = aiohttp.ClientSession()
+                await self._ensure_session()
             
             # Get recent news
             url = "https://newsapi.org/v2/everything"
@@ -688,6 +687,23 @@ class UnifiedMarketIntelligence:
         """Clean up resources."""
         if self.session:
             await self.session.close()
+            self.session = None
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit with proper cleanup."""
+        await self.close()
+    
+    async def _ensure_session(self):
+        """Ensure aiohttp session exists with proper configuration."""
+        if not self.session:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10),  # Reduced timeout
+                connector=aiohttp.TCPConnector(limit=20, limit_per_host=10)
+            )
 
 # Global instance
 market_intelligence = UnifiedMarketIntelligence()

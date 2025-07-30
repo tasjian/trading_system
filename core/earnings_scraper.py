@@ -53,7 +53,8 @@ class EarningsCallScraper:
                 headers={
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 },
-                timeout=aiohttp.ClientTimeout(total=30)
+                timeout=aiohttp.ClientTimeout(total=15),  # Reduced timeout to prevent hanging
+                connector=aiohttp.TCPConnector(limit=10, limit_per_host=5)  # Connection pooling
             )
     
     async def _rate_limit(self):
@@ -398,3 +399,13 @@ class EarningsCallScraper:
         """Close the aiohttp session."""
         if self.session:
             await self.session.close()
+            self.session = None
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self._ensure_session()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit with proper cleanup."""
+        await self.close()

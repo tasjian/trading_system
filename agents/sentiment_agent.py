@@ -267,25 +267,27 @@ class SentimentAgent:
     async def _analyze_earnings_sentiment(self, symbol: str) -> Dict[str, SentimentAnalysis]:
         """Analyze sentiment from earnings call transcripts."""
         try:
-            # Get latest earnings transcript from Motley Fool
-            transcript = await self.earnings_scraper.get_latest_transcript(symbol)
-            
-            if not transcript:
-                logger.info(f"No recent earnings transcript found for {symbol}")
-                return {}
-            
-            logger.info(f"Analyzing earnings transcript for {symbol}: {transcript.company_name} {transcript.quarter} {transcript.year}")
-            logger.info(f"Transcript content: {len(transcript.full_text):,} characters, Management: {len(transcript.management_section):,}, Q&A: {len(transcript.qa_section):,}")
-            
-            # Analyze different sections of the transcript using our enhanced LLM
-            earnings_sentiment = await self.llm_analyzer.analyze_earnings_transcript(transcript)
-            
-            # Log results
-            for section, sentiment in earnings_sentiment.items():
-                if isinstance(sentiment, SentimentAnalysis):
-                    logger.info(f"Earnings {section} sentiment for {symbol}: {sentiment.sentiment} (score: {sentiment.score:.3f}, confidence: {sentiment.confidence:.3f})")
-            
-            return earnings_sentiment
+            # Use context manager for proper session cleanup
+            async with self.earnings_scraper as scraper:
+                # Get latest earnings transcript from Motley Fool
+                transcript = await scraper.get_latest_transcript(symbol)
+                
+                if not transcript:
+                    logger.info(f"No recent earnings transcript found for {symbol}")
+                    return {}
+                
+                logger.info(f"Analyzing earnings transcript for {symbol}: {transcript.company_name} {transcript.quarter} {transcript.year}")
+                logger.info(f"Transcript content: {len(transcript.full_text):,} characters, Management: {len(transcript.management_section):,}, Q&A: {len(transcript.qa_section):,}")
+                
+                # Analyze different sections of the transcript using our enhanced LLM
+                earnings_sentiment = await self.llm_analyzer.analyze_earnings_transcript(transcript)
+                
+                # Log results
+                for section, sentiment in earnings_sentiment.items():
+                    if isinstance(sentiment, SentimentAnalysis):
+                        logger.info(f"Earnings {section} sentiment for {symbol}: {sentiment.sentiment} (score: {sentiment.score:.3f}, confidence: {sentiment.confidence:.3f})")
+                
+                return earnings_sentiment
             
         except Exception as e:
             logger.error(f"Error analyzing earnings sentiment for {symbol}: {e}")

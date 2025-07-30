@@ -123,7 +123,7 @@ def create_initial_state(session_id: Optional[str] = None) -> TradingState:
             "strategies_enabled": ["mean_reversion", "trend_following"],
             "risk_tolerance": "moderate"
         },
-        watchlist=["SPY", "QQQ", "AAPL", "MSFT", "GOOGL"],  # Default watchlist
+        watchlist=[],  # Empty watchlist - universe filter will discover opportunities dynamically
         pnl_history=[],
         trade_statistics={
             "total_trades": 0,

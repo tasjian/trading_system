@@ -229,13 +229,14 @@ class TwitterCollector:
             query = f"({symbol} OR #{symbol}) -is:retweet lang:en"
             end_time = datetime.now() - timedelta(hours=hours_back)
             
+            # Use smaller batch sizes and timeout to prevent hanging
             tweets = tweepy.Paginator(
                 self.client.search_recent_tweets,
                 query=query,
-                max_results=min(limit, 100),
+                max_results=min(limit, 50),  # Reduced batch size
                 end_time=end_time,
                 tweet_fields=['created_at', 'author_id', 'public_metrics', 'entities']
-            ).flatten(limit=limit)
+            ).flatten(limit=min(limit, 50))  # Limit total results
             
             for tweet in tweets:
                 # Extract hashtags and mentions

@@ -32,6 +32,7 @@ class TradingWorkflow:
         
         # Add nodes (agent functions)
         workflow.add_node("market_monitor", self.market_monitor_agent)
+        workflow.add_node("universe_filter", self.universe_filter_agent)
         workflow.add_node("sentiment_analyzer", self.sentiment_analysis_agent)
         workflow.add_node("risk_assessor", self.risk_assessment_agent)
         workflow.add_node("signal_generator", self.signal_generation_agent)
@@ -42,7 +43,8 @@ class TradingWorkflow:
         
         # Define the workflow routing
         workflow.add_edge(START, "market_monitor")
-        workflow.add_edge("market_monitor", "sentiment_analyzer")
+        workflow.add_edge("market_monitor", "universe_filter")
+        workflow.add_edge("universe_filter", "sentiment_analyzer")
         workflow.add_edge("sentiment_analyzer", "risk_assessor")
         
         # Conditional routing based on risk assessment
@@ -93,7 +95,11 @@ class TradingWorkflow:
             
             # Check market status
             market_open = alpaca_client.is_market_open()
+            
+            # Ensure market_data structure exists
+            state["market_data"] = state.get("market_data", {})
             state["market_data"]["market_open"] = market_open
+            state["market_data"]["symbols"] = state["market_data"].get("symbols", {})
             
             # Get current positions
             positions = alpaca_client.get_positions()
@@ -130,37 +136,108 @@ class TradingWorkflow:
             logger.error(error_msg)
             return add_error_to_state(state, error_msg)
     
+    async def universe_filter_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Filter stock universe from 11k+ stocks to 200-400 actionable candidates."""
+        try:
+            from core.universe_filter import filter_stock_universe
+            
+            logger.info("Universe Filter Agent: Filtering 11k+ stocks to actionable candidates")
+            
+            # Get base symbols from positions and watchlist
+            current_positions = list(state.get("portfolio", {}).get("positions", {}).keys())
+            watchlist_symbols = state.get("watchlist", [])
+            
+            # Apply universe filter to get actionable stocks
+            logger.info("🔍 Running universe filter to identify actionable stocks...")
+            filter_result = await filter_stock_universe(
+                base_symbols=None,  # Use full universe
+                max_symbols=400,    # Increased to 400 for better signal diversity
+                include_watchlist=True
+            )
+            
+            # Combine filtered universe with mandatory symbols (positions + watchlist)
+            mandatory_symbols = set(current_positions + watchlist_symbols)
+            filtered_symbols = list(set(filter_result.filtered_symbols) | mandatory_symbols)
+            
+            logger.info(f"Universe filter results:")
+            logger.info(f"  📊 Original universe: {filter_result.total_symbols:,} stocks")
+            logger.info(f"  ✨ Filtered to: {len(filter_result.filtered_symbols)} actionable candidates")
+            logger.info(f"  📌 Added mandatory: {len(mandatory_symbols)} positions/watchlist")
+            logger.info(f"  🎯 Final analysis set: {len(filtered_symbols)} symbols")
+            logger.info(f"  📈 Signal breakdown: {filter_result.filter_summary}")
+            logger.info(f"  ⚡ Processing efficiency: {((filter_result.total_symbols - len(filtered_symbols)) / filter_result.total_symbols * 100):.1f}% reduction")
+            
+            # Store filter results in state for sentiment analysis
+            state["universe_filter_result"] = filter_result
+            state["filtered_symbols"] = filtered_symbols[:200]  # Limit to top 200 for sentiment analysis
+            state["current_agent"] = "universe_filter"
+            
+            return update_state_timestamp(state)
+            
+        except Exception as e:
+            error_msg = f"Universe Filter Agent error: {e}"
+            logger.error(error_msg)
+            return add_error_to_state(state, error_msg)
+    
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze comprehensive sentiment including earnings, social media, and news for active positions and candidate stocks."""
+        """Analyze comprehensive sentiment for pre-filtered stocks only."""
         try:
             from agents.sentiment_agent import sentiment_agent
             
-            logger.info("Sentiment Analysis Agent: Running comprehensive sentiment analysis (earnings + social + news)")
+            logger.info("Sentiment Analysis Agent: Running comprehensive sentiment analysis on pre-filtered stocks")
             
-            # Get current positions, candidate symbols, and watchlist
-            current_positions = list(state.get("positions", {}).keys())
-            candidate_symbols = state.get("candidate_symbols", [])
-            watchlist_symbols = state.get("watchlist", [])
-            all_symbols = list(set(current_positions + candidate_symbols + watchlist_symbols))
+            # Get pre-filtered symbols from universe filter step
+            filtered_symbols = state.get("filtered_symbols", [])
             
-            if not all_symbols:
-                logger.warning("No symbols to analyze for sentiment")
+            if not filtered_symbols:
+                logger.warning("No filtered symbols provided by universe filter")
                 state["sentiment_data"] = {}
-                state["current_agent"] = "sentiment_analyzer"
+                state["current_agent"] = "sentiment_analyzer" 
                 return update_state_timestamp(state)
+            
+            logger.info(f"💭 Analyzing sentiment for {len(filtered_symbols)} pre-filtered symbols")
             
             # Run comprehensive sentiment analysis for each symbol
             sentiment_data = {}
             sentiment_signals = []
             
-            logger.info(f"Analyzing sentiment for {len(all_symbols)} symbols: {', '.join(all_symbols[:5])}{'...' if len(all_symbols) > 5 else ''}")
+            # Limit to top 50 symbols for sentiment analysis to balance quality vs performance
+            symbols_to_analyze = filtered_symbols[:50]
+            logger.info(f"🎯 Processing top {len(symbols_to_analyze)} symbols: {', '.join(symbols_to_analyze[:5])}{'...' if len(symbols_to_analyze) > 5 else ''}")
             
-            for symbol in all_symbols[:10]:  # Limit to avoid overwhelming APIs
+            # Process symbols in parallel batches to speed up analysis
+            batch_size = 8  # Increased batch size since we have fewer, higher-quality symbols
+            
+            async def analyze_symbol_sentiment(symbol: str):
+                """Analyze sentiment for a single symbol."""
                 try:
                     logger.info(f"Running comprehensive sentiment analysis for {symbol}")
                     
                     # Use the comprehensive sentiment analysis that includes earnings
                     comprehensive_sentiment = await sentiment_agent.analyze_comprehensive_sentiment(symbol)
+                    return symbol, comprehensive_sentiment
+                except Exception as e:
+                    logger.error(f"Error analyzing sentiment for {symbol}: {e}")
+                    return symbol, None
+            
+            # Process symbols in parallel batches
+            for i in range(0, len(symbols_to_analyze), batch_size):
+                batch = symbols_to_analyze[i:i + batch_size]
+                logger.info(f"Processing batch {i//batch_size + 1}: {', '.join(batch)}")
+                
+                # Run batch in parallel
+                batch_results = await asyncio.gather(
+                    *[analyze_symbol_sentiment(symbol) for symbol in batch],
+                    return_exceptions=True
+                )
+                
+                # Process batch results
+                for result in batch_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Batch processing error: {result}")
+                        continue
+                    
+                    symbol, comprehensive_sentiment = result
                     
                     if comprehensive_sentiment:
                         sentiment_data[symbol] = {
@@ -242,13 +319,10 @@ class TradingWorkflow:
                     
                     else:
                         logger.warning(f"No comprehensive sentiment data for {symbol}")
-                    
-                    # Rate limiting between symbols
-                    await asyncio.sleep(1)
-                    
-                except Exception as e:
-                    logger.error(f"Error analyzing sentiment for {symbol}: {e}")
-                    continue
+                
+                # Rate limiting between batches (reduced since we're processing in parallel)
+                if i + batch_size < len(symbols_to_analyze):
+                    await asyncio.sleep(2)  # 2 second delay between batches
             
             # Update state with comprehensive sentiment data
             state["sentiment_data"] = sentiment_data
@@ -410,29 +484,42 @@ class TradingWorkflow:
                 earnings_signals = [s for s in sentiment_signals if s.get('has_earnings')]
                 logger.info(f"Found {len(sentiment_signals)} sentiment signals ({len(earnings_signals)} with earnings data)")
         
-            # Get expanded candidate symbols for diversified portfolio
-            try:
-                from enhanced_market_screener import EnhancedMarketScreener
-                screener = EnhancedMarketScreener()
-                all_candidate_symbols = screener.get_all_stocks()
-                logger.info(f"Using enhanced candidate universe of {len(all_candidate_symbols)} stocks")
-            except Exception as e:
-                logger.warning(f"Failed to get enhanced stock universe: {e}")
+            # Get filtered candidate symbols for efficient processing
+            universe_filter_result = state.get("universe_filter_result")
+            if universe_filter_result:
+                all_candidate_symbols = universe_filter_result.filtered_symbols
+                logger.info(f"Using filtered candidate universe of {len(all_candidate_symbols)} actionable stocks")
+                logger.info(f"Universe filter reduced processing from {universe_filter_result.total_symbols} to {len(all_candidate_symbols)} stocks")
+            else:
+                # Fallback to enhanced screener if filter not available
+                logger.warning("Universe filter results not available, using fallback screener")
                 try:
-                    from simple_market_screener import SimpleMarketScreener
-                    screener = SimpleMarketScreener()
+                    from enhanced_market_screener import EnhancedMarketScreener
+                    screener = EnhancedMarketScreener()
                     all_candidate_symbols = screener.get_all_stocks()
-                    logger.info(f"Using simple candidate universe of {len(all_candidate_symbols)} stocks")
-                except Exception as e2:
-                    logger.warning(f"Failed to get simple stock universe, using watchlist: {e2}")
-                    all_candidate_symbols = state["watchlist"]
+                    logger.info(f"Using enhanced candidate universe of {len(all_candidate_symbols)} stocks")
+                except Exception as e:
+                    logger.warning(f"Failed to get enhanced stock universe: {e}")
+                    try:
+                        from simple_market_screener import SimpleMarketScreener
+                        screener = SimpleMarketScreener()
+                        all_candidate_symbols = screener.get_all_stocks()
+                        logger.info(f"Using simple candidate universe of {len(all_candidate_symbols)} stocks")
+                    except Exception as e2:
+                        logger.warning(f"Failed to get simple stock universe, using watchlist: {e2}")
+                        all_candidate_symbols = state["watchlist"]
         
             # Create comprehensive candidate universe including ALL symbols with sentiment data
             comprehensive_candidates = set(all_candidate_symbols)
             
             # Include ANY symbol we have sentiment data for (not just earnings symbols)
             if sentiment_data:
-                sentiment_symbols = [s for s in sentiment_data.keys() if s in state["watchlist"] or s in market_data_symbols]
+                # Get symbols from market data in state
+                market_data_symbols = set(state.get("market_data", {}).get("symbols", {}).keys())
+                
+                # Include symbols from sentiment data, watchlist, or market data
+                sentiment_symbols = [s for s in sentiment_data.keys() 
+                                   if s in state["watchlist"] or s in market_data_symbols or s in all_candidate_symbols]
                 comprehensive_candidates.update(sentiment_symbols)
                 logger.info(f"Added {len(sentiment_symbols)} symbols with sentiment data to candidate universe")
             
@@ -440,8 +527,17 @@ class TradingWorkflow:
             final_candidate_list = list(comprehensive_candidates)
             
             # Log candidate composition for transparency
-            earnings_count = sum(1 for s in final_candidate_list 
-                               if s in sentiment_data and getattr(sentiment_data[s], 'has_recent_earnings', False))
+            earnings_count = 0
+            if sentiment_data:
+                for s in final_candidate_list:
+                    if s in sentiment_data:
+                        sentiment = sentiment_data[s]
+                        if isinstance(sentiment, dict):
+                            has_earnings = sentiment.get('has_recent_earnings', False)
+                        else:
+                            has_earnings = getattr(sentiment, 'has_recent_earnings', False)
+                        if has_earnings:
+                            earnings_count += 1
             logger.info(f"Final candidate universe: {len(final_candidate_list)} symbols ({earnings_count} with earnings data)")
         
             # Use LLM-enhanced portfolio construction with comprehensive universe
@@ -458,7 +554,10 @@ class TradingWorkflow:
         
             # Convert portfolio recommendation to trading signals
             signals = []
+            logger.info(f"Converting {len(recommendation.allocations)} allocations to signals")
+            
             for allocation in recommendation.allocations:
+                logger.info(f"Allocation: {allocation.symbol} weight={allocation.target_weight:.3f} action={allocation.recommended_action}")
                 if allocation.target_weight > 0.01:  # Only meaningful allocations
                     # Import here to avoid circular imports
                     from agents.state import TradingSignal
@@ -466,10 +565,25 @@ class TradingWorkflow:
                     # Calculate quantity based on target weight
                     target_value = portfolio_value * allocation.target_weight
                 
-                    # Get current price from market data
-                    symbol_data = state["market_data"]["symbols"].get(allocation.symbol)
-                    if symbol_data:
+                    # Get current price from market data or fetch it
+                    current_price = None
+                    
+                    # Safely check for existing market data
+                    market_symbols = state.get("market_data", {}).get("symbols", {})
+                    symbol_data = market_symbols.get(allocation.symbol)
+                    
+                    if symbol_data and "price" in symbol_data:
                         current_price = symbol_data["price"]
+                    else:
+                        # Fetch price from Alpaca for symbols not in market data
+                        try:
+                            from tools.alpaca_client import alpaca_client
+                            current_price = alpaca_client.get_current_price(allocation.symbol)
+                        except Exception as e:
+                            logger.warning(f"Could not get price for {allocation.symbol}: {e}")
+                            continue
+                    
+                    if current_price and current_price > 0:
                         quantity = target_value / current_price
                     
                         signal = TradingSignal(
@@ -484,7 +598,19 @@ class TradingWorkflow:
                         signals.append(signal)
         
             # Add signals to state
+            if "signals" not in state:
+                state["signals"] = []
+            
+            # Debug: Log what we're adding
+            logger.info(f"🔍 DEBUG: Adding {len(signals)} signals to state")
+            for i, signal in enumerate(signals):
+                logger.info(f"   Signal {i+1}: {signal.symbol} {signal.action} qty={signal.quantity:.2f} conf={signal.confidence:.2f}")
+            
             state["signals"].extend(signals)
+            
+            # Debug: Log final state count
+            total_signals_after = len(state.get("signals", []))
+            logger.info(f"🔍 DEBUG: Total signals in state after adding: {total_signals_after}")
         
             # Create comprehensive summary
             signal_summary = f"LLM Portfolio Analysis: {len(signals)} signals generated"
@@ -655,84 +781,26 @@ class TradingWorkflow:
             portfolio_value = state["portfolio"].get("equity", 0)
             max_position_size = state["risk_limits"]["max_position_size"]
             
-            # Use diversified portfolio management for better optimization
-            try:
-                from agents.diversified_portfolio import diversified_portfolio_manager
-                
-                # Construct diversified portfolio if needed
-                if len(state["portfolio"].get("positions", {})) < settings.min_portfolio_size:
-                    logger.info("Constructing diversified portfolio with target size: {}".format(settings.target_portfolio_size))
-                    
-                    target_portfolio = await diversified_portfolio_manager.construct_diversified_portfolio(
-                        portfolio_value=portfolio_value,
-                        risk_tolerance="moderate"
-                    )
-                    
-                    # Generate rebalancing orders
-                    current_positions = state["portfolio"].get("positions", {})
-                    rebalancing_orders = await diversified_portfolio_manager.generate_rebalancing_orders(
-                        current_positions, portfolio_value
-                    )
-                    
-                    # Convert rebalancing orders to signals
-                    from agents.state import TradingSignal
-                    optimized_signals = []
-                    
-                    for order in rebalancing_orders[:settings.max_portfolio_size]:  # Limit to max portfolio size
-                        signal = TradingSignal(
-                            symbol=order['symbol'],
-                            action=order['side'],
-                            confidence=0.8,  # High confidence for diversification
-                            price_target=0.0,  # Market order
-                            stop_loss=0.0,
-                            quantity=order['quantity'],
-                            reasoning=order['reason']
-                        )
-                        optimized_signals.append(signal)
-                        
+            # Simple strategy optimization: prioritize signals and validate quantities
+            logger.info(f"🔍 DEBUG STRATEGY: Optimizing {len(active_signals)} active signals")
+            
+            # Sort signals by confidence (highest first)
+            active_signals.sort(key=lambda x: x.confidence, reverse=True)
+            
+            # Take top signals based on available buying power and risk limits
+            available_cash = state["portfolio"].get("buying_power", 0)
+            max_positions = min(len(active_signals), 10)  # Limit to top 10 signals
+            
+            optimized_signals = []
+            for signal in active_signals[:max_positions]:
+                # Ensure signal has valid quantity (should already be set by LLM agent)
+                if hasattr(signal, 'quantity') and signal.quantity and signal.quantity > 0:
+                    optimized_signals.append(signal)
+                    logger.info(f"✅ Keeping signal: {signal.symbol} {signal.action} {signal.quantity:.1f} shares (conf: {signal.confidence:.2f})")
                 else:
-                    # Traditional optimization for existing portfolios
-                    optimized_signals = []
-                    max_new_positions = min(len(active_signals), 5)  # Limit new positions
-                    
-                    for signal in active_signals[:max_new_positions]:
-                        # Calculate position size based on available cash and diversification
-                        available_cash = state["portfolio"].get("cash", 0)
-                        if available_cash > 1000:  # Need at least $1000 to trade
-                            # Use conservative position sizes based on available cash
-                            num_positions = len(active_signals[:max_new_positions])
-                            cash_per_position = available_cash / max(num_positions, 1) * 0.9  # 90% of available cash divided equally
-                            
-                            # Estimate shares based on current price
-                            symbol_data = state["market_data"]["symbols"].get(signal.symbol)
-                            if symbol_data:
-                                current_price = symbol_data["price"]
-                                suggested_qty = cash_per_position / current_price
-                                signal.quantity = max(1, int(suggested_qty))  # At least 1 share
-                                logger.info(f"Position sizing: {signal.symbol} = ${cash_per_position:.0f} / ${current_price:.2f} = {signal.quantity} shares")
-                                optimized_signals.append(signal)
-                                
-            except Exception as diversified_error:
-                logger.warning(f"Diversified portfolio management failed, using fallback: {diversified_error}")
-                
-                # Fallback to original approach with updated limits
-                optimized_signals = []
-                max_signals = min(len(active_signals), 8)  # Increased from 3 to 8
-                
-                for signal in active_signals[:max_signals]:
-                    # Use available cash instead of total portfolio value
-                    available_cash = state["portfolio"].get("cash", 0)
-                    if available_cash > 1000:
-                        # Conservative position sizing with available cash
-                        cash_per_position = available_cash / max(max_signals, 1) * 0.8  # 80% of cash divided equally
-                        
-                        symbol_data = state["market_data"]["symbols"].get(signal.symbol)
-                        if symbol_data:
-                            current_price = symbol_data["price"]
-                            suggested_qty = cash_per_position / current_price
-                            signal.quantity = max(1, int(suggested_qty))
-                            logger.info(f"Fallback sizing: {signal.symbol} = ${cash_per_position:.0f} / ${current_price:.2f} = {signal.quantity} shares")
-                            optimized_signals.append(signal)
+                    logger.warning(f"❌ Skipping signal with invalid quantity: {signal.symbol} qty={getattr(signal, 'quantity', 'None')}")
+            
+            logger.info(f"🔍 DEBUG STRATEGY: Optimized to {len(optimized_signals)} valid signals")
             
             # Update state with optimized signals
             state["signals"] = state["signals"][:-len(active_signals)] + optimized_signals
@@ -758,6 +826,19 @@ class TradingWorkflow:
             from agents.state import get_active_signals
             active_signals = get_active_signals(state, max_age_minutes=10)
             
+            # Debug: Check all signals in state
+            all_signals = state.get("signals", [])
+            logger.info(f"🔍 DEBUG ORDER MGT: Total signals in state: {len(all_signals)}")
+            logger.info(f"🔍 DEBUG ORDER MGT: Active signals (within 10 min): {len(active_signals)}")
+            
+            for i, signal in enumerate(all_signals):
+                if hasattr(signal, 'timestamp'):
+                    age_minutes = (datetime.now() - signal.timestamp).total_seconds() / 60
+                    logger.info(f"Signal {i+1}: {signal.symbol} {signal.action} qty={getattr(signal, 'quantity', 'N/A')} age={age_minutes:.1f}min")
+                else:
+                    logger.warning(f"Signal {i+1}: {signal.symbol} missing timestamp attribute")
+                    logger.warning(f"   Signal type: {type(signal)}, attributes: {dir(signal)}")
+            
             if not active_signals:
                 state["messages"].append(AIMessage(content="No signals ready for execution"))
                 state["current_agent"] = "order_manager"
@@ -772,12 +853,17 @@ class TradingWorkflow:
                     continue
                 
                 try:
-                    # Check if market is open
-                    if not alpaca_client.is_market_open():
-                        logger.info("Market closed, skipping order execution")
-                        continue
+                    # Check if market is open (skip for paper trading as it's always available)
+                    market_open = alpaca_client.is_market_open()
+                    logger.info(f"Market status: {'Open' if market_open else 'Closed'}")
+                    
+                    # For paper trading, we can execute orders even when market is closed
+                    # In live trading, you'd want to respect market hours
+                    if not market_open:
+                        logger.info("Market closed - executing paper trade anyway for testing")
                     
                     # Execute the order with advanced order type support
+                    logger.info(f"Executing order: {signal.action} {signal.quantity:.2f} {signal.symbol}")
                     order = await self._execute_smart_order(signal, state)
                     
                     executed_orders.append({
@@ -895,9 +981,11 @@ class TradingWorkflow:
         if any(state["circuit_breakers"].values()):
             return "emergency"
         
-        # Check if market is closed
-        if not state["market_data"].get("market_open", False):
-            return "halt"
+        # Allow trading even when market is closed - orders will be staged for market open
+        # Paper trading accounts can execute at any time
+        market_open = state["market_data"].get("market_open", False)
+        if not market_open:
+            logger.info("Market closed - will stage orders for market open")
         
         # Check portfolio health
         portfolio_value = state["portfolio"].get("equity", 0)
@@ -961,90 +1049,20 @@ class TradingWorkflow:
         from tools.alpaca_client import alpaca_client
         
         try:
-            # Get market data for intelligent order selection
-            try:
-                market_data = alpaca_client.get_market_data(signal.symbol, limit=5)
-                current_price = float(market_data.iloc[-1]['close']) if not market_data.empty else None
-            except:
-                current_price = None
+            logger.info(f"Executing order for {signal.symbol}: {signal.action} {signal.quantity} shares")
             
-            # Determine order type based on signal confidence and market conditions
-            if signal.confidence > 0.8 and current_price:
-                # High confidence - use limit order with small spread
-                if signal.action == "buy":
-                    limit_price = current_price * 1.002  # 0.2% above market
-                else:
-                    limit_price = current_price * 0.998  # 0.2% below market
-                
-                # Round limit price to valid Alpaca increment (whole cents)
-                limit_price = round(limit_price, 2)
-                
-                # For fractional orders, use market order with DAY time in force
-                is_fractional = signal.quantity != int(signal.quantity)
-                if is_fractional:
-                    logger.info(f"Using market order for fractional quantity {signal.quantity} {signal.symbol}")
-                    return alpaca_client.place_order(
-                        symbol=signal.symbol,
-                        qty=signal.quantity,
-                        side=signal.action,
-                        order_type="market",
-                        time_in_force="day"
-                    )
-                else:
-                    return alpaca_client.place_order(
-                        symbol=signal.symbol,
-                        qty=signal.quantity,
-                        side=signal.action,
-                        order_type="limit",
-                        limit_price=limit_price,
-                        time_in_force="day"
-                    )
+            # For reliability, use market orders for all executions in paper trading
+            # This ensures trades get filled immediately without price concerns
+            order_result = alpaca_client.place_order(
+                symbol=signal.symbol,
+                qty=signal.quantity,
+                side=signal.action,
+                order_type="market",
+                time_in_force="day"
+            )
             
-            elif signal.confidence > 0.6 and signal.stop_loss > 0 and current_price:
-                # Medium confidence with stop loss - use advanced order manager
-                from order_types.advanced_orders import advanced_order_manager, AdvancedOrderRequest
-                
-                # Calculate stop loss and take profit prices (rounded to cents)
-                if signal.action == "buy":
-                    stop_loss_price = round(current_price * (1 - signal.stop_loss), 2) if signal.stop_loss > 0 else None
-                    take_profit_price = round(current_price * (1 + signal.price_target), 2) if signal.price_target > 0 else None
-                else:
-                    stop_loss_price = round(current_price * (1 + signal.stop_loss), 2) if signal.stop_loss > 0 else None
-                    take_profit_price = round(current_price * (1 - signal.price_target), 2) if signal.price_target > 0 else None
-                
-                order_request = AdvancedOrderRequest(
-                    symbol=signal.symbol,
-                    quantity=signal.quantity,
-                    side=signal.action,
-                    order_type="market",
-                    stop_loss_price=stop_loss_price,
-                    take_profit_price=take_profit_price,
-                    reasoning=signal.reasoning or "AI trading signal",
-                    confidence=signal.confidence,
-                    agent_source="workflow_smart_order"
-                )
-                
-                result = await advanced_order_manager.place_advanced_order(order_request)
-                if result.success:
-                    return {"id": result.order_id, "status": result.status, "advanced_order": True}
-                else:
-                    # Fallback to regular market order
-                    logger.warning(f"Advanced order failed for {signal.symbol}: {result.error_message}")
-                    return alpaca_client.place_order(
-                        symbol=signal.symbol,
-                        qty=signal.quantity,
-                        side=signal.action,
-                        order_type="market"
-                    )
-            
-            else:
-                # Low confidence or simple signal - use market order
-                return alpaca_client.place_order(
-                    symbol=signal.symbol,
-                    qty=signal.quantity,
-                    side=signal.action,
-                    order_type="market"
-                )
+            logger.info(f"Order placed successfully: {order_result}")
+            return order_result
                 
         except Exception as e:
             logger.error(f"Smart order execution failed for {signal.symbol}: {e}")

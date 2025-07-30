@@ -111,8 +111,13 @@ class LLMPortfolioManager:
                 if symbol in sentiment_data:
                     sentiment_results[symbol] = sentiment_data[symbol]
                     data = sentiment_data[symbol]
-                    sentiment_str = data.overall_sentiment if hasattr(data, 'overall_sentiment') else data.get('overall_sentiment', 'N/A')
-                    has_earnings = data.has_recent_earnings if hasattr(data, 'has_recent_earnings') else data.get('has_recent_earnings', False)
+                    # Handle both object and dictionary formats
+                    if isinstance(data, dict):
+                        sentiment_str = data.get('overall_sentiment', 'N/A')
+                        has_earnings = data.get('has_recent_earnings', False)
+                    else:
+                        sentiment_str = getattr(data, 'overall_sentiment', 'N/A')
+                        has_earnings = getattr(data, 'has_recent_earnings', False)
                     logger.info(f"Using sentiment for {symbol}: {sentiment_str} (earnings: {'Yes' if has_earnings else 'No'})")
             
             # Fill in missing sentiment data with fresh analysis for key candidates
@@ -227,8 +232,16 @@ class LLMPortfolioManager:
             if not sentiment or not market_info:
                 continue
             
-            # Calculate composite score
-            sentiment_score = sentiment.overall_score
+            # Calculate composite score - handle both object and dictionary formats
+            if isinstance(sentiment, dict):
+                sentiment_score = sentiment.get('overall_score', 0.0)
+                has_recent_earnings = sentiment.get('has_recent_earnings', False)
+                sentiment_confidence = sentiment.get('confidence', 0.5)
+            else:
+                sentiment_score = sentiment.overall_score
+                has_recent_earnings = getattr(sentiment, 'has_recent_earnings', False)
+                sentiment_confidence = sentiment.confidence
+            
             fundamental_score = self._calculate_fundamental_score(market_info)
             technical_score = self._calculate_technical_score(market_info)
             
@@ -238,9 +251,9 @@ class LLMPortfolioManager:
             # Calculate comprehensive score including earnings as one factor
             # Earnings data provides additional confidence and sentiment precision
             earnings_quality_bonus = 0.0
-            if sentiment.has_recent_earnings:
+            if has_recent_earnings:
                 # Modest bonus for having fresh earnings data (better sentiment accuracy)
-                earnings_quality_bonus = 0.1 * sentiment.confidence  # Up to 0.1 bonus based on confidence
+                earnings_quality_bonus = 0.1 * sentiment_confidence  # Up to 0.1 bonus based on confidence
                 logger.debug(f"Earnings data quality bonus for {symbol}: +{earnings_quality_bonus:.3f}")
             
             # Weighted composite score balancing all data sources
@@ -320,23 +333,31 @@ class LLMPortfolioManager:
     def _get_risk_adjustment(
         self, 
         risk_profile: str, 
-        sentiment: ComprehensiveSentiment, 
+        sentiment, 
         market_info: Dict
     ) -> float:
         """Get risk adjustment factor based on profile."""
         
         base_adjustment = 1.0
         
+        # Handle both object and dictionary formats
+        if isinstance(sentiment, dict):
+            sentiment_score = sentiment.get('overall_score', 0.0)
+            confidence = sentiment.get('confidence', 0.5)
+        else:
+            sentiment_score = sentiment.overall_score
+            confidence = sentiment.confidence
+        
         if risk_profile == "conservative":
             # Prefer stocks with high confidence and low volatility
-            if sentiment.confidence > 0.7:
+            if confidence > 0.7:
                 base_adjustment += 0.2
             if abs(market_info.get('change_pct', 0)) < 3:
                 base_adjustment += 0.1
         
         elif risk_profile == "aggressive":
             # Prefer higher growth potential
-            if sentiment.overall_score > 0.3:
+            if sentiment_score > 0.3:
                 base_adjustment += 0.3
             if market_info.get('change_pct', 0) > 3:
                 base_adjustment += 0.2
@@ -345,18 +366,25 @@ class LLMPortfolioManager:
         
         return base_adjustment
     
-    async def _assess_market_regime(self, sentiment_data: Dict[str, ComprehensiveSentiment]) -> MarketRegime:
+    async def _assess_market_regime(self, sentiment_data: Dict) -> MarketRegime:
         """Assess overall market regime from sentiment data."""
         
         if not sentiment_data:
             return MarketRegime.UNCERTAIN
         
-        # Calculate average sentiment across all stocks
-        sentiment_scores = [s.overall_score for s in sentiment_data.values()]
-        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+        # Calculate average sentiment across all stocks - handle both object and dictionary formats
+        sentiment_scores = []
+        confidences = []
         
-        # Calculate confidence
-        confidences = [s.confidence for s in sentiment_data.values()]
+        for s in sentiment_data.values():
+            if isinstance(s, dict):
+                sentiment_scores.append(s.get('overall_score', 0.0))
+                confidences.append(s.get('confidence', 0.5))
+            else:
+                sentiment_scores.append(s.overall_score)
+                confidences.append(s.confidence)
+        
+        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
         avg_confidence = sum(confidences) / len(confidences)
         
         # Determine regime
@@ -481,7 +509,7 @@ class LLMPortfolioManager:
     def _calculate_portfolio_metrics(
         self, 
         allocations: List[StockAllocation], 
-        sentiment_data: Dict[str, ComprehensiveSentiment],
+        sentiment_data: Dict,
         market_regime: MarketRegime
     ) -> Tuple[float, float, float]:
         """Calculate expected return, confidence, and risk."""
@@ -507,15 +535,23 @@ class LLMPortfolioManager:
         for allocation in allocations:
             sentiment = sentiment_data.get(allocation.symbol)
             if sentiment:
+                # Handle both object and dictionary formats
+                if isinstance(sentiment, dict):
+                    sentiment_score = sentiment.get('overall_score', 0.0)
+                    confidence = sentiment.get('confidence', 0.5)
+                else:
+                    sentiment_score = sentiment.overall_score
+                    confidence = sentiment.confidence
+                
                 # Expected return based on sentiment score
-                position_expected_return = sentiment.overall_score * 0.15 * regime_multiplier  # 15% max expected return
+                position_expected_return = sentiment_score * 0.15 * regime_multiplier  # 15% max expected return
                 total_expected_return += position_expected_return * allocation.target_weight
                 
                 # Confidence weighted by position size
-                total_confidence += sentiment.confidence * allocation.target_weight
+                total_confidence += confidence * allocation.target_weight
                 
                 # Risk based on sentiment confidence (lower confidence = higher risk)
-                position_risk = (1.0 - sentiment.confidence) * allocation.target_weight
+                position_risk = (1.0 - confidence) * allocation.target_weight
                 total_risk += position_risk
         
         return total_expected_return, total_confidence, total_risk
@@ -524,13 +560,22 @@ class LLMPortfolioManager:
         self, 
         allocations: List[StockAllocation], 
         market_regime: MarketRegime,
-        sentiment_data: Dict[str, ComprehensiveSentiment]
+        sentiment_data: Dict
     ) -> str:
         """Generate detailed rationale for portfolio construction."""
         
-        # Calculate summary statistics
+        # Calculate summary statistics - handle both object and dictionary formats
         num_positions = len(allocations)
-        avg_sentiment = sum(sentiment_data[a.symbol].overall_score for a in allocations) / max(1, num_positions)
+        sentiment_scores = []
+        for a in allocations:
+            sentiment = sentiment_data.get(a.symbol)
+            if sentiment:
+                if isinstance(sentiment, dict):
+                    sentiment_scores.append(sentiment.get('overall_score', 0.0))
+                else:
+                    sentiment_scores.append(sentiment.overall_score)
+        
+        avg_sentiment = sum(sentiment_scores) / max(1, len(sentiment_scores)) if sentiment_scores else 0.0
         
         # Industry breakdown
         industries = {}
@@ -550,7 +595,10 @@ class LLMPortfolioManager:
                 {
                     "symbol": a.symbol,
                     "weight": a.target_weight,
-                    "sentiment": sentiment_data[a.symbol].overall_score,
+                    "sentiment": (sentiment_data[a.symbol].get('overall_score', 0.0) 
+                                if isinstance(sentiment_data[a.symbol], dict) 
+                                else sentiment_data[a.symbol].overall_score) 
+                               if a.symbol in sentiment_data else 0.0,
                     "industry": a.industry
                 }
                 for a in allocations[:10]  # Top 10 holdings

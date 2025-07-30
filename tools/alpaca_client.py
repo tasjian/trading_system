@@ -362,6 +362,22 @@ class AlpacaClient:
             logger.error(f"Failed to get asset info for {symbol}: {e}")
             raise
     
+    def get_current_price(self, symbol: str) -> float:
+        """Get current price for a symbol."""
+        try:
+            quote = self.api.get_latest_trade(symbol)
+            return float(quote.price)
+        except Exception as e:
+            logger.warning(f"Could not get current price for {symbol}: {e}")
+            # Fallback to market data method
+            try:
+                df = self.get_market_data(symbol, limit=1)
+                if not df.empty:
+                    return float(df['close'].iloc[-1])
+            except Exception as fallback_error:
+                logger.warning(f"Fallback price lookup failed for {symbol}: {fallback_error}")
+            raise ValueError(f"Could not get price for {symbol}")
+    
     def is_market_open(self) -> bool:
         """Check if the market is currently open."""
         try:
