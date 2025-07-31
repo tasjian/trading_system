@@ -213,9 +213,18 @@ class TradingWorkflow:
                 try:
                     logger.info(f"Running comprehensive sentiment analysis for {symbol}")
                     
-                    # Use the comprehensive sentiment analysis that includes earnings
-                    comprehensive_sentiment = await sentiment_agent.analyze_comprehensive_sentiment(symbol)
+                    # Use the comprehensive sentiment analysis that includes earnings with timeout
+                    comprehensive_sentiment = await asyncio.wait_for(
+                        sentiment_agent.analyze_comprehensive_sentiment(symbol),
+                        timeout=30.0  # 30 second timeout per symbol
+                    )
                     return symbol, comprehensive_sentiment
+                except asyncio.TimeoutError:
+                    logger.warning(f"Sentiment analysis timed out for {symbol}")
+                    return symbol, None
+                except asyncio.CancelledError:
+                    logger.warning(f"Sentiment analysis cancelled for {symbol}")
+                    return symbol, None
                 except Exception as e:
                     logger.error(f"Error analyzing sentiment for {symbol}: {e}")
                     return symbol, None
@@ -225,11 +234,18 @@ class TradingWorkflow:
                 batch = symbols_to_analyze[i:i + batch_size]
                 logger.info(f"Processing batch {i//batch_size + 1}: {', '.join(batch)}")
                 
-                # Run batch in parallel
-                batch_results = await asyncio.gather(
-                    *[analyze_symbol_sentiment(symbol) for symbol in batch],
-                    return_exceptions=True
-                )
+                # Run batch in parallel with timeout
+                try:
+                    batch_results = await asyncio.wait_for(
+                        asyncio.gather(
+                            *[analyze_symbol_sentiment(symbol) for symbol in batch],
+                            return_exceptions=True
+                        ),
+                        timeout=60.0  # 60 second timeout for entire batch
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Batch {i//batch_size + 1} timed out after 60 seconds")
+                    batch_results = [(symbol, None) for symbol in batch]
                 
                 # Process batch results
                 for result in batch_results:
@@ -556,14 +572,22 @@ class TradingWorkflow:
             signals = []
             logger.info(f"Converting {len(recommendation.allocations)} allocations to signals")
             
+            # Get available buying power from state
+            available_cash = state["portfolio"].get("buying_power", 0)
+            logger.info(f"Available buying power: ${available_cash:,.2f}")
+            
+            if available_cash <= 0:
+                logger.warning("No buying power available - skipping signal generation")
+                return add_error_to_state(state, "No buying power available for new positions")
+            
             for allocation in recommendation.allocations:
                 logger.info(f"Allocation: {allocation.symbol} weight={allocation.target_weight:.3f} action={allocation.recommended_action}")
                 if allocation.target_weight > 0.01:  # Only meaningful allocations
                     # Import here to avoid circular imports
                     from agents.state import TradingSignal
                 
-                    # Calculate quantity based on target weight
-                    target_value = portfolio_value * allocation.target_weight
+                    # Calculate quantity based on target weight using available cash instead of total portfolio
+                    target_value = available_cash * allocation.target_weight
                 
                     # Get current price from market data or fetch it
                     current_price = None
@@ -585,6 +609,17 @@ class TradingWorkflow:
                     
                     if current_price and current_price > 0:
                         quantity = target_value / current_price
+                        
+                        # Final safety check - ensure total cost doesn't exceed available cash
+                        total_cost = quantity * current_price
+                        if total_cost > available_cash:
+                            quantity = (available_cash * 0.95) / current_price  # Use 95% for safety margin
+                            logger.info(f"Adjusted {allocation.symbol} position to fit available cash: {quantity:.2f} shares (${total_cost:.2f})")
+                        
+                        # Minimum quantity check
+                        if quantity < 1.0:
+                            logger.warning(f"Skipping {allocation.symbol} - insufficient cash for minimum 1 share (need ${current_price:.2f}, have ${available_cash:.2f})")
+                            continue
                     
                         signal = TradingSignal(
                             symbol=allocation.symbol,
@@ -593,7 +628,7 @@ class TradingWorkflow:
                             price_target=current_price * 1.1 if allocation.recommended_action == "buy" else current_price * 0.9,
                             stop_loss=current_price * 0.95 if allocation.recommended_action == "buy" else current_price * 1.05,
                             quantity=quantity,
-                            reasoning=f"LLM Portfolio Construction: {allocation.reasoning}"
+                            reasoning=f"LLM Portfolio Construction: {allocation.reasoning} (${total_cost:.2f} of ${available_cash:.2f} available)"
                         )
                         signals.append(signal)
         
@@ -728,7 +763,7 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     def _calculate_position_size(self, symbol: str, analysis, optimal_weights: Dict[str, float], 
-                               portfolio_value: float) -> Optional[float]:
+                               portfolio_value: float, buying_power: float = None) -> Optional[float]:
         """Calculate appropriate position size based on analysis and portfolio optimization."""
         try:
             if portfolio_value <= 0 or not analysis.indicators:
@@ -739,9 +774,17 @@ class TradingWorkflow:
             if current_price <= 0:
                 return None
             
-            # Base position size from optimal weights
+            # Use buying power if provided, otherwise fall back to portfolio value
+            available_cash = buying_power if buying_power is not None else portfolio_value
+            
+            # Ensure we have sufficient cash
+            if available_cash <= 0:
+                logger.warning(f"No available cash for {symbol}: ${available_cash}")
+                return None
+            
+            # Base position size from optimal weights - use available cash instead of total portfolio
             optimal_weight = optimal_weights.get(symbol, settings.max_position_size / 2)
-            base_position_value = portfolio_value * optimal_weight
+            base_position_value = available_cash * optimal_weight
             
             # Adjust based on signal confidence
             confidence_multiplier = min(1.0, analysis.confidence * 1.5)
@@ -752,9 +795,18 @@ class TradingWorkflow:
             
             # Apply minimum and maximum limits
             min_quantity = 1.0  # Minimum 1 share
-            max_quantity = (portfolio_value * settings.max_position_size) / current_price
+            # Maximum based on available cash, not total portfolio
+            max_quantity = (available_cash * settings.max_position_size) / current_price
             
-            return max(min_quantity, min(quantity, max_quantity))
+            final_quantity = max(min_quantity, min(quantity, max_quantity))
+            
+            # Final safety check - ensure we don't exceed available cash
+            total_cost = final_quantity * current_price
+            if total_cost > available_cash:
+                final_quantity = available_cash / current_price
+                logger.info(f"Adjusted {symbol} position size to fit available cash: {final_quantity:.2f} shares (${total_cost:.2f})")
+            
+            return final_quantity
             
         except Exception as e:
             logger.warning(f"Error calculating position size for {symbol}: {e}")
