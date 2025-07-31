@@ -208,24 +208,55 @@ class StockUniverseFilter:
         signals = []
         logger.info(f"🔍 Checking price movements for {len(symbols)} symbols...")
         
+        # Circuit breaker for yfinance issues
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
         try:
-            # Get current and previous close data
-            batch_size = 50
+            # Get current and previous close data with improved error handling
+            batch_size = 20  # Reduced batch size to avoid rate limits
             for i in range(0, len(symbols), batch_size):
                 batch = symbols[i:i + batch_size]
                 
                 try:
-                    # Get recent price data
-                    tickers = yf.Tickers(' '.join(batch))
+                    # Add delay between batches to avoid rate limiting
+                    if i > 0:
+                        await asyncio.sleep(1.0)  # 1 second delay between batches
+                    
+                    # Get recent price data with retry mechanism
+                    max_retries = 2
+                    tickers = None
+                    
+                    for retry in range(max_retries):
+                        try:
+                            tickers = yf.Tickers(' '.join(batch))
+                            break  # Success, exit retry loop
+                        except Exception as retry_error:
+                            if retry == max_retries - 1:  # Last retry
+                                logger.warning(f"Failed to fetch batch after {max_retries} retries: {retry_error}")
+                                raise retry_error
+                            else:
+                                logger.debug(f"Retry {retry + 1} for batch: {retry_error}")
+                                await asyncio.sleep(2.0)  # Wait before retry
+                    
+                    if not tickers:
+                        continue
                     
                     for symbol in batch:
                         try:
                             ticker = tickers.tickers[symbol]
+                            
+                            # Add timeout for individual ticker data
                             hist = ticker.history(period='2d')
                             
                             if len(hist) >= 2:
                                 prev_close = hist['Close'].iloc[-2]
                                 curr_price = hist['Close'].iloc[-1]
+                                
+                                # Validate price data
+                                if pd.isna(prev_close) or pd.isna(curr_price) or prev_close <= 0 or curr_price <= 0:
+                                    continue
+                                
                                 price_change = (curr_price - prev_close) / prev_close
                                 
                                 if abs(price_change) >= self.price_move_threshold:
@@ -245,8 +276,17 @@ class StockUniverseFilter:
                             continue
                 
                 except Exception as e:
-                    logger.warning(f"Price batch failed: {e}")
+                    consecutive_errors += 1
+                    logger.warning(f"Price batch failed: {e} ({consecutive_errors}/{max_consecutive_errors})")
+                    
+                    # Circuit breaker - stop processing if too many consecutive errors
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(f"Circuit breaker triggered: {consecutive_errors} consecutive yfinance errors. Skipping remaining price analysis.")
+                        break
                     continue
+                else:
+                    # Reset error counter on successful batch
+                    consecutive_errors = 0
                 
                 # Brief pause between batches
                 await asyncio.sleep(0.2)
