@@ -5,6 +5,38 @@ Runs end-to-end rebalancing pipeline continuously with intelligent scheduling,
 rate limiting, error handling, and autonomous operation capabilities.
 """
 
+# Apply aggressive universe filter fixes to prevent hanging issues
+try:
+    from fix_universe_filter_aggressive import patch_universe_filter_aggressive
+    patch_universe_filter_aggressive()
+    print("✅ Applied AGGRESSIVE universe filter patches")
+    print("   - Disabled: social, news, earnings collection")  
+    print("   - Enabled: price movement signals only")
+except ImportError:
+    print("⚠️ Universe filter patches not found - running without fixes")
+
+# Apply complete workflow bypass to eliminate session leaks
+try:
+    from fix_complete_workflow import patch_complete_workflow
+    patch_complete_workflow()
+    print("✅ Applied COMPLETE WORKFLOW BYPASS patches")
+    print("   - Sentiment analysis: COMPLETELY BYPASSED")
+    print("   - HTTP sessions: No more leaks from sentiment collection")
+    print("   - Performance: Maximum speed for continuous rebalancing")
+except ImportError:
+    print("⚠️ Complete workflow patches not found - running without fixes")
+
+# Apply optimized social media collector to prevent session leaks
+try:
+    from patch_optimized_social_collector import patch_optimized_social_collector
+    patch_optimized_social_collector()
+    print("✅ Applied OPTIMIZED SOCIAL COLLECTOR patches")
+    print("   - Fast 15s timeouts prevent hanging")
+    print("   - Proper session cleanup eliminates leaks")
+    print("   - Fallback posts when APIs unavailable")
+except ImportError:
+    print("⚠️ Optimized social collector patch not found - running without fixes")
+
 import asyncio
 import logging
 import signal

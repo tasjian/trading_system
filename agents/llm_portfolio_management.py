@@ -83,7 +83,7 @@ class LLMPortfolioManager:
         logger.info(f"Portfolio value: ${portfolio_value:,.2f}, Risk profile: {risk_profile}")
         
         # Step 1: Get diversified stock selection from enhanced screener
-        diversified_selection = enhanced_screener.get_diversified_stock_selection(max_positions)
+        diversified_selection = await enhanced_screener.get_diversified_stock_selection(max_positions)
         
         # Flatten the selection into a candidate list
         screener_symbols = []
@@ -92,19 +92,47 @@ class LLMPortfolioManager:
         
         # Include symbols with sentiment data alongside screener picks for comprehensive analysis
         all_candidate_symbols = set(screener_symbols)
+        
+        # Also include provided candidate symbols (from universe filter)
+        all_candidate_symbols.update(candidate_symbols)
+        
         if sentiment_data:
             # Add any symbols with comprehensive sentiment data to the analysis
-            sentiment_symbols = [s for s in sentiment_data.keys() if s in candidate_symbols]
+            sentiment_symbols = list(sentiment_data.keys())
             all_candidate_symbols.update(sentiment_symbols)
             logger.info(f"Including {len(sentiment_symbols)} symbols with sentiment data: {sentiment_symbols}")
         
-        # Limit to available candidates
-        final_candidates = [s for s in all_candidate_symbols if s in candidate_symbols][:max_positions]
+        # Create final candidates list (prioritize provided candidates, then screener picks)
+        final_candidates = []
+        
+        # First, add provided candidates (from universe filter - these have trading signals)
+        for symbol in candidate_symbols[:max_positions//2]:
+            if symbol not in final_candidates:
+                final_candidates.append(symbol)
+        
+        # Then add screener picks to fill remaining slots
+        for symbol in screener_symbols:
+            if len(final_candidates) >= max_positions:
+                break
+            if symbol not in final_candidates:
+                final_candidates.append(symbol)
+        
+        # Ensure we have at least some candidates
+        if not final_candidates and candidate_symbols:
+            final_candidates = candidate_symbols[:max_positions]
+        elif not final_candidates and screener_symbols:
+            final_candidates = screener_symbols[:max_positions]
         
         logger.info(f"Selected {len(final_candidates)} candidates for analysis")
         
         # Step 2: Use provided sentiment data or analyze sentiment for all candidates
-        if sentiment_data:
+        # Handle case where sentiment_data might be a coroutine
+        import inspect
+        if inspect.iscoroutine(sentiment_data):
+            logger.info("Sentiment data is a coroutine, awaiting it...")
+            sentiment_data = await sentiment_data
+        
+        if sentiment_data and isinstance(sentiment_data, dict):
             logger.info(f"Using provided sentiment data for {len(sentiment_data)} symbols")
             sentiment_results = {}
             for symbol in final_candidates:
@@ -372,6 +400,16 @@ class LLMPortfolioManager:
         if not sentiment_data:
             return MarketRegime.UNCERTAIN
         
+        # Handle case where sentiment_data might be a coroutine
+        import inspect
+        if inspect.iscoroutine(sentiment_data):
+            logger.warning("Sentiment data is a coroutine, awaiting it...")
+            sentiment_data = await sentiment_data
+        
+        if not sentiment_data or not isinstance(sentiment_data, dict):
+            logger.warning("Invalid sentiment data format, returning UNCERTAIN regime")
+            return MarketRegime.UNCERTAIN
+        
         # Calculate average sentiment across all stocks - handle both object and dictionary formats
         sentiment_scores = []
         confidences = []
@@ -381,8 +419,8 @@ class LLMPortfolioManager:
                 sentiment_scores.append(s.get('overall_score', 0.0))
                 confidences.append(s.get('confidence', 0.5))
             else:
-                sentiment_scores.append(s.overall_score)
-                confidences.append(s.confidence)
+                sentiment_scores.append(getattr(s, 'overall_score', 0.0))
+                confidences.append(getattr(s, 'confidence', 0.5))
         
         avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
         avg_confidence = sum(confidences) / len(confidences)

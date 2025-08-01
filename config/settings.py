@@ -77,6 +77,9 @@ class TradingSettings(BaseSettings):
     twitter_api_secret: Optional[str] = Field(default=None, env="TWITTER_API_SECRET")
     twitter_bearer_token: Optional[str] = Field(default=None, env="TWITTER_BEARER_TOKEN")
     
+    # RapidAPI Configuration for Enhanced Twitter Access
+    rapidapi_key: Optional[str] = Field(default=None, env="RAPIDAPI_KEY")
+    
     # Redis Configuration for Inter-Agent Communication
     redis_host: str = Field(default="localhost", env="REDIS_HOST")
     redis_port: int = Field(default=6379, env="REDIS_PORT")

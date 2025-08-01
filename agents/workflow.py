@@ -479,6 +479,27 @@ class TradingWorkflow:
             error_msg = f"Signal Generation Agent error: {e}"
             logger.error(error_msg)
             return add_error_to_state(state, error_msg)
+        
+        finally:
+            # Ensure cleanup of resources
+            try:
+                await self._cleanup_signal_generation_resources()
+            except Exception as cleanup_error:
+                logger.warning(f"Cleanup warning: {cleanup_error}")
+    
+    async def _cleanup_signal_generation_resources(self):
+        """Clean up resources used in signal generation."""
+        try:
+            from core.market_intelligence import cleanup_market_intelligence
+            await cleanup_market_intelligence()
+        except Exception as e:
+            logger.debug(f"Market intelligence cleanup: {e}")
+        
+        try:
+            from core.social_media_collector import SocialMediaCollector
+            # Social media collector cleanup is handled in the collector itself
+        except Exception as e:
+            logger.debug(f"Social media cleanup: {e}")
     
     async def _llm_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """LLM-enhanced signal generation with sentiment integration."""
@@ -1125,6 +1146,43 @@ class TradingWorkflow:
                 side=signal.action,
                 order_type="market"
             )
+    
+    async def llm_portfolio_agent(self, state: TradingState, config: Dict[str, Any]) -> TradingState:
+        """LLM-powered portfolio management agent."""
+        logger.info("🤖 Running LLM Portfolio Agent")
+        
+        try:
+            # Import the LLM portfolio management module
+            from agents.llm_portfolio_management import construct_llm_portfolio
+            
+            # Get current portfolio state
+            current_positions = state.get("positions", {})
+            portfolio_value = state.get("portfolio", {}).get("equity", 10000)
+            
+            # Get available candidate symbols
+            candidate_symbols = state.get("filtered_symbols", state.get("watchlist", ["AAPL", "MSFT", "GOOGL"]))
+            
+            # Generate portfolio recommendations
+            recommendations = await construct_llm_portfolio(
+                candidate_symbols=candidate_symbols[:20],  # Limit for testing
+                portfolio_value=portfolio_value,
+                risk_profile="moderate",
+                max_positions=5,
+                sentiment_data=state.get("sentiment_data", {})
+            )
+            
+            # Update state with LLM recommendations
+            state["llm_recommendations"] = recommendations
+            state["llm_analysis_complete"] = True
+            
+            logger.info(f"✅ LLM Portfolio Agent completed with {len(recommendations.allocations)} recommendations")
+            
+        except Exception as e:
+            logger.error(f"❌ LLM Portfolio Agent error: {e}")
+            state["llm_analysis_complete"] = False
+            state["errors"].append(f"LLM Portfolio Agent: {str(e)}")
+        
+        return update_state_timestamp(state)
 
 # Global workflow instance
 trading_workflow = TradingWorkflow()
