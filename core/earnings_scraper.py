@@ -113,6 +113,18 @@ class EarningsCallScraper:
             logger.error(f"Error searching transcripts for {symbol}: {e}")
             return []
     
+    async def get_latest_transcript(self, symbol: str) -> Optional[EarningsTranscript]:
+        """Get the latest earnings transcript for a symbol."""
+        try:
+            transcripts = await self.search_transcripts(symbol, days_back=90)
+            if transcripts:
+                # Return the most recent transcript
+                return transcripts[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting latest transcript for {symbol}: {e}")
+            return None
+    
     async def cleanup(self):
         """Clean up resources."""
         try:

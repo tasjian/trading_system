@@ -188,6 +188,12 @@ class FastSessionManager:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=self.timeout)
             self._closed = False
+            # Register with global session manager for cleanup
+            try:
+                from utils.session_cleanup import global_session_manager
+                global_session_manager.register_session(self._session)
+            except:
+                pass  # Ignore if global session manager not available
         return self._session
     
     async def get(self, url: str, **kwargs):

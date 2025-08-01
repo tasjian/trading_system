@@ -95,6 +95,29 @@ class AlpacaClient:
             logger.error(f"Failed to get positions: {e}")
             raise
     
+    def get_asset_info(self, symbol: str) -> Dict:
+        """Get asset information including fractionability."""
+        try:
+            asset = self.api.get_asset(symbol)
+            return {
+                "symbol": asset.symbol,
+                "name": asset.name,
+                "tradable": asset.tradable,
+                "fractionable": asset.fractionable,
+                "min_trade_increment": asset.min_trade_increment,
+                "price_increment": asset.price_increment
+            }
+        except Exception as e:
+            logger.error(f"Failed to get asset info for {symbol}: {e}")
+            # Return safe defaults
+            return {
+                "symbol": symbol,
+                "tradable": True,
+                "fractionable": False,  # Safe default - assume not fractionable
+                "min_trade_increment": "1",
+                "price_increment": "0.01"
+            }
+    
     def get_orders(self, status: str = "all", limit: int = 100) -> List[Dict]:
         """Get orders by status."""
         try:

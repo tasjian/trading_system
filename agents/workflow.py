@@ -1118,20 +1118,39 @@ class TradingWorkflow:
             }
 
     async def _execute_smart_order(self, signal, state: TradingState) -> Dict:
-        """Execute order with intelligent order type selection."""
+        """Execute order with intelligent order type selection and fractional handling."""
         from tools.alpaca_client import alpaca_client
         
         try:
             logger.info(f"Executing order for {signal.symbol}: {signal.action} {signal.quantity} shares")
             
+            # Handle fractional shares properly
+            is_fractional = signal.quantity % 1 != 0
+            
+            # Get asset info to check fractionability
+            try:
+                asset_info = alpaca_client.get_asset_info(signal.symbol)
+                is_fractionable = asset_info.get("fractionable", False)
+            except:
+                # Default to assuming non-fractionable if we can't get asset info
+                is_fractionable = False
+            
+            # Adjust quantity if fractional but asset isn't fractionable
+            adjusted_quantity = signal.quantity
+            if is_fractional and not is_fractionable:
+                adjusted_quantity = int(signal.quantity)
+                logger.info(f"Rounded {signal.symbol} quantity from {signal.quantity} to {adjusted_quantity} (non-fractionable asset)")
+            
+            # Use proper time_in_force for fractional orders
+            time_in_force = "DAY" if (adjusted_quantity % 1 != 0) else "day"
+            
             # For reliability, use market orders for all executions in paper trading
-            # This ensures trades get filled immediately without price concerns
             order_result = alpaca_client.place_order(
                 symbol=signal.symbol,
-                qty=signal.quantity,
+                qty=adjusted_quantity,
                 side=signal.action,
                 order_type="market",
-                time_in_force="day"
+                time_in_force=time_in_force
             )
             
             logger.info(f"Order placed successfully: {order_result}")
@@ -1139,13 +1158,20 @@ class TradingWorkflow:
                 
         except Exception as e:
             logger.error(f"Smart order execution failed for {signal.symbol}: {e}")
-            # Fallback to basic market order
-            return alpaca_client.place_order(
-                symbol=signal.symbol,
-                qty=signal.quantity,
-                side=signal.action,
-                order_type="market"
-            )
+            # Fallback to whole shares with proper time_in_force
+            try:
+                fallback_qty = int(signal.quantity)  # Round down to whole shares
+                logger.info(f"Fallback: using whole shares ({fallback_qty}) for {signal.symbol}")
+                return alpaca_client.place_order(
+                    symbol=signal.symbol,
+                    qty=fallback_qty,
+                    side=signal.action,
+                    order_type="market",
+                    time_in_force="day"
+                )
+            except Exception as fallback_error:
+                logger.error(f"Fallback order also failed for {signal.symbol}: {fallback_error}")
+                raise fallback_error
     
     async def llm_portfolio_agent(self, state: TradingState, config: Dict[str, Any]) -> TradingState:
         """LLM-powered portfolio management agent."""

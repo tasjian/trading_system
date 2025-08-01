@@ -252,7 +252,8 @@ class SentimentAgent:
                 # Combine posts into text for analysis
                 combined_text = ""
                 for post in posts[:20]:  # Limit to 20 posts per platform
-                    combined_text += f"{post.content}\n"
+                    content = post.get('content', '') if isinstance(post, dict) else post.content
+                    combined_text += f"{content}\n"
                 
                 if combined_text.strip():
                     sentiment = await self.llm_analyzer.analyze_text(combined_text, "social_media")
