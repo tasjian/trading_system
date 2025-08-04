@@ -1,0 +1,47 @@
+# Orchestration
+langchain==0.2.16
+langchain_core==0.2.41
+langchain_community==0.2.17
+langchain_nvidia_ai_endpoints==0.2.2
+langchain_openai==0.1.25
+langchainhub==0.1.21
+langchain_unstructured==0.1.2
+langgraph==0.2.32
+langserve==0.2.3
+unstructured==0.15.13
+unstructured[pdf]
+wikipedia==1.4.0
+
+## Already provided in our base image
+# torch
+# torchvision
+# torchaudio
+torch==2.4.0 --extra-index-url https://download.pytorch.org/whl/cu124
+torchvision==0.19.0 --extra-index-url https://download.pytorch.org/whl/cu124
+torchaudio==2.4.0 --extra-index-url https://download.pytorch.org/whl/cu124
+
+accelerate==0.33.0
+aiostream==0.6.2
+lightning==2.4.0
+vllm==0.6.3.post1
+
+transformers==4.45.2
+bertviz==1.4.0
+datasets==2.20.0
+diffusers==0.29.2
+hf_transfer==0.1.8
+huggingface==0.0.1
+huggingface_hub==0.24.5
+openai-whisper==20240930
+seaborn==0.13.2
+sentence-transformers==3.0.1
+tiktoken==0.7.0
+xformers==0.0.27.post2
+
+# plotting/math
+fsspec==2024.2.0
+ipykernel==6.29.3
+ipywidgets==8.1.5
+numexpr==2.10.1
+numpy==1.26.4
+plotly==5.24.1

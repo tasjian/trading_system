@@ -1,0 +1,23 @@
+{
+  "dataset": "ICIJ Offshore Leaks (Mock Data)",
+  "description": "Simulated offshore financial data based on ICIJ Offshore Leaks structure",
+  "total_entities": 500,
+  "total_officers": 300,
+  "total_relationships": 800,
+  "total_addresses": 200,
+  "data_sources": [
+    "Panama Papers",
+    "Paradise Papers",
+    "Pandora Papers",
+    "Offshore Leaks",
+    "Bahamas Leaks"
+  ],
+  "jurisdictions": [
+    "Bahamas",
+    "Panama",
+    "British Virgin Islands",
+    "Bermuda",
+    "Cayman Islands"
+  ],
+  "created": "2025-06-30T16:34:44.542046"
+}

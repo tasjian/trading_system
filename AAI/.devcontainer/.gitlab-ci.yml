@@ -1,0 +1,25 @@
+image: docker
+
+variables:
+#  DOCKER_DRIVER: overlay2  # May be needed, see notes below
+  NGC_REGISTRY: "nvcr.io/phvgaorklcix/dpse/rag-eval-gtc2025"  # Replace with your registry
+
+stages:  # Defines the pipeline's stages
+  - build
+
+build:  # Build stage
+  stage: build
+  tags:
+    - os/linux
+    - perflab
+    - ran-as/container
+    - type/docker
+  services:
+    - docker:dind  # 'docker in docker' service for building within the pipeline
+  script:
+    - docker login nvcr.io -u \$oauthtoken -p $NGC_API_KEY
+    - docker build -t $NGC_REGISTRY:$CI_COMMIT_SHA .
+    - docker push $NGC_REGISTRY:$CI_COMMIT_SHA
+    - docker tag $NGC_REGISTRY:$CI_COMMIT_SHA $NGC_REGISTRY:latest
+    - docker push $NGC_REGISTRY:latest
+

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Live Graph & Logs</title>
+
+  <style>
+    /* General Styles */
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+    }
+
+    /* Layout container */
+    #container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Graph Section */
+    #graph {
+      flex-grow: 3;
+      height: 75%;
+      border-bottom: 2px solid #ccc;
+      background: white;
+    }
+
+    /* Log Formatting */
+    .log-entry {
+      margin: 5px 0;
+      padding: 8px;
+      border-left: 5px solid #9c9c9c;
+      background: #c5c5c5;
+      border-radius: 3px;
+      white-space: pre-wrap;
+      font-family: monospace;
+    }
+
+    .log-entry.values {
+      background: #fce9ff;
+      border-left: 5px solid #cc00ff;
+    }
+
+    .log-entry.debug {
+      background: #ffede9;
+      border-left: 5px solid #FFC47F;
+      display: none;
+    }
+
+    .log-entry.messages {
+      background: #e9fff3;
+      border-left: 5px solid #00ff59;
+    }
+
+    .log-entry.updates {
+      background: #e9f0ff;
+      border-left: 5px solid #007bff;
+    }
+
+    /* Hover tooltip styles */
+    .vis-tooltip {
+      position: absolute;
+      background-color: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: none;
+      z-index: 1000;
+    }
+
+    /* Floating Log Window */
+    #logs-container {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      width: 400px;
+      height: 250px;
+      background: white;
+      border: 2px solid #ccc;
+      box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.2);
+      resize: both;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      z-index: 1000;
+    }
+
+    /* Header Bar for Dragging */
+    #logs-header {
+      background: #007bff;
+      color: white;
+      padding: 5px;
+      cursor: grab;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Log Content */
+    #logs {
+      flex-grow: 1;
+      overflow-y: auto;
+      padding: 10px;
+      font-size: 0.9em;
+      background: white;
+    }
+
+    /* Close Button */
+    #close-logs {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    #close-logs:hover {
+      color: #ffcccb;
+    }
+
+    /* Resize Handle */
+    #logs-container::after {
+      content: " ";
+      width: 12px;
+      height: 12px;
+      background: #ccc;
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      cursor: nwse-resize;
+      border-radius: 2px;
+    }
+  </style>
+
+  <!-- Socket.IO client -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Vis.js library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+</head>
+
+<body>
+  <div id="container">
+    <div id="graph"></div>
+    <!-- Floating Logs Container -->
+    <div id="logs-container">
+      <div id="logs-header">
+        <span>Logs</span>
+        <button id="close-logs">✖</button>
+      </div>
+      <div id="logs"></div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+
+    // --- Graph Setup ---
+    const nodes = new vis.DataSet([]);
+    const edges = new vis.DataSet([]);
+
+    const container = document.getElementById('graph');
+    const data = { nodes: nodes, edges: edges };
+
+    const options = {
+      layout: {
+        hierarchical: {
+          direction: "UD",
+          sortMethod: "directed"
+        }
+      },
+      physics: true,
+      interaction: {
+        hover: true,
+        dragNodes: true,
+        dragView: true,
+        zoomView: true
+      },
+      nodes: {
+        shape: 'box',
+        color: {
+          border: '#007bff',
+          background: '#e9f0ff'
+        },
+        font: {
+          face: 'Arial',
+          size: 14,
+          color: '#000'
+        }
+      },
+      edges: {
+        arrows: 'to',
+        smooth: {
+          type: 'dynamic'
+        }
+      },
+      groups: {
+        debug: { color: { background: '#FFC47F', border: '#007bff' } },
+        values: { color: { background: '#FF7FFB', border: '#007bff' } },
+        updates: { color: { background: '#7FBBFF', border: '#007bff' } },
+        messages: { color: { background: '#7FFF84', border: '#007bff' } },
+      }
+    };
+
+    const network = new vis.Network(container, data, options);
+
+    let nodeCounter = 0;
+    let lastNodeId = null;
+    let lastEdgeId = null;
+
+    // --- Make Logs Draggable ---
+    const logsContainer = document.getElementById("logs-container");
+    const logsHeader = document.getElementById("logs-header");
+    const closeLogsButton = document.getElementById("close-logs");
+
+    let isDragging = false;
+    let offsetX, offsetY;
+
+    logsHeader.addEventListener("mousedown", (e) => {
+      isDragging = true;
+      offsetX = e.clientX - logsContainer.getBoundingClientRect().left;
+      offsetY = e.clientY - logsContainer.getBoundingClientRect().top;
+      logsContainer.style.cursor = "grabbing";
+    });
+
+    document.addEventListener("mousemove", (e) => {
+      if (isDragging) {
+        logsContainer.style.left = e.clientX - offsetX + "px";
+        logsContainer.style.top = e.clientY - offsetY + "px";
+      }
+    });
+
+    document.addEventListener("mouseup", () => {
+      isDragging = false;
+      logsContainer.style.cursor = "default";
+    });
+
+    // --- Close Logs Button ---
+    closeLogsButton.addEventListener("click", () => {
+      logsContainer.style.display = "none";
+    });
+
+    function addLog(mode, msgRaw, nodeId) {
+      const logsDiv = document.getElementById('logs');
+      const logEntry = document.createElement('div');
+      logEntry.classList.add('log-entry', mode);
+
+      // Assign a unique ID to the log entry (linked to the graph node)
+      logEntry.id = "log-" + nodeId;
+
+      // Properly format log output with collapsible details
+      logEntry.innerHTML = `<details><summary><b>[${mode.toUpperCase()}]</b></summary><pre>${msgRaw}</pre></details>`;
+
+      logsDiv.appendChild(logEntry);
+      logsDiv.scrollTop = logsDiv.scrollHeight; // Auto-scroll
+    }
+
+
+    function prettyPrintPythonDictString(details) {
+      try {
+        if (typeof details === "object") {
+          return JSON.stringify(details, null, 2);
+        }
+        let parsedObj = JSON.parse(details);
+        return JSON.stringify(parsedObj, null, 2);
+      } catch (error) {
+        console.error("Parsing error:", error);
+        return JSON.stringify(details, null, 2);
+      }
+    }
+
+    function addGraphNode(label, group = 'default', details = {}) {
+      nodeCounter++;
+      const nodeId = 'node' + nodeCounter;
+
+      nodes.add({
+        id: nodeId,
+        label: label,
+        group: group,
+        title: prettyPrintPythonDictString(details), // Tooltip on hover
+        logId: "log-" + nodeId // Store reference to log entry
+      });
+
+      return nodeId;
+    }
+
+    function addGraphEdge(fromId, toId) {
+      lastEdgeId = `edge-${fromId}-${toId}`;
+      edges.add({ id: lastEdgeId, from: fromId, to: toId, arrows: 'to' });
+    }
+
+    // --- Handle Updates ---
+    socket.on('update', function (payload) {
+      const { mode, data: msgRaw } = payload;
+      const msgData = JSON.parse(msgRaw);
+
+      let label = mode;
+      let group = mode;
+      let details = msgData;
+
+      if (mode === 'updates') {
+        label = 'Update (' + Object.keys(msgData).join(", ") + ")";
+      } else if (mode === 'values') {
+        label = 'Value (' + Object.keys(msgData).join(", ") + ")";
+      } else if (mode === 'messages') {
+        label = 'Messages (meta)';
+      }
+
+      // Create a major node
+      const currentNodeId = addGraphNode(label, group, details);
+      if (lastNodeId !== null) {
+        addGraphEdge(lastNodeId, currentNodeId);
+      }
+      if (mode !== "debug") {
+        lastNodeId = currentNodeId;
+      }
+      addLog(mode, msgRaw, currentNodeId);
+    });
+
+    // --- Handle Clear Events ---
+    socket.on('clear', function () {
+      addLog("CLEAR", { message: "Logs and graph reset" });
+      document.getElementById('logs').innerHTML = '';
+      nodes.clear();
+      edges.clear();
+      nodeCounter = 0;
+      lastNodeId = null;
+      lastEdgeId = null;
+    });
+
+    // --- Hover Tooltip ---
+    const tooltip = document.createElement('div');
+    tooltip.className = 'vis-tooltip';
+    document.body.appendChild(tooltip);
+
+    network.on("hoverNode", function (params) {
+      const node = nodes.get(params.node);
+      if (node) {
+        tooltip.textContent = node.title;
+        tooltip.style.display = "block";
+        tooltip.style.left = `${event.pageX + 10}px`;
+        tooltip.style.top = `${event.pageY + 10}px`;
+      }
+    });
+
+    network.on("blurNode", function () {
+      tooltip.style.display = "none";
+    });
+
+    network.on("click", function (params) {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+        const node = nodes.get(nodeId);
+
+        if (node && node.logId) {
+          const logEntry = document.getElementById(node.logId);
+
+          if (logEntry) {
+            // Scroll to the log entry
+            logEntry.scrollIntoView({ behavior: "smooth", block: "center" });
+
+            // Temporarily highlight it
+            logEntry.style.backgroundColor = "#ffd700"; // Highlight yellow
+            setTimeout(() => {
+              logEntry.style.backgroundColor = ""; // Reset after 1 second
+            }, 1000);
+          }
+        }
+      }
+    });
+
+    // --- Resize Fix ---
+    window.addEventListener("resize", () => {
+      setTimeout(() => network.redraw(), 100);
+    });
+  </script>
+</body>
+
+</html>
