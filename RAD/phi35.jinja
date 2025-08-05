@@ -1,0 +1,21 @@
+{%- for message in messages -%}
+    {{'<|' + message['role'] + '|>' + '\n' + message['content'] + '<|end|>\n' }}
+{% endfor %}
+{%- if add_generation_prompt and messages[-1]['role'] != 'assistant' -%}
+    {{- '<|assistant|>\n' -}}
+{%- endif -%}
+{# 
+{{ bos_token }}
+{%- for message in loop_messages -%}
+    {%- if message['role'] == 'system' -%}
+    {{ "<|system|>\n" }}{{ message['content'].strip() }}{{ "<|end|>" }}
+    {%- elif message['role'] == 'user' -%}
+    {{ "<|user|>\n" }}{{ message['content'].strip() }}{{ "<|end|>" }}
+    {%- else -%}
+    {{ "<|assistant|>\n" }}{{ message['content'].strip() }}{{ "<|end|>" }}
+    {%- endif -%}
+    {%- if loop.last and add_generation_prompt -%}
+    {{ "<|assistant|>\n" }}
+    {%- endif -%}
+{% endfor %}
+#}

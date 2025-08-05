@@ -1,0 +1,121 @@
+### NVIDIA DLI Course: Accelerate AI Weather Models and 3D Visualizations
+
+# Introduction
+
+This notebook will guide you through the key concepts of NVIDIA Earth-2, Neural Radiance Fields (NeRFs), and 3D Gaussian Splatting. By the end, you'll be able to:
+- Render complex 3D scenes using NeRFs.
+- Efficiently render large datasets with 3D Gaussian Splatting.
+- Use NVIDIA Earth-2 to accelerate AI weather modeling.
+
+Let's get started!
+
+## 1. Setup Environment
+
+```python
+# Install necessary libraries (uncomment the lines if running locally)
+# !pip install torch torchvision torchaudio
+# !pip install numpy matplotlib opencv-python-headless
+
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+```
+
+## 2. Introduction to Neural Radiance Fields (NeRFs)
+
+NeRFs enable the synthesis of photorealistic 3D scenes from sparse 2D images by learning a volumetric scene representation.
+
+```python
+# Sample code to define a simple NeRF-like function
+
+def nerf_function(xyz):
+    """Simple function simulating NeRF behavior."""
+    return np.exp(-np.linalg.norm(xyz, axis=-1))
+
+# Generate a sample 3D coordinate grid
+xyz = np.random.rand(100, 3) * 2 - 1  # Values between -1 and 1
+nerf_values = nerf_function(xyz)
+
+# Visualizing the NeRF function output
+plt.scatter(xyz[:, 0], xyz[:, 1], c=nerf_values, cmap='viridis')
+plt.colorbar(label='Intensity')
+plt.xlabel('X-axis')
+plt.ylabel('Y-axis')
+plt.title('NeRF Function Output')
+plt.show()
+```
+
+## 3. Introduction to 3D Gaussian Splatting
+
+3D Gaussian Splatting allows efficient rendering of large point cloud datasets, commonly used for weather and environmental simulations.
+
+```python
+# Simulating 3D Gaussian Splatting
+
+def gaussian_splatting(points, sigma=0.1):
+    """Apply Gaussian smoothing to a 3D point cloud."""
+    return np.exp(-np.linalg.norm(points, axis=-1) / (2 * sigma**2))
+
+# Generating a synthetic 3D point cloud
+points = np.random.randn(500, 3) * 0.5
+splat_values = gaussian_splatting(points)
+
+# Visualizing the Gaussian splatting effect
+fig = plt.figure(figsize=(6, 6))
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=splat_values, cmap='coolwarm')
+ax.set_title('3D Gaussian Splatting')
+plt.show()
+```
+
+## 4. Using NVIDIA Earth-2 for AI Weather Modeling
+
+NVIDIA Earth-2 provides acceleration for AI weather models. Below is an interactive example where you can modify weather parameters.
+
+```python
+# Simulating a simplified AI weather model
+from ipywidgets import interact
+
+def simple_weather_model(temperature, humidity, wind_speed):
+    """A basic model for simulating temperature impact on climate."""
+    return temperature * 0.5 + humidity * 0.3 + wind_speed * 0.2
+
+interact(simple_weather_model, temperature=(0, 50, 5), humidity=(0, 100, 10), wind_speed=(0, 50, 5));
+```
+
+## 5. Real-World Applications
+
+Case studies will be covered in the workshop, but here’s an example of how these methods can be applied in climate simulations.
+
+```python
+# Combining NeRFs, Gaussian Splatting, and AI weather models
+
+def combined_model(xyz, temp, humidity, wind):
+    """Simulates a weather model integrating NeRFs and Gaussian Splatting."""
+    nerf_effect = nerf_function(xyz)
+    splatting_effect = gaussian_splatting(xyz)
+    weather_effect = simple_weather_model(temp, humidity, wind)
+    return nerf_effect * splatting_effect * weather_effect
+
+# Sample combined simulation
+xyz_sample = np.random.rand(200, 3) * 2 - 1
+weather_output = combined_model(xyz_sample, temp=30, humidity=60, wind=15)
+
+# Visualization
+plt.scatter(xyz_sample[:, 0], xyz_sample[:, 1], c=weather_output, cmap='plasma')
+plt.colorbar(label='Simulation Output')
+plt.xlabel('X-axis')
+plt.ylabel('Y-axis')
+plt.title('Combined AI Weather Model Output')
+plt.show()
+```
+
+## Conclusion
+
+In this notebook, we explored:
+- NeRFs for rendering 3D scenes.
+- 3D Gaussian Splatting for efficient large dataset visualization.
+- NVIDIA Earth-2’s role in AI weather modeling.
+
+Continue exploring these topics and apply them to real-world weather simulations!

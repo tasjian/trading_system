@@ -1,0 +1,134 @@
+# (1) Use this file for docker runtime configurations that are common to both
+# development and deployment.
+
+# `version : '2.3'` lets us use the `runtime=nvidia` configuration so that our
+# containers can interact with the GPU(s).
+version: '2.3'
+
+## Volume shared by frontend and assessment microservices. Frontend must write a file 
+## for the assessment microservice to give you credit. Good luck!!
+volumes:
+  assessment_results:
+
+# `services` defines the containers you want to run. There will always be at least 2:
+# a `lab` container for your content, and `nginx` as a reverse proxy.
+#
+# Commonly, a third container for data loading is used here, and sometimes, even more
+# containers for other services like assessments, remote desktop, tensorboard, etc.
+services:
+
+# (2) To prevent name collisions, be sure to set the course id as project name in `.env`
+
+  ## Deliver jupyter labs interface for students.
+  lab:
+    init: true
+    privileged: true
+    runtime: nvidia
+    shm_size: 128gb
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    volumes:
+      - ./notebooks/:/dli/task/
+      - ./nim-cache:/dli/task/nim-cache
+      - ./model-store:/dli/task/model-store
+      ## Below lines give access to host docker.
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # - /var/lib/docker/:/var/lib/docker/
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - HF_HUB_ENABLE_HF_TRANSFER=TRUE
+      - TRANSFORMERS_VERBOSITY=error
+      - JUPYTER_TOKEN
+
+  ## Deliver a server to interface with host docker orchestration
+  docker_router:
+    container_name: docker_router
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  ## Give access to host docker
+      - ./assessment:/app/assessment
+      - ./notebooks:/app/notebooks
+    ports:
+      - "8070:8070"
+
+  # This container is required to reverse proxy content. It expects a config
+  # file at `/etc/nginx/nginx.conf` which we provide in this repo and mount.
+  #
+  # All services should be proxied through nginx, and all should be accessible
+  # on port 80, for compatibility with restricted corporate networks and to
+  # be compatible with upcoming course requirements.
+  nginx:
+    image: nginx:1.15.12-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - lab
+
+  nim:
+    user: root # you don't have to be the root, but need to specify some user
+    container_name: nim 
+    image: nvcr.io/nim/meta/llama-3.1-8b-instruct:1.1.2
+    runtime: nvidia
+    shm_size: 16gb
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=1
+      # Necessary since we are running as root on potentially-multiple GPUs
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - end_id
+    volumes:
+      - ./nim-cache/nim:/opt/nim/.cache
+    env_file:
+      - .env  ## pass in your environment variable through file (i.e. NGC_API_KEY)
+
+  ## Deliver your llm_client microservice
+  llm_client:
+    container_name: llm_client
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env  ## pass in your environment variable (i.e. NVIDIA_API_KEY)
+
+  chatbot: 
+    container_name: chatbot
+    volumes: 
+      - ./notebooks/:/notebooks/
+      - ./notebooks/imgs/:/web/imgs
+      - ./notebooks/slides/:/web/slides
+    ports:
+      - "8990:8990"
+    depends_on: 
+      - "lab"
+    env_file:
+      - .env
+    environment: 
+      - PORT=8990
+
+  chatbot_rproxy: 
+    container_name: chatbot_rproxy
+    volumes: 
+      - ./notebooks/:/notebooks/
+      - ./notebooks/imgs/:/web/imgs
+      - ./notebooks/slides/:/web/slides
+    ports:
+      - "8991:8991"
+    depends_on: 
+      - "lab"
+    env_file:
+      - .env
+    environment: 
+      - ROOT_PATH=/8990/
+      - PORT=8991
+
+  ## Assessment microservice. Checks for assignment completion
+  assessment:
+    image: python:3.10-slim
+    volumes:
+      - assessment_results:/dli/assessment_results/
+      - ./assessment:/dli/assessment
+    entrypoint: ["/bin/sh", "-c"]
+    command: [". /dli/assessment/entrypoint.assessment.sh"]
+
+networks:
+  default:
+    name: nvidia-rad

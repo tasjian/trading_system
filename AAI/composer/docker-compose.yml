@@ -1,0 +1,140 @@
+# (1) Use this file for docker runtime configurations that are common to both
+# development and deployment.
+
+# `version : '2.3'` lets us use the `runtime=nvidia` configuration so that our
+# containers can interact with the GPU(s).
+version: '2.3'
+
+volumes: 
+  assessment_results:
+
+# `services` defines the containers you want to run. There will always be at least 2:
+# a `lab` container for your content, and `nginx` as a reverse proxy.
+#
+# Commonly, a third container for data loading is used here, and sometimes, even more
+# containers for other services like assessments, remote desktop, tensorboard, etc.
+services:
+
+# (2) To prevent name collisions, be sure to set the course id as project name in `.env`
+
+  ## Deliver jupyter labs interface for students.
+  lab:
+    container_name: jupyter-notebook-server  
+    init: true
+    runtime: nvidia
+    volumes:
+      - ./notebooks/:/dli/task/
+      - ./nim-cache/:/dli/task/nim-cache
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - NVIDIA_BASE_URL=http://llm_client_nim:9000/v1
+      - JUPYTER_TOKEN
+
+  # ## Deliver your llm_client microservice
+  llm_client:
+    container_name: llm_client
+    env_file:
+      - .env  ## pass in your environment variable (i.e. NVIDIA_API_KEY)
+    command: ["uvicorn", "client_server_build:app", "--host", "0.0.0.0", "--port", "9000"]
+
+  llm_client_nim:
+    container_name: llm_client_nim
+    volumes: 
+      - ./notebooks/llm_logs:/logs
+    ports:
+      - "9000:9000"
+    command: ["uvicorn", "client_server_nim:app", "--host", "0.0.0.0", "--port", "9000"]
+
+  ## Deliver a server to interface with host docker orchestration
+  docker_router:
+    container_name: docker_router
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  ## Give access to host docker
+      - ./assessment:/app/assessment
+      - ./notebooks:/app/notebooks
+    ports:
+      - "8070:8070"
+
+  # This container is required to reverse proxy content. It expects a config
+  # file at `/etc/nginx/nginx.conf` which we provide in this repo and mount.
+  #
+  # All services should be proxied through nginx, and all should be accessible
+  # on port 80, for compatibility with restricted corporate networks and to
+  # be compatible with upcoming course requirements.
+  nginx:
+    image: nginx:1.15.12-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - lab
+
+  ########################################################################################################
+  ## NIMs
+
+  nim:
+    user: root # you don't have to be the root, but need to specify some user
+    container_name: nim-llm
+    image: nvcr.io/nim/meta/llama-3.1-8b-instruct:1.3.3
+    runtime: nvidia
+    shm_size: 16gb
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      # Necessary since we are running as root on potentially-multiple GPUs
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+      - end_id
+    volumes:
+      - ./nim-cache/nim:/opt/nim/.cache
+    env_file:
+      - .env  ## pass in your environment variable through file (i.e. NGC_API_KEY)
+
+  embedding:
+    container_name: nim-embedding
+    image: nvcr.io/nim/nvidia/nv-embedqa-e5-v5:1.1.0
+    user: root
+    shm_size: 16gb
+    ports:
+      - 8000:8000
+    volumes: 
+      - ./nim-cache/embedding:/opt/nim/.cache
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=${NGC_API_KEY}
+    runtime: nvidia
+
+  ranking:
+    container_name: nim-ranking
+    image: "nvcr.io/nim/nvidia/nv-rerankqa-mistral-4b-v3:1.0.2"
+    user: root
+    shm_size: 16gb
+    ports:
+      - 7007:8000
+    volumes: 
+      - ./nim-cache/ranking:/opt/nim/.cache
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=${NGC_API_KEY}
+      - CUDA_VISIBLE_DEVICES=1
+    env_file:
+      - .env  ## pass in your environment variable through file (i.e. NGC_API_KEY)
+    runtime: nvidia
+
+  lg_viz:
+    ports:
+      - '3002:3002'
+
+  ## Assessment microservice. Checks for assignment completion
+  assessment:
+    image: python:3.10-slim
+    volumes:
+      - assessment_results:/dli/assessment_results/
+      - ./assessment:/dli/assessment
+    entrypoint: ["/bin/sh", "-c"]
+    command: [". /dli/assessment/entrypoint.assessment.sh"]
+
+networks:
+  default:
+    name: nvidia-agents

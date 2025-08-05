@@ -1,0 +1,301 @@
+officer_id,name,country,role,source,description
+OFF_00000,Person 1,USA,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00001,Person 2,USA,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00002,Person 3,USA,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00003,Person 4,Germany,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00004,Person 5,Russia,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00005,Person 6,Russia,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00006,Person 7,Germany,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00007,Person 8,USA,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00008,Person 9,UK,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00009,Person 10,China,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00010,Person 11,USA,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00011,Person 12,China,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00012,Person 13,India,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00013,Person 14,China,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00014,Person 15,Germany,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00015,Person 16,Brazil,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00016,Person 17,France,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00017,Person 18,Brazil,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00018,Person 19,Germany,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00019,Person 20,France,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00020,Person 21,Germany,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00021,Person 22,France,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00022,Person 23,UK,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00023,Person 24,UK,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00024,Person 25,India,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00025,Person 26,USA,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00026,Person 27,Russia,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00027,Person 28,France,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00028,Person 29,USA,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00029,Person 30,UK,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00030,Person 31,Germany,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00031,Person 32,France,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00032,Person 33,France,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00033,Person 34,France,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00034,Person 35,Russia,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00035,Person 36,UK,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00036,Person 37,France,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00037,Person 38,UK,Director,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00038,Person 39,France,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00039,Person 40,Russia,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00040,Person 41,UK,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00041,Person 42,UK,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00042,Person 43,China,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00043,Person 44,USA,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00044,Person 45,UK,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00045,Person 46,USA,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00046,Person 47,India,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00047,Person 48,France,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00048,Person 49,France,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00049,Person 50,Russia,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00050,Person 51,China,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00051,Person 52,France,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00052,Person 53,Brazil,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00053,Person 54,USA,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00054,Person 55,France,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00055,Person 56,Russia,Director,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00056,Person 57,France,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00057,Person 58,France,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00058,Person 59,China,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00059,Person 60,Brazil,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00060,Person 61,India,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00061,Person 62,Germany,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00062,Person 63,Russia,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00063,Person 64,India,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00064,Person 65,Brazil,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00065,Person 66,Germany,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00066,Person 67,Brazil,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00067,Person 68,China,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00068,Person 69,China,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00069,Person 70,China,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00070,Person 71,Brazil,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00071,Person 72,USA,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00072,Person 73,France,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00073,Person 74,India,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00074,Person 75,Germany,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00075,Person 76,Russia,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00076,Person 77,France,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00077,Person 78,France,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00078,Person 79,UK,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00079,Person 80,Russia,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00080,Person 81,India,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00081,Person 82,Germany,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00082,Person 83,Brazil,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00083,Person 84,Germany,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00084,Person 85,Germany,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00085,Person 86,Russia,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00086,Person 87,USA,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00087,Person 88,France,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00088,Person 89,Germany,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00089,Person 90,Germany,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00090,Person 91,France,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00091,Person 92,Russia,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00092,Person 93,Russia,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00093,Person 94,USA,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00094,Person 95,USA,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00095,Person 96,USA,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00096,Person 97,France,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00097,Person 98,USA,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00098,Person 99,UK,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00099,Person 100,China,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00100,Person 101,Russia,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00101,Person 102,USA,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00102,Person 103,UK,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00103,Person 104,France,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00104,Person 105,Brazil,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00105,Person 106,USA,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00106,Person 107,USA,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00107,Person 108,India,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00108,Person 109,India,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00109,Person 110,China,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00110,Person 111,India,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00111,Person 112,India,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00112,Person 113,India,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00113,Person 114,China,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00114,Person 115,France,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00115,Person 116,Russia,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00116,Person 117,Germany,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00117,Person 118,India,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00118,Person 119,USA,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00119,Person 120,India,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00120,Person 121,France,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00121,Person 122,Brazil,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00122,Person 123,Brazil,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00123,Person 124,Brazil,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00124,Person 125,USA,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00125,Person 126,UK,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00126,Person 127,Germany,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00127,Person 128,India,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00128,Person 129,Brazil,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00129,Person 130,USA,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00130,Person 131,France,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00131,Person 132,Brazil,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00132,Person 133,USA,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00133,Person 134,UK,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00134,Person 135,UK,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00135,Person 136,Russia,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00136,Person 137,India,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00137,Person 138,France,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00138,Person 139,UK,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00139,Person 140,Russia,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00140,Person 141,Russia,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00141,Person 142,Brazil,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00142,Person 143,China,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00143,Person 144,Brazil,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00144,Person 145,UK,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00145,Person 146,India,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00146,Person 147,UK,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00147,Person 148,China,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00148,Person 149,France,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00149,Person 150,UK,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00150,Person 151,Brazil,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00151,Person 152,France,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00152,Person 153,Brazil,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00153,Person 154,Russia,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00154,Person 155,UK,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00155,Person 156,China,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00156,Person 157,China,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00157,Person 158,USA,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00158,Person 159,Brazil,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00159,Person 160,India,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00160,Person 161,Germany,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00161,Person 162,France,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00162,Person 163,Brazil,Director,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00163,Person 164,Russia,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00164,Person 165,Russia,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00165,Person 166,Russia,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00166,Person 167,UK,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00167,Person 168,UK,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00168,Person 169,USA,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00169,Person 170,India,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00170,Person 171,Germany,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00171,Person 172,Brazil,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00172,Person 173,Brazil,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00173,Person 174,USA,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00174,Person 175,Russia,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00175,Person 176,USA,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00176,Person 177,China,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00177,Person 178,France,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00178,Person 179,UK,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00179,Person 180,USA,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00180,Person 181,France,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00181,Person 182,Brazil,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00182,Person 183,China,Director,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00183,Person 184,Brazil,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00184,Person 185,China,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00185,Person 186,India,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00186,Person 187,France,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00187,Person 188,Russia,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00188,Person 189,UK,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00189,Person 190,UK,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00190,Person 191,China,Nominee,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00191,Person 192,Germany,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00192,Person 193,USA,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00193,Person 194,Brazil,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00194,Person 195,Brazil,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00195,Person 196,UK,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00196,Person 197,Brazil,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00197,Person 198,Russia,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00198,Person 199,USA,Director,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00199,Person 200,UK,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00200,Person 201,USA,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00201,Person 202,China,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00202,Person 203,USA,Nominee,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00203,Person 204,France,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00204,Person 205,UK,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00205,Person 206,Russia,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00206,Person 207,China,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00207,Person 208,India,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00208,Person 209,USA,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00209,Person 210,UK,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00210,Person 211,Brazil,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00211,Person 212,Russia,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00212,Person 213,Brazil,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00213,Person 214,France,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00214,Person 215,France,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00215,Person 216,India,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00216,Person 217,USA,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00217,Person 218,Germany,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00218,Person 219,Russia,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00219,Person 220,UK,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00220,Person 221,China,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00221,Person 222,USA,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00222,Person 223,France,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00223,Person 224,India,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00224,Person 225,Germany,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00225,Person 226,Russia,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00226,Person 227,Russia,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00227,Person 228,India,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00228,Person 229,France,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00229,Person 230,USA,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00230,Person 231,France,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00231,Person 232,Russia,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00232,Person 233,UK,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00233,Person 234,USA,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00234,Person 235,USA,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00235,Person 236,France,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00236,Person 237,France,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00237,Person 238,China,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00238,Person 239,China,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00239,Person 240,France,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00240,Person 241,Brazil,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00241,Person 242,Russia,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00242,Person 243,China,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00243,Person 244,UK,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00244,Person 245,France,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00245,Person 246,Brazil,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00246,Person 247,India,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00247,Person 248,India,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00248,Person 249,Brazil,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00249,Person 250,Germany,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00250,Person 251,France,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00251,Person 252,USA,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00252,Person 253,China,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00253,Person 254,UK,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00254,Person 255,UK,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00255,Person 256,Brazil,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00256,Person 257,Russia,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00257,Person 258,China,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00258,Person 259,USA,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00259,Person 260,China,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00260,Person 261,Germany,Director,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00261,Person 262,India,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00262,Person 263,Germany,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00263,Person 264,Germany,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00264,Person 265,Germany,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00265,Person 266,Russia,Director,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00266,Person 267,Russia,Director,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00267,Person 268,Russia,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00268,Person 269,France,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00269,Person 270,Brazil,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00270,Person 271,France,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00271,Person 272,India,Beneficial Owner,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00272,Person 273,USA,Shareholder,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00273,Person 274,Russia,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00274,Person 275,UK,Secretary,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00275,Person 276,Germany,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00276,Person 277,UK,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00277,Person 278,Brazil,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00278,Person 279,UK,Shareholder,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00279,Person 280,USA,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00280,Person 281,Russia,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00281,Person 282,India,Nominee,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00282,Person 283,India,Beneficial Owner,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00283,Person 284,USA,Beneficial Owner,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00284,Person 285,USA,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00285,Person 286,Brazil,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00286,Person 287,China,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00287,Person 288,Brazil,Secretary,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00288,Person 289,Russia,Secretary,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00289,Person 290,France,Nominee,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00290,Person 291,UK,Shareholder,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00291,Person 292,Germany,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00292,Person 293,France,Beneficial Owner,Paradise Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00293,Person 294,India,Beneficial Owner,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00294,Person 295,India,Nominee,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00295,Person 296,UK,Secretary,Pandora Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00296,Person 297,USA,Secretary,Bahamas Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00297,Person 298,India,Shareholder,Panama Papers,Individual associated with offshore entities through various roles and connections.
+OFF_00298,Person 299,France,Shareholder,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
+OFF_00299,Person 300,India,Director,Offshore Leaks,Individual associated with offshore entities through various roles and connections.
