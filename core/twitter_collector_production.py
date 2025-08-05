@@ -158,7 +158,7 @@ class ProductionTwitterCollector:
             import requests
             
             url = "https://twitter-api45.p.rapidapi.com/search.php"
-            querystring = {"query": "$AAPL", "count": "1"}
+            querystring = {"query": "$SPY", "count": "1"}  # Use ETF for testing
             headers = {
                 "X-RapidAPI-Key": settings.rapidapi_key or "",
                 "X-RapidAPI-Host": "twitter-api45.p.rapidapi.com"

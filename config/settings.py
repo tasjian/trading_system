@@ -46,6 +46,12 @@ class TradingSettings(BaseSettings):
     max_sector_allocation: float = Field(default=0.25, env="MAX_SECTOR_ALLOCATION")  # Max 25% per sector
     max_asset_class_allocation: float = Field(default=0.40, env="MAX_ASSET_CLASS_ALLOCATION")  # Max 40% per asset class
     
+    # Symbol Configuration
+    # Use dynamic universe filtering instead of hardcoded symbols
+    use_dynamic_universe: bool = Field(default=True, env="USE_DYNAMIC_UNIVERSE")
+    focus_etfs: str = Field(default="SPY,QQQ,IWM,VXX", env="FOCUS_ETFS")  # Comma-separated ETFs for testing/fallback
+    excluded_symbols: str = Field(default="", env="EXCLUDED_SYMBOLS")  # Comma-separated symbols to exclude
+    
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
     max_daily_loss: float = Field(default=0.05, env="MAX_DAILY_LOSS")  # 5% daily loss limit
@@ -103,6 +109,22 @@ class TradingSettings(BaseSettings):
 
 # Global settings instance
 settings = TradingSettings()
+
+# Dynamic symbol management
+def get_focus_symbols():
+    """Get focus symbols for trading (dynamic or fallback ETFs)."""
+    if settings.use_dynamic_universe:
+        # In production, this would come from the universe filter
+        # For now, return ETFs as a safe fallback
+        return settings.focus_etfs.split(',')
+    else:
+        return settings.focus_etfs.split(',')
+
+def get_excluded_symbols():
+    """Get symbols to exclude from trading."""
+    if settings.excluded_symbols:
+        return settings.excluded_symbols.split(',')
+    return []
 
 # Validation
 def validate_settings():

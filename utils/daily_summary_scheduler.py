@@ -232,7 +232,7 @@ class DailySummaryScheduler:
                 }
                 positions_data = [
                     {
-                        'symbol': 'AAPL',
+                        'symbol': 'SPY',
                         'quantity': 50.0,
                         'market_value': 8750.0,
                         'unrealized_pnl': 250.0,
@@ -240,7 +240,7 @@ class DailySummaryScheduler:
                         'side': 'long'
                     },
                     {
-                        'symbol': 'TSLA',
+                        'symbol': 'QQQ',
                         'quantity': -25.0,
                         'market_value': 6250.0,
                         'unrealized_pnl': -125.0,

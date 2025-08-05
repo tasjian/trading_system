@@ -289,9 +289,14 @@ class ContinuousRebalancer:
                 logger.warning(f"Circuit breakers active: {active_breakers}")
                 # Continue but with reduced position sizing
             
-            # Step 5: Signal Generation
+            # Step 4.5: RL Decision Layer (Policy Learning & Portfolio Allocation)
+            pipeline_stage = "rl_decision_layer"
+            logger.info("🤖 RL Decision Layer (Policy Learning & Portfolio Allocation)...")
+            state = await self._run_rl_decision_layer(state, config)
+            
+            # Step 5: Signal Generation (Enhanced by RL)
             pipeline_stage = "signal_generation"
-            logger.info("🧠 LLM Signal Generation...")
+            logger.info("🧠 LLM Signal Generation (RL-Enhanced)...")
             pre_signals = len(state.get("signals", []))
             state = await self.workflow.signal_generation_agent(state, config)
             post_signals = len(state.get("signals", []))
@@ -507,6 +512,87 @@ class ContinuousRebalancer:
             logger.info(f"Success rate: {success_rate:.1f}%")
         
         logger.info("👋 Continuous rebalancer shutdown complete")
+    
+    async def _run_rl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        RL Decision Layer: Policy Learning & Portfolio Allocation
+        
+        Architecture:
+        [LLM Analysis Layer: sentiment_data, market_signals] 
+                    ↓
+        [RL Agent: Decision Layer] ← This method
+                    ↓
+        [Enhanced state with RL portfolio decisions]
+        """
+        try:
+            # Initialize RL components
+            from agents.online_learning_orchestrator import OnlineLearningOrchestrator, TradingEngine, PortfolioManager, RiskManager
+            from agents.llm_rl_integration import LLMStateEnricher
+            
+            logger.info("🤖 Initializing RL Decision Layer...")
+            
+            # Extract LLM analysis results (Feature Store)
+            sentiment_data = state.get("sentiment_data", {})
+            sentiment_signals = state.get("sentiment_signals", [])
+            market_data = state.get("market_data", {})
+            portfolio = state.get("portfolio", {})
+            
+            logger.info(f"📊 Feature Store Input: {len(sentiment_data)} sentiment analyses, {len(sentiment_signals)} signals")
+            
+            # Create enhanced state for RL agent
+            enricher = LLMStateEnricher()
+            enhanced_state = await enricher.enrich_state_from_llm_analysis(
+                sentiment_data=sentiment_data,
+                market_signals=sentiment_signals,
+                portfolio_state=portfolio,
+                market_data=market_data
+            )
+            
+            # Initialize online learning orchestrator with default components
+            orchestrator = OnlineLearningOrchestrator(
+                trading_engine=TradingEngine(),
+                portfolio_manager=PortfolioManager(), 
+                risk_manager=RiskManager()
+            )
+            
+            # Get RL portfolio decisions
+            logger.info("🧠 RL Agent making portfolio allocation decisions...")
+            
+            # Run RL decision making
+            rl_decisions = await orchestrator.make_portfolio_decisions(
+                enhanced_state=enhanced_state,
+                available_symbols=[s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY'][:10],
+                portfolio_value=portfolio.get("equity", 50000),
+                risk_tolerance=state.get("risk_tolerance", 0.5)
+            )
+            
+            # Store RL decisions in state for signal generation
+            state["rl_decisions"] = rl_decisions
+            state["rl_enhanced"] = True
+            
+            # Log RL insights
+            if rl_decisions:
+                logger.info(f"✅ RL Agent generated {len(rl_decisions.get('allocations', []))} allocation decisions")
+                logger.info(f"📈 RL Portfolio Strategy: {rl_decisions.get('strategy', 'adaptive')}")
+                logger.info(f"⚖️ RL Risk Assessment: {rl_decisions.get('risk_level', 'moderate')}")
+                
+                # Log top allocations
+                for allocation in rl_decisions.get('allocations', [])[:3]:
+                    logger.info(f"   🎯 {allocation.get('symbol')}: {allocation.get('weight', 0):.1%} allocation")
+            
+            return state
+            
+        except ImportError as e:
+            logger.warning(f"RL components not available: {e}")
+            logger.info("Continuing with LLM-only analysis...")
+            state["rl_enhanced"] = False
+            return state
+            
+        except Exception as e:
+            logger.error(f"RL Decision Layer error: {e}")
+            logger.info("Falling back to LLM-only analysis...")
+            state["rl_enhanced"] = False
+            return state
     
     def get_status_report(self) -> Dict[str, Any]:
         """Get current system status report."""

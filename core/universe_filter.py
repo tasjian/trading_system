@@ -14,7 +14,7 @@ import yfinance as yf
 import pandas as pd
 
 from tools.alpaca_client import alpaca_client
-from core.social_media_collector import SocialMediaCollector
+from core.social_media_collector_optimized import SocialMediaCollector
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -308,10 +308,31 @@ class StockUniverseFilter:
             today = datetime.now()
             earnings_symbols = []  # Would be populated from earnings calendar API
             
-            # Use dynamic earnings detection based on market activity
-            # This would integrate with real earnings calendar APIs in production
-            # For now, skip hardcoded earnings symbols to enable fully dynamic discovery
-            pass  # Real earnings API integration would go here
+            # Integrate with earnings scraper for recent earnings data
+            from core.earnings_scraper import EarningsCallScraper
+            earnings_scraper = EarningsCallScraper()
+            
+            # Check earnings for top symbols (limit for performance)
+            for symbol in symbols[:30]:
+                try:
+                    transcript = await earnings_scraper.get_latest_transcript(symbol)
+                    if transcript:
+                        # Calculate days since earnings
+                        days_since = (today - transcript.get('date', today)).days
+                        if days_since <= 7:  # Recent earnings within 7 days
+                            strength = max(0.1, 1.0 - (days_since / 7.0))
+                            signals.append(StockSignal(
+                                symbol=symbol,
+                                signal_type="earnings",
+                                strength=strength,
+                                description=f"Recent earnings call ({days_since} days ago)",
+                                timestamp=datetime.now()
+                            ))
+                except Exception as e:
+                    logger.debug(f"Earnings check failed for {symbol}: {e}")
+                    continue
+            
+            await earnings_scraper.cleanup()
         
         except Exception as e:
             logger.error(f"Earnings signal collection failed: {e}")
@@ -355,8 +376,8 @@ class StockUniverseFilter:
                         continue
             
             finally:
-                # Always close the collector to prevent resource leaks
-                await social_media_collector.close()
+                # Always cleanup the collector to prevent resource leaks
+                await social_media_collector.cleanup()
         
         except Exception as e:
             logger.error(f"Social signal collection failed: {e}")
@@ -371,10 +392,28 @@ class StockUniverseFilter:
         logger.info(f"📰 Checking news activity for {len(symbols)} symbols...")
         
         try:
-            # Use dynamic news detection based on actual news APIs
-            # Skip hardcoded news symbols to enable fully dynamic discovery
-            # Real news API integration would replace this placeholder
-            pass  # Real news API integration would go here
+            # Integrate with market intelligence for news collection
+            from core.market_intelligence import UnifiedMarketIntelligence
+            market_intel = UnifiedMarketIntelligence()
+            
+            # Check news for top symbols (limit for API rate limiting)
+            for symbol in symbols[:50]:
+                try:
+                    articles = await market_intel._get_news_articles(symbol)
+                    if len(articles) >= self.news_threshold:
+                        strength = min(1.0, len(articles) / 10.0)
+                        signals.append(StockSignal(
+                            symbol=symbol,
+                            signal_type="news",
+                            strength=strength,
+                            description=f"{len(articles)} news articles",
+                            timestamp=datetime.now()
+                        ))
+                except Exception as e:
+                    logger.debug(f"News check failed for {symbol}: {e}")
+                    continue
+            
+            await market_intel.close()
         
         except Exception as e:
             logger.error(f"News signal collection failed: {e}")

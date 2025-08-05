@@ -911,7 +911,7 @@ class EmailWebhookNotifier:
         # Create test alert
         test_alert = TransactionAlert(
             transaction_id=f"TEST_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            symbol="AAPL",
+            symbol="SPY",  # Use ETF for testing
             action="buy",
             quantity=10.0,
             price=175.50,

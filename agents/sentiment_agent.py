@@ -17,8 +17,9 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from core.llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
-from core.social_media_collector import SocialMediaCollector, SocialMediaPost
+from core.social_media_collector_optimized import SocialMediaCollector, SocialMediaPost
 from core.earnings_scraper import EarningsCallScraper, EarningsTranscript
+from core.sec_edgar_client import SECEdgarClient, SECFiling
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -39,13 +40,16 @@ class ComprehensiveSentiment:
     news_sentiment: Optional[SentimentAnalysis] = None
     social_sentiment: Dict[str, SentimentAnalysis] = None
     earnings_sentiment: Dict[str, SentimentAnalysis] = None
+    sec_filings_sentiment: Dict[str, SentimentAnalysis] = None
     market_sentiment: Optional[SentimentAnalysis] = None
     
     # Metadata
     data_sources_count: int = 0
     news_articles_count: int = 0
     social_posts_count: int = 0
+    sec_filings_count: int = 0
     has_recent_earnings: bool = False
+    has_recent_sec_filings: bool = False
     
     # Key insights
     key_themes: List[str] = None
@@ -57,6 +61,8 @@ class ComprehensiveSentiment:
             self.social_sentiment = {}
         if self.earnings_sentiment is None:
             self.earnings_sentiment = {}
+        if self.sec_filings_sentiment is None:
+            self.sec_filings_sentiment = {}
         if self.key_themes is None:
             self.key_themes = []
         if self.risk_factors is None:
@@ -77,6 +83,7 @@ class SentimentAgent:
         )
         self.social_collector = SocialMediaCollector()
         self.earnings_scraper = EarningsCallScraper()
+        self.sec_edgar_client = SECEdgarClient()
         
         # Caching
         self.cache = {}
@@ -84,10 +91,11 @@ class SentimentAgent:
         
         # Source weights for aggregation
         self.source_weights = {
-            'news': 0.35,      # Financial news most important
-            'earnings': 0.30,   # Earnings calls very important
-            'social': 0.25,     # Social media significant
-            'market': 0.10      # Market sentiment as background
+            'news': 0.30,      # Financial news important
+            'earnings': 0.25,   # Earnings calls important
+            'sec_filings': 0.25, # SEC filings very important for fundamentals
+            'social': 0.15,     # Social media less weight
+            'market': 0.05      # Market sentiment as background
         }
     
     async def analyze_comprehensive_sentiment(self, symbol: str) -> ComprehensiveSentiment:
@@ -107,15 +115,16 @@ class SentimentAgent:
         news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=30.0)
         social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=45.0)
         earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=60.0)
+        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=90.0)
         market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=15.0)
         
         # Execute all tasks with graceful failure handling
         results = await asyncio.gather(
-            news_task, social_task, earnings_task, market_task,
+            news_task, social_task, earnings_task, sec_task, market_task,
             return_exceptions=True
         )
         
-        news_sentiment, social_sentiment, earnings_sentiment, market_sentiment = results
+        news_sentiment, social_sentiment, earnings_sentiment, sec_sentiment, market_sentiment = results
         
         # Handle exceptions with detailed logging
         data_sources_available = []
@@ -149,6 +158,17 @@ class SentimentAgent:
             if earnings_sentiment:
                 data_sources_available.append("earnings")
                 logger.info(f"✅ Successfully integrated Motley Fool earnings data for {symbol}")
+        
+        if isinstance(sec_sentiment, Exception):
+            if isinstance(sec_sentiment, asyncio.TimeoutError):
+                logger.warning(f"SEC filings sentiment analysis timed out for {symbol} - continuing without SEC data")
+            else:
+                logger.warning(f"SEC filings sentiment analysis failed for {symbol}: {type(sec_sentiment).__name__} - continuing without SEC data")
+            sec_sentiment = {}
+        else:
+            if sec_sentiment:
+                data_sources_available.append("sec_filings")
+                logger.info(f"✅ Successfully integrated SEC EDGAR filings data for {symbol}")
             
         if isinstance(market_sentiment, Exception):
             if isinstance(market_sentiment, asyncio.TimeoutError):
@@ -159,16 +179,16 @@ class SentimentAgent:
         else:
             data_sources_available.append("market")
         
-        logger.info(f"Data sources available for {symbol}: {', '.join(data_sources_available)} ({len(data_sources_available)}/4 sources)")
+        logger.info(f"Data sources available for {symbol}: {', '.join(data_sources_available)} ({len(data_sources_available)}/5 sources)")
         
         # Aggregate sentiments
         overall_score, overall_sentiment, confidence = self._aggregate_sentiments(
-            news_sentiment, social_sentiment, earnings_sentiment, market_sentiment
+            news_sentiment, social_sentiment, earnings_sentiment, sec_sentiment, market_sentiment
         )
         
         # Extract insights
         key_themes, risk_factors, opportunities = self._extract_insights(
-            news_sentiment, social_sentiment, earnings_sentiment, market_sentiment
+            news_sentiment, social_sentiment, earnings_sentiment, sec_sentiment, market_sentiment
         )
         
         # Count data sources
@@ -176,6 +196,7 @@ class SentimentAgent:
             1 if news_sentiment else 0,
             len(social_sentiment),
             len(earnings_sentiment),
+            len(sec_sentiment),
             1 if market_sentiment else 0
         ])
         
@@ -189,11 +210,14 @@ class SentimentAgent:
             news_sentiment=news_sentiment,
             social_sentiment=social_sentiment or {},
             earnings_sentiment=earnings_sentiment or {},
+            sec_filings_sentiment=sec_sentiment or {},
             market_sentiment=market_sentiment,
             data_sources_count=data_sources_count,
             news_articles_count=self._count_news_articles(news_sentiment),
             social_posts_count=self._count_social_posts(social_sentiment),
+            sec_filings_count=self._count_sec_filings(sec_sentiment),
             has_recent_earnings=bool(earnings_sentiment),
+            has_recent_sec_filings=bool(sec_sentiment),
             key_themes=key_themes,
             risk_factors=risk_factors,
             opportunities=opportunities
@@ -252,8 +276,7 @@ class SentimentAgent:
                 # Combine posts into text for analysis
                 combined_text = ""
                 for post in posts[:20]:  # Limit to 20 posts per platform
-                    content = post.get('content', '') if isinstance(post, dict) else post.content
-                    combined_text += f"{content}\n"
+                    combined_text += f"{post.content}\n"
                 
                 if combined_text.strip():
                     sentiment = await self.llm_analyzer.analyze_text(combined_text, "social_media")
@@ -358,7 +381,7 @@ class SentimentAgent:
             logger.error(f"Error getting news articles for {symbol}: {e}")
             return []
     
-    def _aggregate_sentiments(self, news_sentiment, social_sentiment, earnings_sentiment, market_sentiment) -> Tuple[float, str, float]:
+    def _aggregate_sentiments(self, news_sentiment, social_sentiment, earnings_sentiment, sec_sentiment, market_sentiment) -> Tuple[float, str, float]:
         """Aggregate all sentiment sources into overall sentiment."""
         scores = []
         confidences = []
@@ -391,6 +414,17 @@ class SentimentAgent:
                 scores.append(avg_earnings_score)
                 confidences.append(avg_earnings_confidence)
                 weights.append(self.source_weights['earnings'])
+        
+        # Add SEC filings sentiment (average across filings)
+        if sec_sentiment:
+            sec_scores = [s.score for s in sec_sentiment.values()]
+            sec_confidences = [s.confidence for s in sec_sentiment.values()]
+            if sec_scores:
+                avg_sec_score = sum(sec_scores) / len(sec_scores)
+                avg_sec_confidence = sum(sec_confidences) / len(sec_confidences)
+                scores.append(avg_sec_score)
+                confidences.append(avg_sec_confidence)
+                weights.append(self.source_weights['sec_filings'])
         
         # Add market sentiment
         if market_sentiment:
@@ -432,7 +466,7 @@ class SentimentAgent:
         
         return overall_score, overall_sentiment, overall_confidence
     
-    def _extract_insights(self, news_sentiment, social_sentiment, earnings_sentiment, market_sentiment) -> Tuple[List[str], List[str], List[str]]:
+    def _extract_insights(self, news_sentiment, social_sentiment, earnings_sentiment, sec_sentiment, market_sentiment) -> Tuple[List[str], List[str], List[str]]:
         """Extract key themes, risks, and opportunities from all sentiment sources."""
         all_themes = set()
         all_risks = set()
@@ -456,6 +490,12 @@ class SentimentAgent:
             all_risks.update(sentiment.risk_factors)
             all_opportunities.update(sentiment.opportunities)
         
+        # Extract from SEC filings sentiment
+        for sentiment in sec_sentiment.values():
+            all_themes.update(sentiment.key_phrases)
+            all_risks.update(sentiment.risk_factors)
+            all_opportunities.update(sentiment.opportunities)
+        
         # Extract from market sentiment
         if market_sentiment:
             all_themes.update(market_sentiment.key_phrases)
@@ -473,6 +513,189 @@ class SentimentAgent:
         """Count number of social media posts analyzed."""
         # This would be enhanced with actual post tracking
         return sum(20 for platform in social_sentiment.keys())
+    
+    def _count_sec_filings(self, sec_sentiment) -> int:
+        """Count number of SEC filings analyzed."""
+        return len(sec_sentiment) if sec_sentiment else 0
+    
+    async def _analyze_sec_filings_sentiment(self, symbol: str) -> Dict[str, SentimentAnalysis]:
+        """Analyze sentiment from recent SEC filings."""
+        try:
+            logger.info(f"Analyzing SEC filings sentiment for {symbol}")
+            
+            # Initialize SEC EDGAR client if needed
+            if not hasattr(self.sec_edgar_client, '_company_tickers') or not self.sec_edgar_client._company_tickers:
+                await self.sec_edgar_client.load_company_tickers()
+            
+            # Get recent filings (10-K, 10-Q, 8-K)
+            recent_filings = await self.sec_edgar_client.search_filings(
+                ticker=symbol,
+                form_types=['10-K', '10-Q', '8-K'],
+                days_back=90
+            )
+            
+            if not recent_filings:
+                logger.info(f"No recent SEC filings found for {symbol}")
+                return {}
+            
+            logger.info(f"Found {len(recent_filings)} recent filings for {symbol}")
+            
+            sentiment_results = {}
+            
+            # Analyze up to 5 most recent filings
+            for filing in recent_filings[:5]:
+                try:
+                    # Download filing content
+                    filing_with_content = await self.sec_edgar_client.get_filing_content(filing)
+                    
+                    if not filing_with_content or not filing_with_content.content:
+                        logger.debug(f"No content available for filing {filing.accession_number}")
+                        continue
+                    
+                    # Prepare content for LLM analysis
+                    filing_summary = self._prepare_filing_summary(filing_with_content)
+                    
+                    if not filing_summary:
+                        continue
+                    
+                    # Analyze sentiment with LLM
+                    prompt = self._create_sec_filing_prompt(symbol, filing_with_content, filing_summary)
+                    
+                    sentiment = await self.llm_analyzer.analyze_with_llm(
+                        prompt, 
+                        content_type=f"SEC {filing.filing_type} Filing"
+                    )
+                    
+                    if sentiment:
+                        # Enhance with SEC-specific signals
+                        sentiment = self._enhance_sec_sentiment(sentiment, filing_with_content)
+                        
+                        filing_key = f"{filing.filing_type}_{filing.filing_date}"
+                        sentiment_results[filing_key] = sentiment
+                        logger.info(f"Analyzed sentiment for {filing.filing_type} filing: {sentiment.sentiment} ({sentiment.score:.3f})")
+                    
+                except Exception as e:
+                    logger.error(f"Error analyzing filing {filing.accession_number}: {e}")
+                    continue
+            
+            logger.info(f"Successfully analyzed {len(sentiment_results)} SEC filings for {symbol}")
+            return sentiment_results
+            
+        except Exception as e:
+            logger.error(f"Error in SEC filings sentiment analysis for {symbol}: {e}")
+            return {}
+    
+    def _prepare_filing_summary(self, filing: SECFiling) -> str:
+        """Prepare a summary of filing content for LLM analysis."""
+        try:
+            if not filing.content:
+                return ""
+            
+            # Start with key sections if available
+            summary_parts = []
+            
+            if filing.key_sections:
+                for section_name, section_content in filing.key_sections.items():
+                    if section_content:
+                        summary_parts.append(f"{section_name.replace('_', ' ').title()}: {section_content[:1000]}")
+            
+            # If no key sections, use first part of content
+            if not summary_parts:
+                # Clean up HTML and get meaningful text
+                clean_content = self._clean_filing_content(filing.content)[:3000]
+                summary_parts.append(clean_content)
+            
+            # Add sentiment signals
+            if filing.sentiment_signals:
+                signals_text = ", ".join(filing.sentiment_signals)
+                summary_parts.append(f"Key signals detected: {signals_text}")
+            
+            return "\n\n".join(summary_parts)
+            
+        except Exception as e:
+            logger.error(f"Error preparing filing summary: {e}")
+            return filing.content[:2000] if filing.content else ""
+    
+    def _clean_filing_content(self, content: str) -> str:
+        """Clean HTML and formatting from filing content."""
+        try:
+            from bs4 import BeautifulSoup
+            
+            # Parse HTML and extract text
+            soup = BeautifulSoup(content, 'html.parser')
+            clean_text = soup.get_text(separator=' ', strip=True)
+            
+            # Remove excessive whitespace
+            import re
+            clean_text = re.sub(r'\s+', ' ', clean_text)
+            
+            return clean_text
+            
+        except Exception:
+            # Fallback: basic text cleaning
+            import re
+            clean_text = re.sub(r'<[^>]+>', '', content)  # Remove HTML tags
+            clean_text = re.sub(r'\s+', ' ', clean_text)  # Normalize whitespace
+            return clean_text
+    
+    def _create_sec_filing_prompt(self, symbol: str, filing: SECFiling, summary: str) -> str:
+        """Create prompt for SEC filing sentiment analysis."""
+        return f"""
+        Analyze the sentiment and key insights from this SEC {filing.filing_type} filing for {symbol} ({filing.company_name}):
+        
+        Filing Date: {filing.filing_date}
+        Form Type: {filing.filing_type}
+        
+        Content Summary:
+        {summary}
+        
+        Please analyze:
+        1. Overall sentiment (very negative, negative, neutral, positive, very positive)
+        2. Confidence level (0-1)
+        3. Key themes and topics mentioned
+        4. Risk factors identified
+        5. Growth opportunities mentioned
+        6. Any material changes or events
+        7. Management tone and outlook
+        
+        Focus on information that would be relevant for investment sentiment analysis.
+        Pay special attention to forward-looking statements, risk disclosures, and material changes.
+        """
+    
+    def _enhance_sec_sentiment(self, sentiment: SentimentAnalysis, filing: SECFiling) -> SentimentAnalysis:
+        """Enhance sentiment analysis with SEC-specific signals."""
+        try:
+            # Adjust sentiment based on SEC-specific signals
+            signal_adjustment = 0.0
+            additional_risks = []
+            additional_opportunities = []
+            
+            for signal in filing.sentiment_signals:
+                if 'financial_stress' in signal or 'departure' in signal:
+                    signal_adjustment -= 0.1
+                    additional_risks.append(signal.replace('_', ' ').title())
+                elif 'positive' in signal or 'record' in signal:
+                    signal_adjustment += 0.1
+                    additional_opportunities.append(signal.replace('_', ' ').title())
+                elif 'ma_' in signal:  # M&A activity
+                    additional_opportunities.append("M&A Activity")
+            
+            # Create enhanced sentiment
+            enhanced_sentiment = SentimentAnalysis(
+                score=max(-1.0, min(1.0, sentiment.score + signal_adjustment)),
+                sentiment=sentiment.sentiment,
+                confidence=sentiment.confidence,
+                key_phrases=sentiment.key_phrases,
+                risk_factors=list(set(sentiment.risk_factors + additional_risks)),
+                opportunities=list(set(sentiment.opportunities + additional_opportunities)),
+                reasoning=sentiment.reasoning + f" SEC signals adjustment: {signal_adjustment:.2f}"
+            )
+            
+            return enhanced_sentiment
+            
+        except Exception as e:
+            logger.error(f"Error enhancing SEC sentiment: {e}")
+            return sentiment
     
     async def run_sentiment_cycle(self, tickers: List[str], platforms: List[str] = None) -> Dict[str, ComprehensiveSentiment]:
         """Run sentiment analysis cycle for multiple tickers."""
@@ -500,6 +723,7 @@ class SentimentAgent:
         """Close all connections and clean up resources."""
         await self.llm_analyzer.close()
         await self.earnings_scraper.close()
+        await self.sec_edgar_client.cleanup()
 
 
 # Global sentiment agent instance

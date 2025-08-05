@@ -622,7 +622,7 @@ if __name__ == "__main__":
         if any(connections.values()):
             test_data = {
                 "market_data": {"SPY_price": 420.50, "VIX": 18.5},
-                "symbols": ["AAPL", "GOOGL"],
+                "symbols": ["SPY", "QQQ"],  # Use ETFs for testing instead of individual stocks
                 "instructions": "Analyze current market conditions"
             }
             

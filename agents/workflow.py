@@ -496,7 +496,7 @@ class TradingWorkflow:
             logger.debug(f"Market intelligence cleanup: {e}")
         
         try:
-            from core.social_media_collector import SocialMediaCollector
+            from core.social_media_collector_optimized import SocialMediaCollector
             # Social media collector cleanup is handled in the collector itself
         except Exception as e:
             logger.debug(f"Social media cleanup: {e}")
@@ -729,42 +729,118 @@ class TradingWorkflow:
                 return add_error_to_state(state, f"Both LLM and fallback analysis failed: {error_msg}")
     
     async def _fallback_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Simple fallback signal generation using basic market data analysis."""
+        """Simple fallback signal generation using sentiment signals."""
         try:
             logger.info("Using simple fallback signal generation")
             
             portfolio_value = state["portfolio"].get("equity", 26100.0)
-            market_symbols = state["market_data"].get("symbols", {})
+            available_cash = state["portfolio"].get("cash", 5715.18)
             
-            if not market_symbols:
-                logger.warning("No market data available for signal generation")
+            # Use sentiment signals as the primary source for trading signals
+            sentiment_signals = state.get("sentiment_signals", [])
+            trading_signals = state.get("trading_signals", [])
+            
+            if not sentiment_signals and not trading_signals:
+                logger.warning("No sentiment signals available for signal generation")
                 state["signals"] = []
-                state["messages"].append(AIMessage(content="No signals generated - no market data"))
+                state["messages"].append(AIMessage(content="No signals generated - no sentiment data"))
                 state["current_agent"] = "signal_generator"
                 return update_state_timestamp(state)
             
-            # Generate simple buy signals for available symbols
-            signals = []
-            target_position_value = portfolio_value * 0.20  # 20% positions
+            # Check if RL decisions are available (RL-Enhanced Path)
+            rl_decisions = state.get("rl_decisions")
+            rl_enhanced = state.get("rl_enhanced", False)
             
-            for symbol, data in list(market_symbols.items())[:3]:  # Limit to 3 positions
-                if data.get('price', 0) > 0:
-                    price = data['price']
-                    quantity = int(target_position_value / price)
+            signals = []
+            
+            if rl_enhanced and rl_decisions:
+                # RL-Enhanced Signal Generation Path
+                logger.info("🤖 Using RL portfolio allocations for signal generation")
+                rl_allocations = rl_decisions.get("allocations", [])
+                
+                for allocation in rl_allocations:
+                    symbol = allocation.get("symbol")
+                    target_weight = allocation.get("weight", 0)
+                    rl_confidence = allocation.get("confidence", 0.7)
                     
-                    if quantity > 0:
-                        # Create basic trading signal
-                        from agents.state import TradingSignal
-                        signal = TradingSignal(
-                            symbol=symbol,
-                            action="buy",
-                            confidence=0.6,  # Moderate confidence
-                            price_target=price * 1.05,  # 5% upside target
-                            stop_loss=price * 0.95,     # 5% stop loss
-                            quantity=quantity,
-                            reasoning=f"Simple fallback signal: diversified position in {symbol}"
-                        )
-                        signals.append(signal)
+                    if target_weight > 0.01:  # Only meaningful allocations
+                        # Calculate position size based on RL allocation
+                        position_value = available_cash * target_weight
+                        
+                        # Get current price
+                        try:
+                            from tools.alpaca_client import alpaca_client
+                            current_price = alpaca_client.get_current_price(symbol)
+                            
+                            if current_price and current_price > 0:
+                                quantity = int(position_value / current_price)
+                                
+                                if quantity > 0 and quantity * current_price <= available_cash:
+                                    from agents.state import TradingSignal
+                                    signal = TradingSignal(
+                                        symbol=symbol,
+                                        action="buy",
+                                        confidence=rl_confidence,
+                                        price_target=current_price * 1.05,
+                                        stop_loss=current_price * 0.95,
+                                        quantity=quantity,
+                                        reasoning=f"RL allocation: {target_weight:.1%} portfolio weight"
+                                    )
+                                    signals.append(signal)
+                                    available_cash -= quantity * current_price
+                                    
+                                    logger.info(f"🎯 RL Signal: {symbol} - {quantity} shares ({target_weight:.1%} allocation)")
+                        
+                        except Exception as e:
+                            logger.warning(f"Could not get price for RL allocation {symbol}: {e}")
+                            continue
+                
+                logger.info(f"✅ Generated {len(signals)} RL-enhanced trading signals")
+                
+            else:
+                # Traditional Sentiment-Based Path (Fallback)
+                logger.info("📊 Using sentiment-based signal generation (RL not available)")
+                max_position_value = min(available_cash * 0.8, portfolio_value * 0.15)  # Max 15% per position
+                
+                # Process top sentiment signals (limit to 5 to avoid over-concentration)
+                top_sentiment_signals = [s for s in sentiment_signals if s.get('signal') == 'BUY'][:5]
+                
+                logger.info(f"Converting {len(top_sentiment_signals)} sentiment signals to trading signals")
+                
+                for sentiment_signal in top_sentiment_signals:
+                    symbol = sentiment_signal['symbol']
+                    strength = sentiment_signal.get('strength', 0.3)
+                    
+                    # Get current price from Alpaca
+                    try:
+                        from tools.alpaca_client import alpaca_client
+                        current_price = alpaca_client.get_current_price(symbol)
+                        
+                        if current_price and current_price > 0:
+                            # Calculate position size based on sentiment strength
+                            position_value = max_position_value * strength
+                            quantity = int(position_value / current_price)
+                            
+                            if quantity > 0 and quantity * current_price <= available_cash:
+                                # Create trading signal
+                                from agents.state import TradingSignal
+                                signal = TradingSignal(
+                                    symbol=symbol,
+                                    action="buy",
+                                    confidence=strength,
+                                    price_target=current_price * 1.05,  # 5% upside target
+                                    stop_loss=current_price * 0.95,     # 5% stop loss
+                                    quantity=quantity,
+                                    reasoning=sentiment_signal.get('reason', f"Positive sentiment signal for {symbol}")
+                                )
+                                signals.append(signal)
+                                available_cash -= quantity * current_price  # Reduce available cash
+                                
+                                logger.info(f"📊 Sentiment Signal: {symbol} - {quantity} shares at ${current_price:.2f}")
+                        
+                    except Exception as e:
+                        logger.warning(f"Could not get price for {symbol}: {e}")
+                        continue
             
             state["signals"] = signals
             
@@ -1118,39 +1194,20 @@ class TradingWorkflow:
             }
 
     async def _execute_smart_order(self, signal, state: TradingState) -> Dict:
-        """Execute order with intelligent order type selection and fractional handling."""
+        """Execute order with intelligent order type selection."""
         from tools.alpaca_client import alpaca_client
         
         try:
             logger.info(f"Executing order for {signal.symbol}: {signal.action} {signal.quantity} shares")
             
-            # Handle fractional shares properly
-            is_fractional = signal.quantity % 1 != 0
-            
-            # Get asset info to check fractionability
-            try:
-                asset_info = alpaca_client.get_asset_info(signal.symbol)
-                is_fractionable = asset_info.get("fractionable", False)
-            except:
-                # Default to assuming non-fractionable if we can't get asset info
-                is_fractionable = False
-            
-            # Adjust quantity if fractional but asset isn't fractionable
-            adjusted_quantity = signal.quantity
-            if is_fractional and not is_fractionable:
-                adjusted_quantity = int(signal.quantity)
-                logger.info(f"Rounded {signal.symbol} quantity from {signal.quantity} to {adjusted_quantity} (non-fractionable asset)")
-            
-            # Use proper time_in_force for fractional orders
-            time_in_force = "DAY" if (adjusted_quantity % 1 != 0) else "day"
-            
             # For reliability, use market orders for all executions in paper trading
+            # This ensures trades get filled immediately without price concerns
             order_result = alpaca_client.place_order(
                 symbol=signal.symbol,
-                qty=adjusted_quantity,
+                qty=signal.quantity,
                 side=signal.action,
                 order_type="market",
-                time_in_force=time_in_force
+                time_in_force="day"
             )
             
             logger.info(f"Order placed successfully: {order_result}")
@@ -1158,20 +1215,13 @@ class TradingWorkflow:
                 
         except Exception as e:
             logger.error(f"Smart order execution failed for {signal.symbol}: {e}")
-            # Fallback to whole shares with proper time_in_force
-            try:
-                fallback_qty = int(signal.quantity)  # Round down to whole shares
-                logger.info(f"Fallback: using whole shares ({fallback_qty}) for {signal.symbol}")
-                return alpaca_client.place_order(
-                    symbol=signal.symbol,
-                    qty=fallback_qty,
-                    side=signal.action,
-                    order_type="market",
-                    time_in_force="day"
-                )
-            except Exception as fallback_error:
-                logger.error(f"Fallback order also failed for {signal.symbol}: {fallback_error}")
-                raise fallback_error
+            # Fallback to basic market order
+            return alpaca_client.place_order(
+                symbol=signal.symbol,
+                qty=signal.quantity,
+                side=signal.action,
+                order_type="market"
+            )
     
     async def llm_portfolio_agent(self, state: TradingState, config: Dict[str, Any]) -> TradingState:
         """LLM-powered portfolio management agent."""
@@ -1186,7 +1236,7 @@ class TradingWorkflow:
             portfolio_value = state.get("portfolio", {}).get("equity", 10000)
             
             # Get available candidate symbols
-            candidate_symbols = state.get("filtered_symbols", state.get("watchlist", ["AAPL", "MSFT", "GOOGL"]))
+            candidate_symbols = state.get("filtered_symbols", state.get("watchlist", []))
             
             # Generate portfolio recommendations
             recommendations = await construct_llm_portfolio(

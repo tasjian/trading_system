@@ -295,9 +295,9 @@ def _auto_start_batch_processor():
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(email_batch_manager.start_batch_processor())
+            email_batch_manager.start_batch_processor()
         else:
-            asyncio.run(email_batch_manager.start_batch_processor())
+            email_batch_manager.start_batch_processor()
     except RuntimeError:
         # No event loop running, will start when needed
         pass
@@ -306,7 +306,7 @@ def _auto_start_batch_processor():
 # Initialize batch processor when module loads
 try:
     if not email_batch_manager.running:
-        asyncio.create_task(email_batch_manager.start_batch_processor())
+        email_batch_manager.start_batch_processor()
 except RuntimeError:
     # Event loop not running yet, will start when first transaction is added
     pass
