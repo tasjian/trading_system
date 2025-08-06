@@ -721,9 +721,38 @@ class ContinuousRebalancer:
                     
             except (ImportError, Exception) as finrl_error:
                 logger.warning(f"FinRL integration failed: {finrl_error}")
-                logger.info("Falling back to basic RL orchestrator...")
+                logger.info("Falling back to comprehensive RL system...")
                 
-                # Fallback to basic RL orchestrator
+                # ENHANCED: Try comprehensive RL system first, then basic RL orchestrator
+                try:
+                    from agents.rl_integration_bridge import integrate_comprehensive_rl_system
+                    
+                    logger.info("🚀 Initializing Comprehensive RL Decision Layer...")
+                    
+                    # Use comprehensive RL system
+                    result = await integrate_comprehensive_rl_system(state, config)
+                    
+                    if result and result.get("rl_decisions"):
+                        state.update(result)
+                        state["rl_enhanced"] = True
+                        state["finrl_integrated"] = False
+                        state["comprehensive_rl"] = True
+                        
+                        rl_decisions = result["rl_decisions"]
+                        logger.info(f"✅ Comprehensive RL generated {len(rl_decisions.get('allocations', []))} decisions")
+                        logger.info(f"🎯 Strategy: {rl_decisions.get('strategy', 'unknown')}")
+                        logger.info(f"🤖 Agent: {rl_decisions.get('active_agent', 'unknown')}")
+                        
+                        return state
+                    else:
+                        logger.warning("Comprehensive RL system returned no decisions")
+                        raise Exception("No comprehensive RL decisions generated")
+                        
+                except Exception as comprehensive_rl_error:
+                    logger.warning(f"Comprehensive RL failed: {comprehensive_rl_error}")
+                    logger.info("Falling back to basic RL orchestrator...")
+                
+                # Final fallback to basic RL orchestrator
                 from agents.online_learning_orchestrator import OnlineLearningOrchestrator, TradingEngine, PortfolioManager, RiskManager
                 from agents.llm_rl_integration import LLMStateEnricher
                 
