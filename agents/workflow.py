@@ -754,18 +754,40 @@ class TradingWorkflow:
             signals = []
             
             if rl_enhanced and rl_decisions:
-                # RL-Enhanced Signal Generation Path
-                logger.info("🤖 Using RL portfolio allocations for signal generation")
+                # Enhanced RL Signal Generation Path (with short selling support)
+                finrl_integrated = state.get("finrl_integrated", False)
+                
+                if finrl_integrated:
+                    logger.info("🚀 Using FinRL enhanced portfolio allocations with advanced features")
+                else:
+                    logger.info("🤖 Using basic RL portfolio allocations for signal generation")
+                
                 rl_allocations = rl_decisions.get("allocations", [])
+                advanced_features = rl_decisions.get("advanced_features", {})
                 
                 for allocation in rl_allocations:
                     symbol = allocation.get("symbol")
                     target_weight = allocation.get("weight", 0)
                     rl_confidence = allocation.get("confidence", 0.7)
+                    action = allocation.get("action", "buy")
+                    order_type = allocation.get("order_type", "market")
+                    limit_price = allocation.get("limit_price")
                     
-                    if target_weight > 0.01:  # Only meaningful allocations
-                        # Calculate position size based on RL allocation
-                        position_value = available_cash * target_weight
+                    # Process both positive and negative allocations (for short selling)
+                    if abs(target_weight) > 0.01:  # Only meaningful allocations
+                        # Determine action based on weight and RL decision
+                        if target_weight > 0:
+                            signal_action = "buy"
+                            position_value = available_cash * target_weight
+                        else:
+                            # Short selling support
+                            if advanced_features.get("short_selling", False) and action in ["short", "sell"]:
+                                signal_action = "short"
+                                # For short positions, use portfolio value instead of cash
+                                position_value = portfolio_value * abs(target_weight)
+                            else:
+                                signal_action = "sell"
+                                position_value = portfolio_value * abs(target_weight)
                         
                         # Get current price
                         try:
@@ -775,27 +797,73 @@ class TradingWorkflow:
                             if current_price and current_price > 0:
                                 quantity = int(position_value / current_price)
                                 
-                                if quantity > 0 and quantity * current_price <= available_cash:
+                                # Validate position requirements
+                                can_execute = False
+                                if signal_action == "buy":
+                                    can_execute = quantity > 0 and quantity * current_price <= available_cash
+                                elif signal_action == "short":
+                                    # Short selling validation (margin requirements)
+                                    margin_requirement = quantity * current_price * 0.5  # 50% margin
+                                    can_execute = quantity > 0 and margin_requirement <= available_cash
+                                elif signal_action == "sell":
+                                    can_execute = quantity > 0  # Assume we can sell existing positions
+                                
+                                if can_execute:
                                     from agents.state import TradingSignal
+                                    
+                                    # Set price targets based on position type
+                                    if signal_action in ["buy"]:
+                                        price_target = current_price * 1.05  # 5% upside for long
+                                        stop_loss = current_price * 0.95     # 5% stop loss
+                                    elif signal_action == "short":
+                                        price_target = current_price * 0.95  # 5% downside target for short
+                                        stop_loss = current_price * 1.05     # 5% stop loss (upward)
+                                    else:  # sell
+                                        price_target = current_price * 0.98  # Slightly below current
+                                        stop_loss = current_price * 1.02     # Small upward stop
+                                    
+                                    # Override with limit price if provided
+                                    if limit_price and order_type == "limit":
+                                        price_target = limit_price
+                                    
                                     signal = TradingSignal(
                                         symbol=symbol,
-                                        action="buy",
+                                        action=signal_action,
                                         confidence=rl_confidence,
-                                        price_target=current_price * 1.05,
-                                        stop_loss=current_price * 0.95,
+                                        price_target=price_target,
+                                        stop_loss=stop_loss,
                                         quantity=quantity,
-                                        reasoning=f"RL allocation: {target_weight:.1%} portfolio weight"
+                                        reasoning=f"RL {action}: {target_weight:.1%} portfolio weight"
                                     )
                                     signals.append(signal)
-                                    available_cash -= quantity * current_price
                                     
-                                    logger.info(f"🎯 RL Signal: {symbol} - {quantity} shares ({target_weight:.1%} allocation)")
+                                    # Update available cash based on action
+                                    if signal_action == "buy":
+                                        available_cash -= quantity * current_price
+                                    elif signal_action == "short":
+                                        # Short selling reduces buying power by margin requirement
+                                        available_cash -= quantity * current_price * 0.5
+                                    
+                                    # Enhanced logging
+                                    order_info = f"({order_type}"
+                                    if limit_price:
+                                        order_info += f" @ ${limit_price:.2f}"
+                                    order_info += ")"
+                                    
+                                    if finrl_integrated:
+                                        logger.info(f"🚀 FinRL Signal: {symbol} {signal_action.upper()} {quantity} shares {order_info}")
+                                    else:
+                                        logger.info(f"🎯 RL Signal: {symbol} {signal_action.upper()} {quantity} shares ({target_weight:.1%})")
+                                    
+                                    # Log short selling specifically
+                                    if signal_action == "short":
+                                        logger.info(f"   ⚡ SHORT POSITION: {symbol} targeting ${price_target:.2f}")
                         
                         except Exception as e:
                             logger.warning(f"Could not get price for RL allocation {symbol}: {e}")
                             continue
                 
-                logger.info(f"✅ Generated {len(signals)} RL-enhanced trading signals")
+                logger.info(f"✅ Generated {len(signals)} RL-enhanced trading signals (including shorts)")
                 
             else:
                 # Traditional Sentiment-Based Path (Fallback)

@@ -1,0 +1,180 @@
+{
+  "training_history": [
+    {
+      "episode_reward": -0.00425828458645553,
+      "episode_length": 1,
+      "episode_count": 1,
+      "buffer_size": 1
+    },
+    {
+      "episode_reward": -0.007081417769997478,
+      "episode_length": 1,
+      "episode_count": 2,
+      "buffer_size": 2
+    },
+    {
+      "episode_reward": -0.007851391449812783,
+      "episode_length": 1,
+      "episode_count": 3,
+      "buffer_size": 3
+    },
+    {
+      "episode_reward": -0.014919944318715647,
+      "episode_length": 1,
+      "episode_count": 4,
+      "buffer_size": 4
+    },
+    {
+      "episode_reward": -0.011467908581455315,
+      "episode_length": 1,
+      "episode_count": 5,
+      "buffer_size": 5
+    },
+    {
+      "episode_reward": -0.008411807798315098,
+      "episode_length": 1,
+      "episode_count": 6,
+      "buffer_size": 6
+    },
+    {
+      "episode_reward": -0.007160435604482504,
+      "episode_length": 1,
+      "episode_count": 7,
+      "buffer_size": 7
+    },
+    {
+      "episode_reward": -0.011802988406628667,
+      "episode_length": 1,
+      "episode_count": 8,
+      "buffer_size": 8
+    },
+    {
+      "episode_reward": -0.005501518661039724,
+      "episode_length": 1,
+      "episode_count": 9,
+      "buffer_size": 9
+    },
+    {
+      "episode_reward": -0.005944492989846919,
+      "episode_length": 1,
+      "episode_count": 10,
+      "buffer_size": 10
+    },
+    {
+      "episode_reward": -0.0063910377141293715,
+      "episode_length": 1,
+      "episode_count": 11,
+      "buffer_size": 11
+    },
+    {
+      "episode_reward": -0.015012036506363648,
+      "episode_length": 1,
+      "episode_count": 12,
+      "buffer_size": 12
+    },
+    {
+      "episode_reward": -0.008268724908965536,
+      "episode_length": 1,
+      "episode_count": 13,
+      "buffer_size": 13
+    },
+    {
+      "episode_reward": -0.012407959505974772,
+      "episode_length": 1,
+      "episode_count": 14,
+      "buffer_size": 14
+    },
+    {
+      "episode_reward": -0.0070665532791287546,
+      "episode_length": 1,
+      "episode_count": 15,
+      "buffer_size": 15
+    },
+    {
+      "episode_reward": -0.0112797962074367,
+      "episode_length": 1,
+      "episode_count": 16,
+      "buffer_size": 16
+    },
+    {
+      "episode_reward": -0.01599731876864348,
+      "episode_length": 1,
+      "episode_count": 17,
+      "buffer_size": 17
+    },
+    {
+      "episode_reward": -0.009786960859020512,
+      "episode_length": 1,
+      "episode_count": 18,
+      "buffer_size": 18
+    },
+    {
+      "episode_reward": -0.014943241084178037,
+      "episode_length": 1,
+      "episode_count": 19,
+      "buffer_size": 19
+    },
+    {
+      "episode_reward": -0.002383318043068232,
+      "episode_length": 1,
+      "episode_count": 20,
+      "buffer_size": 20
+    }
+  ],
+  "evaluation_history": [
+    {
+      "episode": 0,
+      "episode_reward": -0.005797133410324696,
+      "episode_length": 1,
+      "final_portfolio_value": 99968.60722474754,
+      "total_trades": 1,
+      "trades": [
+        {
+          "step": 0,
+          "action": [
+            0.789499819278717,
+            0.2324867993593216,
+            -0.26823243498802185,
+            0.8026326298713684
+          ],
+          "portfolio_value": 99968.60722474754,
+          "positions": 4
+        }
+      ]
+    },
+    {
+      "episode": 10,
+      "episode_reward": -0.007542538219208723,
+      "episode_length": 1,
+      "final_portfolio_value": 99967.8977073729,
+      "total_trades": 1,
+      "trades": [
+        {
+          "step": 0,
+          "action": [
+            0.982118546962738,
+            -0.454169362783432,
+            0.23921290040016174,
+            0.46465203166007996
+          ],
+          "portfolio_value": 99967.8977073729,
+          "positions": 4
+        }
+      ]
+    }
+  ],
+  "performance_stats": {
+    "total_episodes": 20,
+    "total_training_steps": 0,
+    "average_reward": -0.009396856852182934,
+    "best_reward": -0.002383318043068232,
+    "recent_average_reward": -0.010353694687690904,
+    "average_episode_length": 1.0,
+    "current_noise_level": 0.1,
+    "buffer_utilization": 0.0002
+  },
+  "strategy_summary": {
+    "message": "Not enough experience for analysis"
+  },
+  "final_model_path": "models/finrl_agent/final_episode_20.pt"
+}

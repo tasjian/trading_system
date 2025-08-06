@@ -515,83 +515,175 @@ class ContinuousRebalancer:
     
     async def _run_rl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        RL Decision Layer: Policy Learning & Portfolio Allocation
+        Enhanced RL Decision Layer with FinRL Integration
         
         Architecture:
         [LLM Analysis Layer: sentiment_data, market_signals] 
                     ↓
-        [RL Agent: Decision Layer] ← This method
+        [FinRL Agent: Advanced RL Decision Layer] ← This method
                     ↓
-        [Enhanced state with RL portfolio decisions]
+        [Enhanced state with sophisticated RL portfolio decisions]
         """
         try:
-            # Initialize RL components
-            from agents.online_learning_orchestrator import OnlineLearningOrchestrator, TradingEngine, PortfolioManager, RiskManager
-            from agents.llm_rl_integration import LLMStateEnricher
-            
-            logger.info("🤖 Initializing RL Decision Layer...")
-            
-            # Extract LLM analysis results (Feature Store)
-            sentiment_data = state.get("sentiment_data", {})
-            sentiment_signals = state.get("sentiment_signals", [])
-            market_data = state.get("market_data", {})
-            portfolio = state.get("portfolio", {})
-            
-            logger.info(f"📊 Feature Store Input: {len(sentiment_data)} sentiment analyses, {len(sentiment_signals)} signals")
-            
-            # Create enhanced state for RL agent
-            enricher = LLMStateEnricher()
-            enhanced_state = await enricher.enrich_state_from_llm_analysis(
-                sentiment_data=sentiment_data,
-                market_signals=sentiment_signals,
-                portfolio_state=portfolio,
-                market_data=market_data
-            )
-            
-            # Initialize online learning orchestrator with default components
-            orchestrator = OnlineLearningOrchestrator(
-                trading_engine=TradingEngine(),
-                portfolio_manager=PortfolioManager(), 
-                risk_manager=RiskManager()
-            )
-            
-            # Get RL portfolio decisions
-            logger.info("🧠 RL Agent making portfolio allocation decisions...")
-            
-            # Run RL decision making
-            rl_decisions = await orchestrator.make_portfolio_decisions(
-                enhanced_state=enhanced_state,
-                available_symbols=[s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY'][:10],
-                portfolio_value=portfolio.get("equity", 50000),
-                risk_tolerance=state.get("risk_tolerance", 0.5)
-            )
-            
-            # Store RL decisions in state for signal generation
-            state["rl_decisions"] = rl_decisions
-            state["rl_enhanced"] = True
-            
-            # Log RL insights
-            if rl_decisions:
-                logger.info(f"✅ RL Agent generated {len(rl_decisions.get('allocations', []))} allocation decisions")
-                logger.info(f"📈 RL Portfolio Strategy: {rl_decisions.get('strategy', 'adaptive')}")
-                logger.info(f"⚖️ RL Risk Assessment: {rl_decisions.get('risk_level', 'moderate')}")
+            # Try FinRL integration first (advanced RL system)
+            try:
+                from agents.finrl_integration import create_finrl_trading_system, integrate_finrl_with_workflow
                 
-                # Log top allocations
-                for allocation in rl_decisions.get('allocations', [])[:3]:
-                    logger.info(f"   🎯 {allocation.get('symbol')}: {allocation.get('weight', 0):.1%} allocation")
-            
-            return state
-            
-        except ImportError as e:
-            logger.warning(f"RL components not available: {e}")
-            logger.info("Continuing with LLM-only analysis...")
-            state["rl_enhanced"] = False
-            return state
+                logger.info("🚀 Initializing Enhanced FinRL Decision Layer...")
+                
+                # Extract symbols from sentiment signals
+                sentiment_signals = state.get("sentiment_signals", [])
+                available_symbols = list(set([s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY']))[:8]
+                
+                if not available_symbols:
+                    logger.warning("No symbols available for FinRL - using fallback")
+                    raise ImportError("No symbols for FinRL")
+                
+                logger.info(f"📊 FinRL Processing: {len(available_symbols)} symbols")
+                
+                # Create or reuse FinRL orchestrator
+                if not hasattr(self, '_finrl_orchestrator') or self._finrl_orchestrator is None:
+                    self._finrl_orchestrator = await create_finrl_trading_system(
+                        symbols=available_symbols,
+                        initial_balance=state.get("portfolio", {}).get("equity", 100000),
+                        enable_short_selling=True,
+                        enable_limit_orders=True,
+                        paper_trading=True,
+                        max_position_size=0.15
+                    )
+                    logger.info("✅ FinRL Trading System created")
+                
+                # Integrate with workflow
+                state = await integrate_finrl_with_workflow(self._finrl_orchestrator, state)
+                
+                # Extract FinRL decisions
+                finrl_decisions = state.get("finrl_decisions", {})
+                
+                if finrl_decisions and finrl_decisions.get('orders'):
+                    # Convert FinRL decisions to standard RL format
+                    rl_decisions = {
+                        "strategy": finrl_decisions.get('strategy', 'finrl_optimized'),
+                        "risk_level": finrl_decisions.get('risk_level', 'moderate'),
+                        "allocations": [],
+                        "confidence": finrl_decisions.get('confidence', 0.8),
+                        "reasoning": f"FinRL agent with {len(finrl_decisions['orders'])} positions",
+                        "advanced_features": {
+                            "short_selling": True,
+                            "limit_orders": True,
+                            "risk_management": True
+                        }
+                    }
+                    
+                    # Convert orders to allocations
+                    portfolio_value = state.get("portfolio", {}).get("equity", 100000)
+                    for order in finrl_decisions['orders']:
+                        allocation_value = order['quantity'] * order['price']
+                        weight = allocation_value / portfolio_value
+                        
+                        # Adjust weight for short positions
+                        if order['side'] in ['short', 'sell']:
+                            weight = -abs(weight)
+                        
+                        allocation = {
+                            "symbol": order['symbol'],
+                            "weight": weight,
+                            "confidence": order.get('confidence', 0.8),
+                            "action": order['side'],
+                            "reasoning": f"FinRL {order['side']} decision",
+                            "order_type": order.get('order_type', 'market'),
+                            "limit_price": order.get('limit_price')
+                        }
+                        
+                        rl_decisions["allocations"].append(allocation)
+                    
+                    state["rl_decisions"] = rl_decisions
+                    state["rl_enhanced"] = True
+                    state["finrl_integrated"] = True
+                    
+                    logger.info(f"✅ FinRL Agent generated {len(rl_decisions['allocations'])} advanced allocations")
+                    logger.info(f"📈 FinRL Strategy: {rl_decisions['strategy']}")
+                    logger.info(f"⚖️ FinRL Risk Level: {rl_decisions['risk_level']}")
+                    
+                    # Log top allocations with enhanced info
+                    for allocation in rl_decisions["allocations"][:3]:
+                        weight_str = f"{allocation['weight']:.1%}"
+                        action_str = allocation['action']
+                        order_type = allocation.get('order_type', 'market')
+                        logger.info(f"   🎯 {allocation['symbol']}: {action_str} {weight_str} ({order_type})")
+                    
+                    return state
+                
+                else:
+                    logger.warning("FinRL generated no decisions - falling back to basic RL")
+                    raise Exception("No FinRL decisions generated")
+                    
+            except (ImportError, Exception) as finrl_error:
+                logger.warning(f"FinRL integration failed: {finrl_error}")
+                logger.info("Falling back to basic RL orchestrator...")
+                
+                # Fallback to basic RL orchestrator
+                from agents.online_learning_orchestrator import OnlineLearningOrchestrator, TradingEngine, PortfolioManager, RiskManager
+                from agents.llm_rl_integration import LLMStateEnricher
+                
+                logger.info("🤖 Initializing Basic RL Decision Layer...")
+                
+                # Extract LLM analysis results (Feature Store)
+                sentiment_data = state.get("sentiment_data", {})
+                sentiment_signals = state.get("sentiment_signals", [])
+                market_data = state.get("market_data", {})
+                portfolio = state.get("portfolio", {})
+                
+                logger.info(f"📊 Feature Store Input: {len(sentiment_data)} sentiment analyses, {len(sentiment_signals)} signals")
+                
+                # Create enhanced state for RL agent
+                enricher = LLMStateEnricher()
+                enhanced_state = await enricher.enrich_state_from_llm_analysis(
+                    sentiment_data=sentiment_data,
+                    market_signals=sentiment_signals,
+                    portfolio_state=portfolio,
+                    market_data=market_data
+                )
+                
+                # Initialize online learning orchestrator with default components
+                orchestrator = OnlineLearningOrchestrator(
+                    trading_engine=TradingEngine(),
+                    portfolio_manager=PortfolioManager(), 
+                    risk_manager=RiskManager()
+                )
+                
+                # Get RL portfolio decisions
+                logger.info("🧠 Basic RL Agent making portfolio allocation decisions...")
+                
+                # Run RL decision making
+                rl_decisions = await orchestrator.make_portfolio_decisions(
+                    enhanced_state=enhanced_state,
+                    available_symbols=[s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY'][:10],
+                    portfolio_value=portfolio.get("equity", 50000),
+                    risk_tolerance=state.get("risk_tolerance", 0.5)
+                )
+                
+                # Store RL decisions in state for signal generation
+                state["rl_decisions"] = rl_decisions
+                state["rl_enhanced"] = True
+                state["finrl_integrated"] = False
+                
+                # Log RL insights
+                if rl_decisions:
+                    logger.info(f"✅ Basic RL Agent generated {len(rl_decisions.get('allocations', []))} allocation decisions")
+                    logger.info(f"📈 RL Portfolio Strategy: {rl_decisions.get('strategy', 'adaptive')}")
+                    logger.info(f"⚖️ RL Risk Assessment: {rl_decisions.get('risk_level', 'moderate')}")
+                    
+                    # Log top allocations
+                    for allocation in rl_decisions.get('allocations', [])[:3]:
+                        logger.info(f"   🎯 {allocation.get('symbol')}: {allocation.get('weight', 0):.1%} allocation")
+                
+                return state
             
         except Exception as e:
             logger.error(f"RL Decision Layer error: {e}")
             logger.info("Falling back to LLM-only analysis...")
             state["rl_enhanced"] = False
+            state["finrl_integrated"] = False
             return state
     
     def get_status_report(self) -> Dict[str, Any]:
