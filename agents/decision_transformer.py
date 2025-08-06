@@ -243,19 +243,26 @@ class TrajectoryDataset:
             # Normalize returns
             returns_to_go = returns_to_go / self.config.return_scale
             
-            # Create sequences
+            # Create sequences - ensure minimum trajectory length
+            if len(states) < self.sequence_length:
+                continue  # Skip short trajectories
+                
             for i in range(len(states) - self.sequence_length + 1):
                 seq_states = states[i:i + self.sequence_length]
                 seq_actions = actions[i:i + self.sequence_length]
                 seq_returns = returns_to_go[i:i + self.sequence_length]
                 seq_timesteps = np.arange(i, i + self.sequence_length)
                 
-                processed.append({
-                    'states': seq_states,
-                    'actions': seq_actions,
-                    'returns_to_go': seq_returns,
-                    'timesteps': seq_timesteps
-                })
+                # Ensure all sequences have exactly the right length
+                if (len(seq_states) == self.sequence_length and 
+                    len(seq_actions) == self.sequence_length and 
+                    len(seq_returns) == self.sequence_length):
+                    processed.append({
+                        'states': seq_states,
+                        'actions': seq_actions,
+                        'returns_to_go': seq_returns,
+                        'timesteps': seq_timesteps
+                    })
         
         return processed
     
@@ -280,11 +287,34 @@ class TrajectoryDataset:
         
         def collate_fn(batch):
             states, actions, returns_to_go, timesteps = zip(*batch)
+            
+            # Pad sequences to the same length
+            max_len = max(s.size(0) for s in states)
+            
+            padded_states = []
+            padded_actions = []
+            padded_returns = []
+            padded_timesteps = []
+            
+            for s, a, r, t in zip(states, actions, returns_to_go, timesteps):
+                pad_len = max_len - s.size(0)
+                if pad_len > 0:
+                    # Pad with zeros
+                    padded_states.append(torch.cat([s, torch.zeros(pad_len, s.size(1))]))
+                    padded_actions.append(torch.cat([a, torch.zeros(pad_len, a.size(1))]))
+                    padded_returns.append(torch.cat([r, torch.zeros(pad_len, r.size(1))]))
+                    padded_timesteps.append(torch.cat([t, torch.zeros(pad_len, dtype=torch.long)]))
+                else:
+                    padded_states.append(s)
+                    padded_actions.append(a)
+                    padded_returns.append(r)
+                    padded_timesteps.append(t)
+            
             return (
-                torch.stack(states),
-                torch.stack(actions),
-                torch.stack(returns_to_go),
-                torch.stack(timesteps)
+                torch.stack(padded_states),
+                torch.stack(padded_actions),
+                torch.stack(padded_returns),
+                torch.stack(padded_timesteps)
             )
         
         return DataLoader(

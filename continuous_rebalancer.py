@@ -99,15 +99,15 @@ class ContinuousRebalancer:
         self.start_time = None
         
         # Rate limiting and timing
-        self.min_interval_minutes = 15      # Minimum time between runs
-        self.standard_interval_minutes = 30  # Standard interval during market hours
-        self.after_hours_interval_minutes = 60  # Longer interval after hours
+        self.min_interval_minutes = 2       # Minimum time between runs (safety buffer)
+        self.standard_interval_minutes = 5   # Standard interval during market hours (RL trading)
+        self.after_hours_interval_minutes = 30  # Reduced interval after hours
         self.last_run_time = None
         
         # Error handling
         self.max_consecutive_failures = 5
         self.failure_backoff_minutes = 60  # Wait longer after failures
-        self.api_cooldown_minutes = 5      # Cooldown after API rate limits
+        self.api_cooldown_minutes = 2      # Cooldown after API rate limits (reduced for 5min cycles)
         
         # State tracking
         self.health = SystemHealth(
@@ -121,6 +121,11 @@ class ContinuousRebalancer:
             api_rate_limit_hits=0,
             consecutive_failures=0
         )
+        
+        # Sentiment analysis scheduling
+        self.sentiment_interval_minutes = 90  # Run sentiment analysis every 90 minutes
+        self.last_sentiment_run = None
+        self.cached_sentiment_data = {}  # Cache sentiment data between runs
         
         # Results history
         self.results_history: List[RebalanceResult] = []
@@ -266,10 +271,9 @@ class ContinuousRebalancer:
             logger.info("🔍 Universe Filter (99.7% processing reduction)...")
             state = await self.workflow.universe_filter_agent(state, config)
             
-            # Step 3: Sentiment Analysis (only on filtered stocks)
+            # Step 3: Sentiment Analysis (only on filtered stocks, every 90 minutes)
             pipeline_stage = "sentiment_analysis"
-            logger.info("💭 Sentiment Analysis (pre-filtered stocks only)...")
-            state = await self.workflow.sentiment_analysis_agent(state, config)
+            state = await self._run_scheduled_sentiment_analysis(state, config)
             
             # Check for API rate limits
             if self._check_rate_limit_indicators(state):
@@ -359,6 +363,86 @@ class ContinuousRebalancer:
                 error_message=error_msg,
                 pipeline_stage=pipeline_stage
             )
+    
+    async def _run_scheduled_sentiment_analysis(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """Run sentiment analysis only every 90 minutes, use cached data otherwise."""
+        from tools.alpaca_client import alpaca_client
+        
+        # Check if market is open
+        market_open = alpaca_client.is_market_open()
+        current_time = datetime.now()
+        
+        # Determine if we should run sentiment analysis
+        should_run_sentiment = False
+        
+        if market_open:
+            # Market is open - check 90-minute interval
+            if (self.last_sentiment_run is None or 
+                (current_time - self.last_sentiment_run).total_seconds() >= (self.sentiment_interval_minutes * 60)):
+                should_run_sentiment = True
+                reason = f"90-minute interval reached (last run: {self.last_sentiment_run})"
+            else:
+                next_sentiment_time = self.last_sentiment_run + timedelta(minutes=self.sentiment_interval_minutes)
+                reason = f"using cached data, next sentiment run at {next_sentiment_time.strftime('%H:%M:%S')}"
+        else:
+            # Market is closed - don't run sentiment analysis  
+            reason = "market is closed"
+        
+        if should_run_sentiment:
+            logger.info(f"💭 Running Fresh Sentiment Analysis - {reason}")
+            
+            # Run the actual sentiment analysis
+            state = await self.workflow.sentiment_analysis_agent(state, config)
+            
+            # Cache the results and update timestamp
+            self.cached_sentiment_data = state.get("sentiment_data", {})
+            self.last_sentiment_run = current_time
+            
+            logger.info(f"✅ Sentiment analysis complete: {len(self.cached_sentiment_data)} symbols analyzed")
+            
+        else:
+            logger.info(f"📋 Using Cached Sentiment Data - {reason}")
+            
+            # Use cached sentiment data
+            if self.cached_sentiment_data:
+                state["sentiment_data"] = self.cached_sentiment_data.copy()
+                
+                # Reconstruct sentiment_signals from cached sentiment_data for RL integration
+                sentiment_signals = []
+                for symbol, sentiment_data in self.cached_sentiment_data.items():
+                    # Convert sentiment data back to signal format
+                    if isinstance(sentiment_data, dict):
+                        overall_score = sentiment_data.get('overall_score', 0.0)
+                        overall_sentiment = sentiment_data.get('overall_sentiment', 'neutral')
+                        confidence = sentiment_data.get('confidence', 0.5)
+                    else:
+                        # Handle object format
+                        overall_score = getattr(sentiment_data, 'overall_score', 0.0)
+                        overall_sentiment = getattr(sentiment_data, 'overall_sentiment', 'neutral')
+                        confidence = getattr(sentiment_data, 'confidence', 0.5)
+                    
+                    # Generate signal based on sentiment score
+                    if overall_score > 0.1:  # Positive sentiment threshold
+                        signal_strength = min(0.5, max(0.3, overall_score))  # 0.3 to 0.5 strength
+                        sentiment_signals.append({
+                            'symbol': symbol,
+                            'signal': 'BUY',
+                            'strength': signal_strength,
+                            'confidence': confidence,
+                            'reasoning': f"{overall_sentiment.title()} overall sentiment, Multiple data sources",
+                            'timestamp': datetime.now(),
+                            'has_earnings': False  # Cached data doesn't track earnings
+                        })
+                
+                state["sentiment_signals"] = sentiment_signals
+                logger.info(f"📊 Loaded cached sentiment for {len(self.cached_sentiment_data)} symbols, {len(sentiment_signals)} signals")
+            else:
+                # No cached data available
+                state["sentiment_data"] = {}
+                state["sentiment_signals"] = []
+                logger.warning("No cached sentiment data available, continuing with empty sentiment data")
+        
+        return state
     
     def _check_rate_limit_indicators(self, state: Dict[str, Any]) -> bool:
         """Check if there are indicators of API rate limiting."""
@@ -451,7 +535,9 @@ class ContinuousRebalancer:
             state_data = {
                 "health": asdict(self.health),
                 "results_history": [asdict(r) for r in self.results_history[-20:]],  # Last 20 results
-                "last_run_time": self.last_run_time.isoformat() if self.last_run_time else None
+                "last_run_time": self.last_run_time.isoformat() if self.last_run_time else None,
+                "last_sentiment_run": self.last_sentiment_run.isoformat() if self.last_sentiment_run else None,
+                "cached_sentiment_data": self.cached_sentiment_data
             }
             
             with open(self.state_file, 'w') as f:
@@ -480,6 +566,16 @@ class ContinuousRebalancer:
                 last_run_str = state_data.get("last_run_time")
                 if last_run_str:
                     self.last_run_time = datetime.fromisoformat(last_run_str)
+                
+                # Restore sentiment analysis data
+                last_sentiment_str = state_data.get("last_sentiment_run")
+                if last_sentiment_str:
+                    self.last_sentiment_run = datetime.fromisoformat(last_sentiment_str)
+                
+                cached_sentiment = state_data.get("cached_sentiment_data", {})
+                if cached_sentiment:
+                    self.cached_sentiment_data = cached_sentiment
+                    logger.info(f"✅ Loaded cached sentiment data for {len(cached_sentiment)} symbols")
                 
                 logger.info(f"✅ Loaded previous state: {self.health.total_runs} total runs")
                 
@@ -531,8 +627,8 @@ class ContinuousRebalancer:
             
             for symbol in symbols:
                 try:
-                    # Get historical data using the existing get_historical_data method
-                    historical_df = alpaca_client.get_historical_data(symbol)
+                    # Get historical data using the existing get_market_data method
+                    historical_df = alpaca_client.get_market_data(symbol, timeframe="1Day")
                     
                     if historical_df is not None and len(historical_df) > 0:
                         # Convert DataFrame to lists in FinRL format

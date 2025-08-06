@@ -467,12 +467,20 @@ class TradingWorkflow:
         try:
             logger.info("Signal Generation Agent: Performing portfolio analysis")
             
-            # Try LLM portfolio construction first
+            # Check if we have RL decisions first (prioritize RL over LLM)
+            rl_decisions = state.get("rl_decisions")
+            rl_enhanced = state.get("rl_enhanced", False)
+            
+            if rl_enhanced and rl_decisions and rl_decisions.get("allocations"):
+                logger.info("🤖 Using RL portfolio allocations for signal generation")
+                return await self._rl_signal_generation(state, config)
+            
+            # Try LLM portfolio construction as fallback
             try:
                 from agents.llm_portfolio_management import construct_llm_portfolio
                 return await self._llm_signal_generation(state, config)
             except ImportError:
-                logger.info("LLM portfolio management not available, using fallback signal generation")
+                logger.info("LLM portfolio management not available, using basic fallback signal generation")
                 return await self._fallback_signal_generation(state, config)
         
         except Exception as e:
@@ -486,6 +494,104 @@ class TradingWorkflow:
                 await self._cleanup_signal_generation_resources()
             except Exception as cleanup_error:
                 logger.warning(f"Cleanup warning: {cleanup_error}")
+    
+    async def _rl_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate trading signals directly from RL portfolio allocations."""
+        try:
+            logger.info("🚀 RL-Enhanced Signal Generation")
+            
+            portfolio_value = state["portfolio"].get("equity", 26100.0)
+            available_cash = state["portfolio"].get("cash", 5715.18)
+            
+            rl_decisions = state.get("rl_decisions", {})
+            rl_allocations = rl_decisions.get("allocations", [])
+            
+            signals = []
+            
+            for allocation in rl_allocations:
+                symbol = allocation.get("symbol")
+                target_weight = allocation.get("weight", 0)
+                rl_confidence = allocation.get("confidence", 0.7)
+                action = allocation.get("action", "buy")
+                
+                # Only process meaningful allocations
+                if abs(target_weight) > 0.01:  # 1% minimum
+                    # Determine action and position value
+                    if target_weight > 0:
+                        signal_action = "buy"
+                        # Use available cash for buy positions (respect buying power limits)
+                        # Handle margin accounts (negative cash) by using buying power instead
+                        portfolio_info = state.get("portfolio", {})
+                        buying_power = portfolio_info.get("buying_power", max(0, available_cash))
+                        
+                        if available_cash < 0:  # Margin account
+                            max_position_value = min(buying_power * 0.8, portfolio_value * 0.10)  # Conservative for margin
+                            logger.info(f"Margin account detected: using buying power ${buying_power:.2f} instead of cash ${available_cash:.2f}")
+                        else:  # Cash account
+                            max_position_value = min(available_cash * 0.9, portfolio_value * 0.15)  # Max 15% per position or 90% of cash
+                        
+                        desired_position_value = portfolio_value * abs(target_weight)
+                        position_value = min(max_position_value, desired_position_value)
+                        
+                        if position_value < desired_position_value:
+                            logger.info(f"Position size limited for {symbol}: desired ${desired_position_value:.2f}, using ${position_value:.2f} (available cash: ${available_cash:.2f})")
+                    else:
+                        signal_action = "sell" 
+                        position_value = portfolio_value * abs(target_weight)
+                    
+                    # Get current price and create signal
+                    try:
+                        from tools.alpaca_client import alpaca_client
+                        current_price = alpaca_client.get_current_price(symbol)
+                        
+                        if current_price and current_price > 0:
+                            quantity = int(position_value / current_price)
+                            
+                            if quantity > 0 and position_value > 100:  # Minimum $100 positions
+                                from agents.state import TradingSignal
+                                
+                                price_target = current_price * (1.05 if signal_action == "buy" else 0.95)
+                                stop_loss = current_price * (0.95 if signal_action == "buy" else 1.05)
+                                
+                                signal = TradingSignal(
+                                    symbol=symbol,
+                                    action=signal_action,
+                                    quantity=quantity,
+                                    confidence=rl_confidence,
+                                    reasoning=f"RL allocation: {target_weight:.1%} ({allocation.get('reasoning', 'RL-driven')}) - Strategy: {rl_decisions.get('strategy', 'rl_portfolio')}",
+                                    price_target=price_target,
+                                    stop_loss=stop_loss,
+                                    timestamp=datetime.now()
+                                )
+                                
+                                signals.append(signal)
+                                logger.info(f"✅ RL Signal: {signal_action.upper()} {quantity} {symbol} @ ${current_price:.2f} (target: {target_weight:.1%})")
+                    
+                    except Exception as e:
+                        logger.warning(f"Could not process RL allocation for {symbol}: {e}")
+                        continue
+            
+            # Update state with signals
+            state["signals"] = signals
+            state["current_agent"] = "signal_generator"
+            
+            logger.info(f"✅ Generated {len(signals)} RL-based trading signals")
+            
+            if signals:
+                state["messages"].append(AIMessage(
+                    content=f"Generated {len(signals)} RL-enhanced trading signals using {rl_decisions.get('strategy', 'RL portfolio')} strategy"
+                ))
+            else:
+                state["messages"].append(AIMessage(
+                    content="No viable RL trading signals generated - positions too small or prices unavailable"
+                ))
+            
+            return update_state_timestamp(state)
+            
+        except Exception as e:
+            logger.error(f"❌ RL signal generation failed: {e}")
+            # Fall back to the existing fallback method
+            return await self._fallback_signal_generation(state, config)
     
     async def _cleanup_signal_generation_resources(self):
         """Clean up resources used in signal generation."""
@@ -786,8 +892,22 @@ class TradingWorkflow:
                             # Short selling support
                             if advanced_features.get("short_selling", False) and action in ["short", "sell"]:
                                 signal_action = "short"
-                                # For short positions, use portfolio value instead of cash
-                                position_value = portfolio_value * abs(target_weight)
+                                # For short positions, limit to available cash and position size limits
+                                # Handle margin accounts (negative cash) by using buying power instead
+                                portfolio_info = state.get("portfolio", {})
+                                buying_power = portfolio_info.get("buying_power", max(0, available_cash))
+                                
+                                if available_cash < 0:  # Margin account
+                                    max_position_value = min(buying_power * 0.8, portfolio_value * 0.10)  # Conservative for margin
+                                    logger.info(f"Margin account detected for short: using buying power ${buying_power:.2f} instead of cash ${available_cash:.2f}")
+                                else:  # Cash account
+                                    max_position_value = min(available_cash * 0.9, portfolio_value * 0.15)  # Max 15% per position or 90% of cash
+                                
+                                desired_position_value = portfolio_value * abs(target_weight)
+                                position_value = min(max_position_value, desired_position_value)
+                                
+                                if position_value < desired_position_value:
+                                    logger.info(f"Short position size limited for {symbol}: desired ${desired_position_value:.2f}, using ${position_value:.2f} (available cash: ${available_cash:.2f})")
                             else:
                                 signal_action = "sell"
                                 position_value = portfolio_value * abs(target_weight)

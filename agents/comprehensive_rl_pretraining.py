@@ -51,6 +51,21 @@ class RegimeType(Enum):
     VOLATILE = "volatile"
     CRISIS = "crisis"
     UNKNOWN = "unknown"
+    
+    @classmethod
+    def to_id(cls, regime_type):
+        """Convert RegimeType to integer ID for tensor operations."""
+        regime_mapping = {
+            cls.BULL_LOW_VOL: 0,
+            cls.BULL_HIGH_VOL: 1,
+            cls.BEAR_LOW_VOL: 2,
+            cls.BEAR_HIGH_VOL: 3,
+            cls.SIDEWAYS: 4,
+            cls.VOLATILE: 5,
+            cls.CRISIS: 6,
+            cls.UNKNOWN: 7
+        }
+        return regime_mapping.get(regime_type, 7)  # Default to UNKNOWN
 
 @dataclass
 class SafetyConstraints:
@@ -264,8 +279,13 @@ class RegimeAwarePolicy(nn.Module):
         regime_emb = self.regime_embeddings(regime_id)
         
         # Concatenate state and regime
-        if len(state.shape) > 1 and len(regime_emb.shape) == 2:
-            regime_emb = regime_emb.unsqueeze(0).expand(state.shape[0], -1)
+        # Handle tensor dimensions properly
+        if len(regime_emb.shape) == 3 and regime_emb.shape[0] == 1:
+            # If regime_emb is [1, 1, 16], squeeze to [1, 16]
+            regime_emb = regime_emb.squeeze(1)
+        elif len(regime_emb.shape) == 2 and len(state.shape) > 1:
+            # If state has batch dimension and regime_emb doesn't match
+            regime_emb = regime_emb.expand(state.shape[0], -1)
         
         state_regime = torch.cat([state, regime_emb], dim=-1)
         
@@ -624,7 +644,8 @@ class ComprehensiveRLPretrainingSystem:
             regime_id = self._detect_regime(obs)
             
             # Select action from dual agent system
-            action, metadata = self.dual_agent.select_action(obs, regime_id.value)
+            regime_int_id = RegimeType.to_id(regime_id)
+            action, metadata = self.dual_agent.select_action(obs, regime_int_id)
             
             # Execute action in environment
             next_obs, reward, done, info = await self.env.step(action)

@@ -78,3 +78,47 @@ secrets.yaml
 
 # Email webhook URLs
 webhook_urls.txt
+
+# Model files (large)
+models/**/*.pt
+models/**/*.pkl
+models/**/*.joblib
+*.pth
+*.pth.tar
+
+# Test and setup files
+test_*.py
+*_test.py
+setup_*.py
+fix_*.py
+patch_*.py
+force_*.py
+monitor_*.py
+debug_*.py
+check_*.py
+
+# Demo and example files
+*_demo.*
+*_example.*
+pairs_trading_demo.*
+
+# Documentation (except CLAUDE.md)
+*.pdf
+*.doc
+*.docx
+README_*.md
+FIXES_*.md
+NOTES_*.md
+customer_agreement.*
+
+# Output and debug logs
+*_output.log
+rl_*.log
+phase*.log
+
+# Virtual environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/

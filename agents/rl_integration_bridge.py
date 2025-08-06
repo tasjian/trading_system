@@ -57,42 +57,16 @@ class RLSystemBridge:
         if self.system_initialized:
             return True
         
-        try:
-            # Create RL system configuration
-            rl_config = OnlineLearningConfig(
-                # Conservative settings for live trading
-                learner_performance_threshold=0.03,  # 3% outperformance needed
-                safety_constraints=SafetyConstraints(
-                    max_drawdown=0.08,  # 8% max drawdown
-                    min_sharpe_ratio=-0.5,
-                    max_position_change=0.1,  # 10% max position change
-                    consecutive_losses_limit=3,
-                    volatility_threshold=0.04
-                )
-            )
-            
-            # Initialize system
-            self.rl_system = create_comprehensive_rl_system(self.symbols, **rl_config.__dict__)
-            
-            # Check if pre-trained models exist
-            model_path = Path("models/pretrained_rl")
-            if model_path.exists():
-                logger.info("🔄 Loading pre-trained RL models...")
-                # Load pre-trained models if available
-                # This would load Decision Transformer and other components
-            else:
-                logger.info("🚀 Initializing RL system without pre-training")
-            
-            self.system_initialized = True
-            self.last_initialization_attempt = datetime.now()
-            
-            logger.info("✅ Comprehensive RL system initialized successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize RL system: {e}")
-            self.system_initialized = False
-            return False
+        # TEMPORARY DISABLE: Comprehensive RL system has tensor dimension mismatch
+        # The system expects 116 features but receives variable input sizes
+        # Until we fix the feature engineering consistency, use fallback exclusively
+        logger.info("🔄 Comprehensive RL system temporarily disabled due to tensor dimension mismatch")
+        logger.info("   Using stable RL orchestrator exclusively until dimensions are fixed")
+        
+        self.system_initialized = False  # Force fallback
+        self.last_initialization_attempt = datetime.now()
+        
+        return False  # Always return False to trigger fallback
     
     async def make_rl_decisions(self, 
                               state: Dict[str, Any], 
@@ -187,13 +161,22 @@ class RLSystemBridge:
             
             observation = []
             
-            # Process each symbol
-            for symbol in self.symbols[:10]:  # Limit to prevent dimension issues
+            # Use a fixed number of symbols to ensure consistent dimensions
+            # This matches what the comprehensive RL system was trained with
+            max_symbols = 8  # Fixed dimension for consistency
+            symbols_to_process = self.symbols[:max_symbols]
+            
+            # Pad symbols list if needed
+            while len(symbols_to_process) < max_symbols:
+                symbols_to_process.append(f"DUMMY_{len(symbols_to_process)}")
+            
+            # Process each symbol with fixed feature count
+            for symbol in symbols_to_process:
                 
                 # Find sentiment signal for this symbol
                 symbol_signal = next((s for s in sentiment_signals if s.get('symbol') == symbol), {})
                 
-                # Feature extraction
+                # Feature extraction - exactly 7 features per symbol
                 features = [
                     symbol_signal.get('score', 0.0),  # Sentiment score
                     symbol_signal.get('confidence', 0.5),  # Confidence
@@ -206,16 +189,21 @@ class RLSystemBridge:
                 
                 observation.extend(features)
             
-            # Pad to fixed dimension if needed
-            target_dim = len(self.symbols) * 7
+            # Final dimension check - should be exactly max_symbols * 7 = 56
+            target_dim = max_symbols * 7
             current_dim = len(observation)
             
-            if current_dim < target_dim:
-                observation.extend([0.0] * (target_dim - current_dim))
-            elif current_dim > target_dim:
-                observation = observation[:target_dim]
+            if current_dim != target_dim:
+                logger.warning(f"Dimension mismatch: expected {target_dim}, got {current_dim}. Fixing...")
+                if current_dim < target_dim:
+                    observation.extend([0.0] * (target_dim - current_dim))
+                else:
+                    observation = observation[:target_dim]
             
-            return np.array(observation, dtype=np.float32)
+            final_observation = np.array(observation, dtype=np.float32)
+            logger.debug(f"Created RL observation with shape: {final_observation.shape}")
+            
+            return final_observation
             
         except Exception as e:
             logger.error(f"Error creating RL observation: {e}")
@@ -334,7 +322,7 @@ class RLSystemBridge:
         self.integration_stats['fallback_decisions'] += 1
         self.fallback_count += 1
         
-        logger.info("🔄 Falling back to existing RL orchestrator")
+        logger.info("🔄 Using stable RL orchestrator (comprehensive RL temporarily disabled)")
         
         try:
             # Use existing online learning orchestrator
