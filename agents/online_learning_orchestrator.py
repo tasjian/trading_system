@@ -721,19 +721,67 @@ class OnlineLearningOrchestrator:
             allocations = []
             
             for i, symbol in enumerate(available_symbols[:max_symbols]):
+                # Get sentiment signal for this symbol to determine long/short
+                action = "buy"  # Default to buy
+                weight_multiplier = 1.0  # Positive for long positions
+                
+                try:
+                    # Try multiple ways to access sentiment signals
+                    sentiment_signals = getattr(enhanced_state, 'sentiment_signals', None)
+                    if sentiment_signals is None:
+                        sentiment_signals = getattr(enhanced_state, 'market_signals', [])
+                    if not sentiment_signals and hasattr(enhanced_state, '__dict__'):
+                        # Try direct dict access
+                        enhanced_dict = enhanced_state.__dict__
+                        sentiment_signals = enhanced_dict.get('sentiment_signals', enhanced_dict.get('market_signals', []))
+                    
+                    logger.debug(f"Processing {symbol}: Found {len(sentiment_signals) if sentiment_signals else 0} sentiment signals")
+                    
+                    symbol_signals = []  # Initialize to prevent NameError
+                    
+                    if sentiment_signals:
+                        symbol_signals = [s for s in sentiment_signals if s.get('symbol') == symbol]
+                        logger.debug(f"{symbol} signals: {symbol_signals}")
+                        
+                        if symbol_signals:
+                            signal = symbol_signals[0]  # Use first signal
+                            signal_type = signal.get('signal', 'BUY')
+                            
+                            if signal_type == 'SELL':
+                                action = "short"  # Short selling for sell signals
+                                weight_multiplier = -1.0  # Negative weight for short positions
+                                logger.info(f"   🔻 {symbol}: SELL signal -> SHORT position")
+                            elif signal_type == 'BUY':
+                                action = "buy"
+                                weight_multiplier = 1.0
+                                logger.info(f"   📈 {symbol}: BUY signal -> LONG position")
+                        else:
+                            logger.debug(f"No sentiment signals found for {symbol}")
+                    else:
+                        logger.debug("No sentiment signals available")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing sentiment for {symbol}: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                    # Keep defaults
+                
                 # Simple momentum-based weighting (can be replaced with RL model predictions)
                 momentum_factor = 1.0 - (i * 0.1)  # Decreasing weights for lower-ranked symbols
                 risk_adjustment = risk_tolerance  # Higher risk tolerance = higher allocations
                 
-                weight = base_weight * momentum_factor * (0.5 + risk_adjustment)
-                weight = max(0.05, min(0.25, weight))  # Clamp between 5% and 25%
+                base_weight_value = base_weight * momentum_factor * (0.5 + risk_adjustment)
+                base_weight_value = max(0.05, min(0.25, base_weight_value))  # Clamp between 5% and 25%
+                
+                # Apply weight multiplier for short positions
+                weight = base_weight_value * weight_multiplier
                 
                 allocation = {
                     "symbol": symbol,
                     "weight": weight,
                     "confidence": 0.6 + (0.2 * momentum_factor),
-                    "action": "buy",
-                    "reasoning": f"RL momentum allocation #{i+1}"
+                    "action": action,
+                    "reasoning": f"RL {action} allocation #{i+1} ({'sentiment-driven' if symbol_signals else 'momentum-based'})"
                 }
                 
                 allocations.append(allocation)

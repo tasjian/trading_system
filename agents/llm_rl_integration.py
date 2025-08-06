@@ -657,6 +657,9 @@ class LLMStateEnricher:
                     'total_signals': len(market_signals),
                     'buy_signals': len(buy_signals)
                 },
+                # Include original sentiment signals for RL agent access
+                'sentiment_signals': market_signals,
+                'market_signals': market_signals,
                 'portfolio_metrics': {
                     'total_value': portfolio_state.get('equity', 50000),
                     'cash_balance': portfolio_state.get('cash', 5000),
@@ -674,8 +677,20 @@ class LLMStateEnricher:
                 }
             }
             
+            # Convert to object with attribute access for RL agent compatibility
+            class EnhancedStateObject:
+                def __init__(self, data_dict):
+                    self.__dict__.update(data_dict)
+                    # Make sentiment_signals directly accessible
+                    if 'sentiment_signals' in data_dict:
+                        self.sentiment_signals = data_dict['sentiment_signals']
+                    if 'market_signals' in data_dict:
+                        self.market_signals = data_dict['market_signals']
+            
+            enhanced_state_obj = EnhancedStateObject(enhanced_state)
+            
             logger.info(f"✅ Enhanced state: {overall_sentiment:.2f} sentiment, {len(buy_signals)} BUY signals")
-            return enhanced_state
+            return enhanced_state_obj
             
         except Exception as e:
             logger.error(f"Error enriching state from LLM analysis: {e}")

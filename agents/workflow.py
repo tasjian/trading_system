@@ -740,16 +740,19 @@ class TradingWorkflow:
             sentiment_signals = state.get("sentiment_signals", [])
             trading_signals = state.get("trading_signals", [])
             
-            if not sentiment_signals and not trading_signals:
-                logger.warning("No sentiment signals available for signal generation")
+            # Check if RL decisions are available first (RL-Enhanced Path)
+            rl_decisions = state.get("rl_decisions")
+            rl_enhanced = state.get("rl_enhanced", False)
+            
+            # Only exit early if we have no sentiment signals AND no RL decisions
+            if not sentiment_signals and not trading_signals and not (rl_enhanced and rl_decisions):
+                logger.warning("No sentiment signals or RL decisions available for signal generation")
                 state["signals"] = []
-                state["messages"].append(AIMessage(content="No signals generated - no sentiment data"))
+                state["messages"].append(AIMessage(content="No signals generated - no sentiment data or RL decisions"))
                 state["current_agent"] = "signal_generator"
                 return update_state_timestamp(state)
             
-            # Check if RL decisions are available (RL-Enhanced Path)
-            rl_decisions = state.get("rl_decisions")
-            rl_enhanced = state.get("rl_enhanced", False)
+            logger.info(f"Signal generation sources: {len(sentiment_signals)} sentiment, {len(trading_signals)} trading, RL={'enabled' if rl_enhanced else 'disabled'}")
             
             signals = []
             

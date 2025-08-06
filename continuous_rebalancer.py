@@ -513,6 +513,89 @@ class ContinuousRebalancer:
         
         logger.info("👋 Continuous rebalancer shutdown complete")
     
+    async def _prepare_market_data_for_finrl(self, state: Dict[str, Any], symbols: List[str]) -> Dict[str, Any]:
+        """Prepare market data in the format expected by FinRL environment."""
+        try:
+            from tools.alpaca_client import alpaca_client
+            from datetime import datetime, timedelta
+            import pandas as pd
+            import numpy as np
+            
+            logger.info("📈 Preparing market data for FinRL integration...")
+            
+            # Try to get recent market data from Alpaca
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=60)  # 60 days of data
+            
+            market_data = {}
+            
+            for symbol in symbols:
+                try:
+                    # Get historical data using the existing get_historical_data method
+                    historical_df = alpaca_client.get_historical_data(symbol)
+                    
+                    if historical_df is not None and len(historical_df) > 0:
+                        # Convert DataFrame to lists in FinRL format
+                        market_data[f"{symbol}_open"] = historical_df['open'].tolist()
+                        market_data[f"{symbol}_high"] = historical_df['high'].tolist()
+                        market_data[f"{symbol}_low"] = historical_df['low'].tolist()
+                        market_data[f"{symbol}_close"] = historical_df['close'].tolist()
+                        market_data[f"{symbol}_volume"] = historical_df['volume'].tolist()
+                        
+                        logger.debug(f"✅ Retrieved {len(historical_df)} bars for {symbol}")
+                    else:
+                        logger.warning(f"❌ No market data retrieved for {symbol}")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to get market data for {symbol}: {e}")
+            
+            # If we have insufficient market data, generate synthetic data for FinRL
+            if len(market_data) == 0:
+                logger.warning("No real market data available, generating synthetic data for FinRL")
+                market_data = self._generate_synthetic_market_data(symbols)
+            
+            # Update state with market data
+            enhanced_state = state.copy()
+            enhanced_state['market_data'] = market_data
+            
+            logger.info(f"✅ Market data prepared for {len(symbols)} symbols")
+            return enhanced_state
+            
+        except Exception as e:
+            logger.error(f"Failed to prepare market data for FinRL: {e}")
+            return state
+    
+    def _generate_synthetic_market_data(self, symbols: List[str]) -> Dict[str, List[float]]:
+        """Generate synthetic market data for FinRL when real data is unavailable."""
+        import numpy as np
+        
+        logger.info("Generating synthetic market data for FinRL testing")
+        
+        days = 30  # Smaller dataset for faster processing
+        market_data = {}
+        
+        for symbol in symbols:
+            np.random.seed(hash(symbol) % 2**32)  # Deterministic but varied per symbol
+            
+            # Generate realistic price series
+            initial_price = np.random.uniform(50, 200)
+            returns = np.random.normal(0.001, 0.02, days)  # 0.1% daily return, 2% volatility
+            closes = initial_price * np.exp(np.cumsum(returns))
+            
+            # Generate OHLC from close prices
+            opens = closes * np.random.uniform(0.995, 1.005, days)
+            highs = closes * np.random.uniform(1.0, 1.03, days)
+            lows = closes * np.random.uniform(0.97, 1.0, days)
+            volumes = np.random.uniform(1000000, 10000000, days)
+            
+            market_data[f"{symbol}_open"] = opens.tolist()
+            market_data[f"{symbol}_high"] = highs.tolist()
+            market_data[f"{symbol}_low"] = lows.tolist()
+            market_data[f"{symbol}_close"] = closes.tolist()
+            market_data[f"{symbol}_volume"] = volumes.tolist()
+        
+        return market_data
+    
     async def _run_rl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Enhanced RL Decision Layer with FinRL Integration
@@ -531,13 +614,22 @@ class ContinuousRebalancer:
                 
                 logger.info("🚀 Initializing Enhanced FinRL Decision Layer...")
                 
-                # Extract symbols from sentiment signals
+                # Extract symbols from sentiment signals AND sell signals for short selling
                 sentiment_signals = state.get("sentiment_signals", [])
-                available_symbols = list(set([s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY']))[:8]
+                buy_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY']
+                sell_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'SELL']
+                available_symbols = list(set(buy_symbols + sell_symbols))[:12]  # Increased to 12 symbols
                 
                 if not available_symbols:
-                    logger.warning("No symbols available for FinRL - using fallback")
-                    raise ImportError("No symbols for FinRL")
+                    logger.warning("No symbols available for FinRL - using fallback universe")
+                    # Use filtered universe as fallback
+                    universe_result = state.get("universe_filter_result")
+                    if universe_result and universe_result.filtered_symbols:
+                        available_symbols = universe_result.filtered_symbols[:8]
+                    else:
+                        available_symbols = ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"]  # Safe fallback
+                
+                logger.info(f"📊 FinRL symbols: {len(buy_symbols)} BUY, {len(sell_symbols)} SELL, {len(available_symbols)} total")
                 
                 logger.info(f"📊 FinRL Processing: {len(available_symbols)} symbols")
                 
@@ -551,10 +643,13 @@ class ContinuousRebalancer:
                         paper_trading=True,
                         max_position_size=0.15
                     )
-                    logger.info("✅ FinRL Trading System created")
+                    logger.info("✅ FinRL Trading System created with short selling enabled")
+                
+                # Prepare market data for FinRL
+                enhanced_state = await self._prepare_market_data_for_finrl(state, available_symbols)
                 
                 # Integrate with workflow
-                state = await integrate_finrl_with_workflow(self._finrl_orchestrator, state)
+                state = await integrate_finrl_with_workflow(self._finrl_orchestrator, enhanced_state)
                 
                 # Extract FinRL decisions
                 finrl_decisions = state.get("finrl_decisions", {})
@@ -570,7 +665,8 @@ class ContinuousRebalancer:
                         "advanced_features": {
                             "short_selling": True,
                             "limit_orders": True,
-                            "risk_management": True
+                            "risk_management": True,
+                            "finrl_enabled": True
                         }
                     }
                     
@@ -603,10 +699,16 @@ class ContinuousRebalancer:
                     logger.info(f"✅ FinRL Agent generated {len(rl_decisions['allocations'])} advanced allocations")
                     logger.info(f"📈 FinRL Strategy: {rl_decisions['strategy']}")
                     logger.info(f"⚖️ FinRL Risk Level: {rl_decisions['risk_level']}")
+                    logger.info(f"🔧 Advanced Features: {rl_decisions['advanced_features']}")
+                    
+                    # Count different order types
+                    buy_count = len([a for a in rl_decisions['allocations'] if a['action'] == 'buy'])
+                    sell_count = len([a for a in rl_decisions['allocations'] if a['action'] in ['sell', 'short']])
+                    logger.info(f"📊 Order Distribution: {buy_count} BUY, {sell_count} SELL/SHORT")
                     
                     # Log top allocations with enhanced info
                     for allocation in rl_decisions["allocations"][:3]:
-                        weight_str = f"{allocation['weight']:.1%}"
+                        weight_str = f"{allocation['weight']:+.1%}"  # + sign for positive weights
                         action_str = allocation['action']
                         order_type = allocation.get('order_type', 'market')
                         logger.info(f"   🎯 {allocation['symbol']}: {action_str} {weight_str} ({order_type})")
@@ -654,13 +756,29 @@ class ContinuousRebalancer:
                 # Get RL portfolio decisions
                 logger.info("🧠 Basic RL Agent making portfolio allocation decisions...")
                 
+                # Extract symbols for both BUY and SELL for short selling support
+                buy_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY']
+                sell_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'SELL']
+                all_symbols = list(set(buy_symbols + sell_symbols))[:10]
+                
+                logger.info(f"📊 Basic RL symbols: {len(buy_symbols)} BUY, {len(sell_symbols)} SELL, {len(all_symbols)} total")
+                
                 # Run RL decision making
                 rl_decisions = await orchestrator.make_portfolio_decisions(
                     enhanced_state=enhanced_state,
-                    available_symbols=[s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY'][:10],
+                    available_symbols=all_symbols,
                     portfolio_value=portfolio.get("equity", 50000),
                     risk_tolerance=state.get("risk_tolerance", 0.5)
                 )
+                
+                # Ensure RL decisions include short selling support
+                if rl_decisions and not rl_decisions.get("advanced_features"):
+                    rl_decisions["advanced_features"] = {
+                        "short_selling": True,
+                        "limit_orders": False,
+                        "risk_management": True,
+                        "finrl_enabled": False
+                    }
                 
                 # Store RL decisions in state for signal generation
                 state["rl_decisions"] = rl_decisions
