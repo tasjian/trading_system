@@ -301,14 +301,41 @@ class TradingWorkflow:
                             signal_strength += 0.2
                             signal_type = 'BUY'
                             signal_reason.append('Positive overall sentiment')
+                        elif comprehensive_sentiment.overall_sentiment in ['extremely_negative']:
+                            signal_strength += 0.8
+                            signal_type = 'SHORT'
+                            signal_reason.append('EXTREMELY negative sentiment - SHORT SELL opportunity')
                         elif comprehensive_sentiment.overall_sentiment in ['very_negative']:
-                            signal_strength += 0.4
-                            signal_type = 'SELL'
-                            signal_reason.append('Very negative overall sentiment')
+                            signal_strength += 0.6
+                            signal_type = 'SHORT'
+                            signal_reason.append('Very negative overall sentiment - SHORT candidate')
                         elif comprehensive_sentiment.overall_sentiment in ['negative']:
-                            signal_strength += 0.2
+                            signal_strength += 0.3
                             signal_type = 'SELL'
                             signal_reason.append('Negative overall sentiment')
+                        
+                        # Enhanced extreme sentiment detection based on numerical scores
+                        sentiment_score = comprehensive_sentiment.overall_score
+                        if sentiment_score <= -0.7:  # Extremely negative numerical score
+                            signal_strength += 0.3
+                            signal_type = 'SHORT'  # Override with SHORT if not already set
+                            signal_reason.append('EXTREME negative sentiment score (≤-0.7)')
+                        elif sentiment_score <= -0.5:  # Very negative numerical score
+                            signal_strength += 0.2
+                            if signal_type != 'SHORT':  # Don't override existing SHORT signals
+                                signal_type = 'SHORT'
+                            signal_reason.append('Strong negative sentiment score (≤-0.5)')
+                        elif sentiment_score <= -0.3:  # Moderately negative
+                            signal_strength += 0.1
+                            signal_reason.append('Moderate negative sentiment score')
+                        
+                        # Crisis/panic sentiment detection through multiple negative sources
+                        if (comprehensive_sentiment.confidence > 0.8 and 
+                            sentiment_score <= -0.6 and 
+                            comprehensive_sentiment.data_sources_count >= 4):
+                            signal_strength += 0.4  # Major boost for high-confidence extreme negativity
+                            signal_type = 'SHORT'
+                            signal_reason.append('CRISIS-LEVEL sentiment - Multi-source panic')
                         
                         # Confidence and data quality boosts
                         if comprehensive_sentiment.confidence > 0.7:
@@ -356,9 +383,16 @@ class TradingWorkflow:
             if sentiment_signals:
                 buy_signals = [s for s in sentiment_signals if s['signal'] == 'BUY']
                 sell_signals = [s for s in sentiment_signals if s['signal'] == 'SELL']
+                short_signals = [s for s in sentiment_signals if s['signal'] == 'SHORT']
                 earnings_signals = [s for s in sentiment_signals if s.get('has_earnings')]
+                extreme_negative_signals = [s for s in sentiment_signals if 'EXTREME' in s['reason']]
+                crisis_signals = [s for s in sentiment_signals if 'CRISIS-LEVEL' in s['reason']]
                 
-                logger.info(f"Signal summary: {len(buy_signals)} BUY, {len(sell_signals)} SELL, {len(earnings_signals)} with earnings data")
+                logger.info(f"Signal summary: {len(buy_signals)} BUY, {len(sell_signals)} SELL, {len(short_signals)} SHORT, {len(earnings_signals)} with earnings")
+                if extreme_negative_signals:
+                    logger.info(f"🔥 EXTREME SENTIMENT: {len(extreme_negative_signals)} extreme negative signals detected!")
+                if crisis_signals:
+                    logger.info(f"🚨 CRISIS SENTIMENT: {len(crisis_signals)} crisis-level panic signals detected!")
                 
                 for signal in sentiment_signals:
                     logger.info(f"  {signal['signal']} {signal['symbol']} (strength: {signal['strength']:.2f}{'*' if signal.get('has_earnings') else ''}): {signal['reason']}")
@@ -536,7 +570,8 @@ class TradingWorkflow:
                         if position_value < desired_position_value:
                             logger.info(f"Position size limited for {symbol}: desired ${desired_position_value:.2f}, using ${position_value:.2f} (available cash: ${available_cash:.2f})")
                     else:
-                        signal_action = "sell" 
+                        # Enhanced short selling strategy
+                        signal_action = await self._determine_short_strategy(symbol, target_weight, state)
                         position_value = portfolio_value * abs(target_weight)
                     
                     # Get current price and create signal
@@ -571,11 +606,19 @@ class TradingWorkflow:
                         logger.warning(f"Could not process RL allocation for {symbol}: {e}")
                         continue
             
-            # Update state with signals
-            state["signals"] = signals
+            # Apply short selling risk management enhancements
+            enhanced_signals = await self._enhance_short_signals_with_risk_management(signals, state)
+            
+            # Update state with enhanced signals
+            state["signals"] = enhanced_signals
             state["current_agent"] = "signal_generator"
             
-            logger.info(f"✅ Generated {len(signals)} RL-based trading signals")
+            # Count different signal types
+            buy_signals = len([s for s in enhanced_signals if s.action.lower() in ['buy', 'long']])
+            sell_signals = len([s for s in enhanced_signals if s.action.lower() in ['sell']])
+            short_signals = len([s for s in enhanced_signals if s.action.lower() in ['sell_short', 'short']])
+            
+            logger.info(f"✅ Generated {len(enhanced_signals)} RL-based trading signals: {buy_signals} BUY, {sell_signals} SELL, {short_signals} SHORT")
             
             if signals:
                 state["messages"].append(AIMessage(
@@ -592,6 +635,225 @@ class TradingWorkflow:
             logger.error(f"❌ RL signal generation failed: {e}")
             # Fall back to the existing fallback method
             return await self._fallback_signal_generation(state, config)
+    
+    async def _determine_short_strategy(self, symbol: str, target_weight: float, state: dict) -> str:
+        """Determine the most appropriate short selling strategy based on market conditions and analysis."""
+        try:
+            from tools.alpaca_client import alpaca_client
+            
+            # Get market data and sentiment for informed short selling
+            sentiment_data = state.get("sentiment_data", {}).get(symbol)
+            market_data = state.get("market_data", {})
+            
+            # Default to regular sell
+            short_strategy = "sell"
+            
+            # Enhanced short selling conditions with extreme sentiment detection
+            extremely_negative_sentiment = False
+            very_negative_sentiment = False
+            strong_negative_sentiment = False
+            crisis_level_sentiment = False
+            technical_bearish_signal = False
+            high_volatility = False
+            
+            # Check sentiment indicators with enhanced extreme detection
+            if sentiment_data:
+                if hasattr(sentiment_data, 'overall_score'):
+                    sentiment_score = sentiment_data.overall_score
+                    confidence = getattr(sentiment_data, 'confidence', 0.5)
+                    data_sources = getattr(sentiment_data, 'data_sources_count', 1)
+                elif isinstance(sentiment_data, dict):
+                    sentiment_score = sentiment_data.get('overall_score', 0)
+                    confidence = sentiment_data.get('confidence', 0.5)
+                    data_sources = sentiment_data.get('data_sources_count', 1)
+                else:
+                    sentiment_score = 0
+                    confidence = 0.5
+                    data_sources = 1
+                
+                # Multi-tier sentiment analysis for short selling
+                if sentiment_score <= -0.7:  # Extremely negative
+                    extremely_negative_sentiment = True
+                    logger.info(f"🔥 EXTREMELY negative sentiment detected for {symbol}: {sentiment_score:.2f}")
+                elif sentiment_score <= -0.5:  # Very negative  
+                    very_negative_sentiment = True
+                    logger.info(f"📉 Very negative sentiment detected for {symbol}: {sentiment_score:.2f}")
+                elif sentiment_score <= -0.3:  # Strong negative
+                    strong_negative_sentiment = True
+                    logger.info(f"📉 Strong negative sentiment detected for {symbol}: {sentiment_score:.2f}")
+                
+                # Crisis-level sentiment detection (high confidence + extreme negative + multiple sources)
+                if (confidence > 0.8 and sentiment_score <= -0.6 and data_sources >= 4):
+                    crisis_level_sentiment = True
+                    logger.info(f"🚨 CRISIS-LEVEL sentiment detected for {symbol}: score={sentiment_score:.2f}, conf={confidence:.2f}, sources={data_sources}")
+            
+            # Check technical indicators for bearish signals
+            try:
+                current_price = alpaca_client.get_current_price(symbol)
+                historical_data = alpaca_client.get_market_data(symbol, timeframe="1Day", limit=20)
+                
+                if current_price and historical_data is not None and len(historical_data) >= 10:
+                    # Simple technical analysis for short selling signals
+                    recent_high = historical_data['high'].tail(5).max()
+                    recent_low = historical_data['low'].tail(5).min()
+                    price_range = recent_high - recent_low
+                    
+                    # Check for breakdown below recent support
+                    if current_price <= recent_low * 1.02:  # Within 2% of recent low
+                        technical_bearish_signal = True
+                        logger.info(f"📉 Technical breakdown detected for {symbol}: price ${current_price:.2f} near recent low ${recent_low:.2f}")
+                    
+                    # Check for high volatility (good for short selling)
+                    if price_range / current_price > 0.15:  # 15% range indicates high volatility
+                        high_volatility = True
+                        logger.info(f"⚡ High volatility detected for {symbol}: {price_range/current_price:.1%} range")
+                
+            except Exception as e:
+                logger.warning(f"Could not analyze technical indicators for {symbol}: {e}")
+            
+            # Enhanced confidence calculation with extreme sentiment weighting
+            confidence_factors = 0
+            strategy_reasoning = []
+            
+            # Sentiment-based confidence (tiered scoring)
+            if crisis_level_sentiment:
+                confidence_factors += 3.0  # Maximum confidence for crisis-level sentiment
+                strategy_reasoning.append("CRISIS-LEVEL multi-source panic")
+                logger.info(f"🚨 Short selling factor: CRISIS-LEVEL sentiment for {symbol}")
+            elif extremely_negative_sentiment:
+                confidence_factors += 2.5  # Very high confidence for extreme negativity
+                strategy_reasoning.append("EXTREMELY negative sentiment")
+                logger.info(f"🔥 Short selling factor: EXTREME negative sentiment for {symbol}")
+            elif very_negative_sentiment:
+                confidence_factors += 2.0  # High confidence for very negative
+                strategy_reasoning.append("Very negative sentiment")
+                logger.info(f"📉 Short selling factor: Very negative sentiment for {symbol}")
+            elif strong_negative_sentiment:
+                confidence_factors += 1.0  # Standard confidence for negative
+                strategy_reasoning.append("Strong negative sentiment")
+                logger.info(f"🎯 Short selling factor: Strong negative sentiment for {symbol}")
+            
+            # Technical analysis factors
+            if technical_bearish_signal:
+                confidence_factors += 1.0
+                strategy_reasoning.append("Technical breakdown")
+                logger.info(f"🎯 Short selling factor: Technical breakdown for {symbol}")
+            
+            if high_volatility:
+                confidence_factors += 0.5
+                strategy_reasoning.append("High volatility")
+                logger.info(f"🎯 Short selling factor: High volatility for {symbol}")
+            
+            # Determine strategy based on enhanced confidence scoring
+            if confidence_factors >= 3.0:
+                short_strategy = "sell_short"  # Maximum aggression for crisis-level signals
+                logger.info(f"🚨 MAXIMUM SHORT SELL strategy for {symbol} (confidence: {confidence_factors:.1f}) - {', '.join(strategy_reasoning)}")
+            elif confidence_factors >= 2.0:
+                short_strategy = "sell_short"  # Aggressive short selling for extreme sentiment
+                logger.info(f"🔥 AGGRESSIVE SHORT SELL strategy for {symbol} (confidence: {confidence_factors:.1f}) - {', '.join(strategy_reasoning)}")
+            elif confidence_factors >= 1.5:
+                short_strategy = "sell_short"  # Moderate short selling
+                logger.info(f"📉 MODERATE SHORT SELL strategy for {symbol} (confidence: {confidence_factors:.1f}) - {', '.join(strategy_reasoning)}")
+            elif confidence_factors >= 1.0:
+                short_strategy = "sell"  # Regular sell for basic negative sentiment
+                logger.info(f"📉 Standard SELL strategy for {symbol} (confidence: {confidence_factors:.1f}) - {', '.join(strategy_reasoning)}")
+            else:
+                # Minimal conviction - just regular position exit
+                short_strategy = "sell"
+                logger.info(f"🤔 Low conviction SELL for {symbol} (confidence: {confidence_factors:.1f})")
+            
+            return short_strategy
+            
+        except Exception as e:
+            logger.error(f"Short strategy analysis failed for {symbol}: {e}")
+            return "sell"  # Fallback to regular sell
+    
+    async def _enhance_short_signals_with_risk_management(self, signals: list, state: dict) -> list:
+        """Add advanced risk management to short selling signals."""
+        try:
+            enhanced_signals = []
+            
+            for signal in signals:
+                if signal.action.lower() in ["sell_short", "short"]:
+                    # Enhanced risk management for short positions with extreme sentiment handling
+                    try:
+                        from tools.alpaca_client import alpaca_client
+                        current_price = alpaca_client.get_current_price(signal.symbol)
+                        
+                        if current_price:
+                            # Check sentiment data for this symbol to adjust risk parameters
+                            sentiment_data = state.get("sentiment_data", {}).get(signal.symbol)
+                            sentiment_score = -0.3  # Default moderate negative
+                            is_extreme_sentiment = False
+                            is_crisis_sentiment = False
+                            
+                            if sentiment_data:
+                                if hasattr(sentiment_data, 'overall_score'):
+                                    sentiment_score = sentiment_data.overall_score
+                                    confidence = getattr(sentiment_data, 'confidence', 0.5)
+                                    data_sources = getattr(sentiment_data, 'data_sources_count', 1)
+                                elif isinstance(sentiment_data, dict):
+                                    sentiment_score = sentiment_data.get('overall_score', -0.3)
+                                    confidence = sentiment_data.get('confidence', 0.5)
+                                    data_sources = sentiment_data.get('data_sources_count', 1)
+                                
+                                # Identify extreme sentiment conditions
+                                is_extreme_sentiment = sentiment_score <= -0.5
+                                is_crisis_sentiment = (confidence > 0.8 and sentiment_score <= -0.6 and data_sources >= 4)
+                            
+                            # Adaptive risk management based on sentiment extremeness
+                            if is_crisis_sentiment:
+                                # Maximum aggression for crisis-level sentiment
+                                stop_loss_pct = 0.06  # 6% stop loss (tighter)
+                                profit_target_pct = 0.20  # 20% profit target (more aggressive)
+                                position_size_multiplier = 1.0  # Full position size
+                                risk_label = "CRISIS-LEVEL"
+                            elif is_extreme_sentiment:
+                                # High aggression for extreme negative sentiment
+                                stop_loss_pct = 0.07  # 7% stop loss
+                                profit_target_pct = 0.15  # 15% profit target
+                                position_size_multiplier = 0.9  # 90% position size
+                                risk_label = "EXTREME"
+                            else:
+                                # Standard short selling risk management
+                                stop_loss_pct = 0.08  # 8% stop loss
+                                profit_target_pct = 0.12  # 12% profit target
+                                position_size_multiplier = 0.75  # 75% position size
+                                risk_label = "STANDARD"
+                            
+                            # Apply risk management parameters
+                            signal.stop_loss = current_price * (1 + stop_loss_pct)
+                            signal.price_target = current_price * (1 - profit_target_pct)
+                            signal.quantity = int(signal.quantity * position_size_multiplier)
+                            
+                            # Enhanced reasoning for short positions
+                            original_reasoning = getattr(signal, 'reasoning', '')
+                            signal.reasoning = (f"SHORT SELL ({risk_label}): {original_reasoning} | "
+                                              f"SL: {stop_loss_pct:.0%}, PT: {profit_target_pct:.0%} | "
+                                              f"Size: {position_size_multiplier:.0%} | Sentiment: {sentiment_score:.2f}")
+                            
+                            # Boost confidence for extreme sentiment shorts
+                            if is_crisis_sentiment:
+                                signal.confidence = min(0.98, signal.confidence * 1.3)
+                            elif is_extreme_sentiment:
+                                signal.confidence = min(0.95, signal.confidence * 1.2)
+                            else:
+                                signal.confidence = min(0.90, signal.confidence * 1.1)
+                            
+                            logger.info(f"🔥 Enhanced {risk_label} SHORT: {signal.symbol} qty={signal.quantity} "
+                                      f"SL=${signal.stop_loss:.2f} PT=${signal.price_target:.2f} "
+                                      f"sentiment={sentiment_score:.2f}")
+                    
+                    except Exception as e:
+                        logger.warning(f"Could not enhance short signal for {signal.symbol}: {e}")
+                
+                enhanced_signals.append(signal)
+            
+            return enhanced_signals
+            
+        except Exception as e:
+            logger.error(f"Short signal enhancement failed: {e}")
+            return signals  # Return original signals if enhancement fails
     
     async def _cleanup_signal_generation_resources(self):
         """Clean up resources used in signal generation."""
@@ -1158,9 +1420,9 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def order_management_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute trading orders based on optimized signals."""
+        """Execute balanced trading orders with cash preservation."""
         try:
-            logger.info("Order Management Agent: Executing trades")
+            logger.info("Order Management Agent: Executing balanced trades")
             
             # Get signals ready for execution
             from agents.state import get_active_signals
@@ -1177,7 +1439,6 @@ class TradingWorkflow:
                     logger.info(f"Signal {i+1}: {signal.symbol} {signal.action} qty={getattr(signal, 'quantity', 'N/A')} age={age_minutes:.1f}min")
                 else:
                     logger.warning(f"Signal {i+1}: {signal.symbol} missing timestamp attribute")
-                    logger.warning(f"   Signal type: {type(signal)}, attributes: {dir(signal)}")
             
             if not active_signals:
                 state["messages"].append(AIMessage(content="No signals ready for execution"))
@@ -1187,23 +1448,37 @@ class TradingWorkflow:
             # Import here to avoid circular imports
             from tools.alpaca_client import alpaca_client
             
+            # Get portfolio information for balancing
+            portfolio = state.get("portfolio", {})
+            available_cash = max(0, portfolio.get("cash", 0))
+            buying_power = portfolio.get("buying_power", 0)
+            current_positions = portfolio.get("positions", {})
+            
+            logger.info(f"💰 Cash Management: Available=${available_cash:,.2f}, Buying Power=${buying_power:,.2f}")
+            logger.info(f"📊 Current Positions: {len(current_positions)}")
+            
+            # Apply cash preservation and order balancing
+            balanced_signals = await self._balance_orders_for_cash_preservation(
+                active_signals, available_cash, buying_power, current_positions
+            )
+            
+            logger.info(f"⚖️ Order Balancing: {len(active_signals)} → {len(balanced_signals)} signals")
+            
             executed_orders = []
-            for signal in active_signals:
+            for signal in balanced_signals:
                 if signal.action == "hold" or not signal.quantity:
                     continue
                 
                 try:
                     # Check if market is open (skip for paper trading as it's always available)
                     market_open = alpaca_client.is_market_open()
-                    logger.info(f"Market status: {'Open' if market_open else 'Closed'}")
                     
                     # For paper trading, we can execute orders even when market is closed
-                    # In live trading, you'd want to respect market hours
                     if not market_open:
                         logger.info("Market closed - executing paper trade anyway for testing")
                     
                     # Execute the order with advanced order type support
-                    logger.info(f"Executing order: {signal.action} {signal.quantity:.2f} {signal.symbol}")
+                    logger.info(f"Executing balanced order: {signal.action} {signal.quantity:.2f} {signal.symbol}")
                     order = await self._execute_smart_order(signal, state)
                     
                     executed_orders.append({
@@ -1220,9 +1495,13 @@ class TradingWorkflow:
             
             # Update state with executed orders
             state["order_history"].extend(executed_orders)
-            state["executed_orders"] = executed_orders  # For immediate testing access
+            state["executed_orders"] = executed_orders
             
-            order_summary = f"Executed {len(executed_orders)} orders"
+            # Calculate balance metrics
+            buy_orders = len([o for o in executed_orders if 'buy' in str(o.get('order', {}).get('side', '')).lower()])
+            sell_orders = len([o for o in executed_orders if 'sell' in str(o.get('order', {}).get('side', '')).lower()])
+            
+            order_summary = f"Executed {len(executed_orders)} balanced orders ({buy_orders} BUY, {sell_orders} SELL)"
             state["messages"].append(AIMessage(content=order_summary))
             
             state["current_agent"] = "order_manager"
@@ -1450,6 +1729,233 @@ class TradingWorkflow:
             state["errors"].append(f"LLM Portfolio Agent: {str(e)}")
         
         return update_state_timestamp(state)
+    
+    async def _balance_orders_for_cash_preservation(self, signals, available_cash: float, 
+                                                   buying_power: float, current_positions: dict) -> list:
+        """Balance buy/sell orders to preserve cash and maintain adequate buying power."""
+        try:
+            from tools.alpaca_client import alpaca_client
+            
+            # Separate buy, sell, and short signals
+            buy_signals = [s for s in signals if s.action.lower() in ['buy', 'long']]
+            sell_signals = [s for s in signals if s.action.lower() in ['sell']]
+            short_signals = [s for s in signals if s.action.lower() in ['sell_short', 'short']]
+            all_sell_signals = sell_signals + short_signals
+            
+            logger.info(f"📊 Order Balancing Input: {len(buy_signals)} BUY, {len(sell_signals)} SELL, {len(short_signals)} SHORT signals")
+            
+            # Calculate total buy order value needed
+            total_buy_value = 0
+            valid_buy_signals = []
+            
+            for signal in buy_signals:
+                try:
+                    current_price = alpaca_client.get_current_price(signal.symbol)
+                    if current_price and signal.quantity:
+                        order_value = current_price * signal.quantity
+                        total_buy_value += order_value
+                        valid_buy_signals.append((signal, order_value))
+                        logger.info(f"   BUY {signal.symbol}: {signal.quantity:.2f} @ ${current_price:.2f} = ${order_value:,.2f}")
+                except Exception as e:
+                    logger.warning(f"Could not price buy signal {signal.symbol}: {e}")
+            
+            # Calculate short selling margin requirements
+            total_short_margin_needed = 0
+            for signal in short_signals:
+                try:
+                    current_price = alpaca_client.get_current_price(signal.symbol)
+                    if current_price and signal.quantity:
+                        short_value = current_price * signal.quantity
+                        margin_required = short_value * 0.5  # 50% margin requirement for shorts
+                        total_short_margin_needed += margin_required
+                        logger.info(f"   SHORT {signal.symbol}: {signal.quantity:.2f} @ ${current_price:.2f} = ${short_value:,.2f} (margin: ${margin_required:,.2f})")
+                except Exception as e:
+                    logger.warning(f"Could not calculate short margin for {signal.symbol}: {e}")
+            
+            # Calculate available cash for purchases (conservative approach)
+            effective_cash = max(0, available_cash)
+            if buying_power > effective_cash:
+                # Use buying power but with margin safety buffer and short selling margin
+                available_margin = buying_power - total_short_margin_needed
+                effective_cash = min(available_margin * 0.7, effective_cash + (available_margin - effective_cash) * 0.5)
+            
+            logger.info(f"💰 Effective cash available: ${effective_cash:,.2f} (from cash=${available_cash:,.2f}, BP=${buying_power:,.2f})")
+            logger.info(f"💸 Total buy orders needed: ${total_buy_value:,.2f}")
+            logger.info(f"🔥 Short margin required: ${total_short_margin_needed:,.2f}")
+            
+            balanced_signals = []
+            
+            # Strategy 1: If cash is sufficient for buys and margin for shorts, execute all orders
+            total_cash_needed = total_buy_value + total_short_margin_needed
+            if total_buy_value <= effective_cash and total_short_margin_needed <= (buying_power * 0.8):
+                logger.info("✅ Sufficient cash and margin available - executing all orders")
+                balanced_signals.extend(buy_signals)
+                balanced_signals.extend(sell_signals)
+                balanced_signals.extend(short_signals)
+                
+            # Strategy 2: Cash/margin insufficient - need to balance orders strategically
+            else:
+                cash_deficit = total_buy_value - effective_cash
+                margin_deficit = total_short_margin_needed - (buying_power * 0.8)
+                logger.warning(f"⚠️ Resource deficit - Cash: ${cash_deficit:,.2f}, Margin: ${margin_deficit:,.2f} - implementing balancing strategy")
+                
+                # Add all sell signals first to free up cash (prioritize regular sells over shorts)
+                balanced_signals.extend(sell_signals)
+                
+                # Add short signals only if margin is available
+                if margin_deficit <= 0:
+                    balanced_signals.extend(short_signals)
+                    logger.info("✅ Adding all short positions - sufficient margin available")
+                else:
+                    # Prioritize short signals by confidence and fit within available margin
+                    logger.warning(f"⚠️ Insufficient margin for all shorts - prioritizing by confidence")
+                    short_signals_sorted = sorted(short_signals, key=lambda s: getattr(s, 'confidence', 0.5), reverse=True)
+                    remaining_margin = buying_power * 0.8
+                    
+                    for signal in short_signals_sorted:
+                        try:
+                            current_price = alpaca_client.get_current_price(signal.symbol)
+                            if current_price:
+                                margin_needed = (current_price * signal.quantity) * 0.5
+                                if margin_needed <= remaining_margin:
+                                    balanced_signals.append(signal)
+                                    remaining_margin -= margin_needed
+                                    logger.info(f"✅ Including short: {signal.symbol} (margin: ${margin_needed:,.2f})")
+                                else:
+                                    logger.warning(f"❌ Skipping short: {signal.symbol} (needs ${margin_needed:,.2f}, have ${remaining_margin:,.2f})")
+                        except Exception as e:
+                            logger.warning(f"Could not process short signal {signal.symbol}: {e}")
+                
+                # Estimate cash from sell orders
+                sell_proceeds = 0
+                for signal in sell_signals:
+                    try:
+                        if signal.symbol in current_positions:
+                            # Selling existing position
+                            pos_qty = abs(float(current_positions[signal.symbol].get('qty', 0)))
+                            current_price = alpaca_client.get_current_price(signal.symbol)
+                            if current_price:
+                                proceed_estimate = min(signal.quantity, pos_qty) * current_price
+                                sell_proceeds += proceed_estimate
+                                logger.info(f"   Sell proceeds from {signal.symbol}: ${proceed_estimate:,.2f}")
+                    except Exception as e:
+                        logger.warning(f"Could not estimate sell proceeds for {signal.symbol}: {e}")
+                
+                # Add sell proceeds to available cash
+                total_available_cash = effective_cash + sell_proceeds * 0.9  # 90% of proceeds (conservative)
+                logger.info(f"💰 Total cash after sells: ${total_available_cash:,.2f}")
+                
+                # Prioritize buy signals by confidence and fit within available cash
+                valid_buy_signals.sort(key=lambda x: getattr(x[0], 'confidence', 0.5), reverse=True)
+                
+                remaining_cash = total_available_cash
+                for signal, order_value in valid_buy_signals:
+                    if order_value <= remaining_cash:
+                        balanced_signals.append(signal)
+                        remaining_cash -= order_value
+                        logger.info(f"✅ Including buy order: {signal.symbol} ${order_value:,.2f} (remaining: ${remaining_cash:,.2f})")
+                    else:
+                        # Try to scale down the order to fit
+                        if remaining_cash > 100:  # Minimum $100 order
+                            try:
+                                current_price = alpaca_client.get_current_price(signal.symbol)
+                                if current_price:
+                                    adjusted_qty = int(remaining_cash / current_price)
+                                    if adjusted_qty > 0:
+                                        signal.quantity = adjusted_qty
+                                        signal.reasoning = f"{getattr(signal, 'reasoning', '')} [Cash-adjusted]"
+                                        balanced_signals.append(signal)
+                                        remaining_cash = 0
+                                        logger.info(f"📉 Scaled buy order: {signal.symbol} to {adjusted_qty} shares")
+                            except Exception as e:
+                                logger.warning(f"Could not scale order for {signal.symbol}: {e}")
+                        else:
+                            logger.warning(f"❌ Skipping buy order: {signal.symbol} ${order_value:,.2f} (insufficient cash: ${remaining_cash:,.2f})")
+                
+                # Add forced sell signals if still not enough cash
+                if remaining_cash < 0:
+                    logger.warning("🚨 Still insufficient cash - adding forced position trims")
+                    await self._add_forced_sell_signals(balanced_signals, current_positions, abs(remaining_cash))
+            
+            final_buys = len([s for s in balanced_signals if s.action.lower() in ['buy', 'long']])
+            final_sells = len([s for s in balanced_signals if s.action.lower() in ['sell']])
+            final_shorts = len([s for s in balanced_signals if s.action.lower() in ['sell_short', 'short']])
+            
+            logger.info(f"⚖️ Final order balance: {final_buys} BUY, {final_sells} SELL, {final_shorts} SHORT")
+            
+            return balanced_signals
+            
+        except Exception as e:
+            logger.error(f"Order balancing failed: {e}")
+            # Fallback: return original signals but prioritize sells, then shorts, then limited buys
+            sell_signals = [s for s in signals if s.action.lower() in ['sell']]
+            short_signals = [s for s in signals if s.action.lower() in ['sell_short', 'short']]
+            buy_signals = [s for s in signals if s.action.lower() in ['buy', 'long']]
+            return sell_signals + short_signals[:2] + buy_signals[:2]  # Conservative fallback
+    
+    async def _add_forced_sell_signals(self, balanced_signals: list, current_positions: dict, cash_needed: float):
+        """Add forced sell signals to free up additional cash when needed."""
+        try:
+            from tools.alpaca_client import alpaca_client
+            from agents.state import TradingSignal
+            
+            logger.info(f"🚨 Adding forced sells to free up ${cash_needed:,.2f}")
+            
+            # Sort positions by unrealized P&L (sell losers first to preserve winners)
+            position_candidates = []
+            
+            for symbol, position in current_positions.items():
+                try:
+                    unrealized_pnl = float(position.get('unrealized_pl', 0))
+                    qty = float(position.get('qty', 0))
+                    market_value = abs(float(position.get('market_value', 0)))
+                    
+                    if qty != 0 and market_value > 200:  # Only positions worth > $200
+                        position_candidates.append({
+                            'symbol': symbol,
+                            'qty': abs(qty),
+                            'unrealized_pnl': unrealized_pnl,
+                            'market_value': market_value,
+                            'pnl_pct': (unrealized_pnl / market_value) if market_value > 0 else 0
+                        })
+                except Exception as e:
+                    logger.warning(f"Could not analyze position {symbol}: {e}")
+            
+            # Sort by unrealized P&L (negative first = biggest losers first)
+            position_candidates.sort(key=lambda x: x['pnl_pct'])
+            
+            cash_freed = 0
+            forced_sells = 0
+            
+            for pos in position_candidates:
+                if cash_freed >= cash_needed:
+                    break
+                    
+                # Sell 50% of position to preserve some upside
+                sell_qty = max(1, int(pos['qty'] * 0.5))
+                sell_value = pos['market_value'] * 0.5
+                
+                # Create forced sell signal
+                forced_signal = TradingSignal(
+                    symbol=pos['symbol'],
+                    action="sell",
+                    confidence=0.9,  # High confidence for cash management
+                    price_target=None,
+                    quantity=sell_qty,
+                    reasoning=f"Forced sell for cash management (P&L: {pos['pnl_pct']:+.1%})"
+                )
+                
+                balanced_signals.insert(0, forced_signal)  # Insert at beginning for priority
+                cash_freed += sell_value
+                forced_sells += 1
+                
+                logger.info(f"🔥 Forced sell: {pos['symbol']} {sell_qty} shares ≈ ${sell_value:,.2f} "
+                           f"(P&L: {pos['pnl_pct']:+.1%})")
+            
+            logger.info(f"✅ Added {forced_sells} forced sells to free up ≈${cash_freed:,.2f}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add forced sell signals: {e}")
 
 # Global workflow instance
 trading_workflow = TradingWorkflow()

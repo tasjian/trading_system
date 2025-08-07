@@ -421,7 +421,7 @@ class ContinuousRebalancer:
                         overall_sentiment = getattr(sentiment_data, 'overall_sentiment', 'neutral')
                         confidence = getattr(sentiment_data, 'confidence', 0.5)
                     
-                    # Generate signal based on sentiment score
+                    # Generate signal based on sentiment score with enhanced SHORT detection
                     if overall_score > 0.1:  # Positive sentiment threshold
                         signal_strength = min(0.5, max(0.3, overall_score))  # 0.3 to 0.5 strength
                         sentiment_signals.append({
@@ -432,6 +432,35 @@ class ContinuousRebalancer:
                             'reasoning': f"{overall_sentiment.title()} overall sentiment, Multiple data sources",
                             'timestamp': datetime.now(),
                             'has_earnings': False  # Cached data doesn't track earnings
+                        })
+                    elif overall_score <= -0.5:  # Extreme negative sentiment for SHORT signals
+                        signal_strength = min(0.8, abs(overall_score))  # Higher strength for shorts
+                        signal_type = 'SHORT' if overall_score <= -0.7 else 'SELL'  # SHORT for extremely negative
+                        reasoning = f"EXTREME negative sentiment ({overall_score:.2f}), Multiple data sources"
+                        if overall_score <= -0.7:
+                            reasoning = f"CRISIS-LEVEL negative sentiment ({overall_score:.2f}) - SHORT opportunity"
+                        
+                        sentiment_signals.append({
+                            'symbol': symbol,
+                            'signal': signal_type,
+                            'strength': signal_strength,
+                            'confidence': min(0.95, confidence * 1.2),  # Boost confidence for extreme negatives
+                            'reasoning': reasoning,
+                            'timestamp': datetime.now(),
+                            'has_earnings': False,
+                            'sentiment_score': overall_score  # Include raw score for further analysis
+                        })
+                    elif overall_score <= -0.3:  # Moderate negative sentiment for regular SELL
+                        signal_strength = min(0.6, abs(overall_score))
+                        sentiment_signals.append({
+                            'symbol': symbol,
+                            'signal': 'SELL',
+                            'strength': signal_strength,
+                            'confidence': confidence,
+                            'reasoning': f"Negative sentiment ({overall_score:.2f}), Multiple data sources",
+                            'timestamp': datetime.now(),
+                            'has_earnings': False,
+                            'sentiment_score': overall_score
                         })
                 
                 state["sentiment_signals"] = sentiment_signals
