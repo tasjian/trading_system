@@ -6,6 +6,7 @@ Connects the comprehensive RL pre-training system to the existing trading infras
 import asyncio
 import logging
 import numpy as np
+import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any, Union
 from datetime import datetime
 import json
@@ -19,9 +20,7 @@ from agents.comprehensive_rl_pretraining import (
     create_comprehensive_rl_system
 )
 
-# Import existing system components
-from agents.online_learning_orchestrator import OnlineLearningOrchestrator, TradingEngine, PortfolioManager, RiskManager
-from agents.llm_rl_integration import LLMStateEnricher
+# Note: Online learning orchestrator is integrated within the comprehensive RL system
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +40,8 @@ class RLSystemBridge:
         
         # Performance tracking
         self.rl_decisions_count = 0
-        self.fallback_count = 0
         self.integration_stats = {
             'successful_decisions': 0,
-            'fallback_decisions': 0,
             'errors': 0,
             'total_calls': 0
         }
@@ -57,16 +54,26 @@ class RLSystemBridge:
         if self.system_initialized:
             return True
         
-        # TEMPORARY DISABLE: Comprehensive RL system has tensor dimension mismatch
-        # The system expects 116 features but receives variable input sizes
-        # Until we fix the feature engineering consistency, use fallback exclusively
-        logger.info("🔄 Comprehensive RL system temporarily disabled due to tensor dimension mismatch")
-        logger.info("   Using stable RL orchestrator exclusively until dimensions are fixed")
-        
-        self.system_initialized = False  # Force fallback
-        self.last_initialization_attempt = datetime.now()
-        
-        return False  # Always return False to trigger fallback
+        try:
+            # Create comprehensive RL system
+            rl_config = OnlineLearningConfig(
+                buffer_size=self.config.get('buffer_size', 10000),
+                batch_update_freq=pd.Timedelta(minutes=self.config.get('batch_update_minutes', 30)),
+                stable_policy_update_freq=pd.Timedelta(hours=self.config.get('stable_update_hours', 6))
+            )
+            
+            self.rl_system = create_comprehensive_rl_system(self.symbols, **self.config)
+            self.system_initialized = True
+            self.last_initialization_attempt = datetime.now()
+            
+            logger.info(f"✅ Comprehensive RL system initialized for {len(self.symbols)} symbols")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize comprehensive RL system: {e}")
+            self.system_initialized = False
+            self.last_initialization_attempt = datetime.now()
+            return False
     
     async def make_rl_decisions(self, 
                               state: Dict[str, Any], 
@@ -83,7 +90,8 @@ class RLSystemBridge:
             if not self.system_initialized:
                 initialized = await self.initialize_rl_system()
                 if not initialized:
-                    return await self._fallback_decision(state, config)
+                    logger.error("❌ Comprehensive RL system failed to initialize")
+                    return {"rl_decisions": {"allocations": [], "strategy": "no_action", "reasoning": "RL system initialization failed"}}
             
             # Extract required data from state
             sentiment_signals = state.get("sentiment_signals", [])
@@ -92,13 +100,13 @@ class RLSystemBridge:
             
             if not sentiment_signals:
                 logger.warning("No sentiment signals available for RL decisions")
-                return await self._fallback_decision(state, config)
+                return {"rl_decisions": {"allocations": [], "strategy": "no_action", "reasoning": "No sentiment signals available"}}
             
             # Get symbols with signals
             available_symbols = list(set([s.get('symbol') for s in sentiment_signals if s.get('symbol')]))
             if not available_symbols:
                 logger.warning("No valid symbols found in sentiment signals")
-                return await self._fallback_decision(state, config)
+                return {"rl_decisions": {"allocations": [], "strategy": "no_action", "reasoning": "No valid symbols found"}}
             
             logger.info(f"🤖 RL System processing {len(available_symbols)} symbols")
             
@@ -107,7 +115,7 @@ class RLSystemBridge:
             
             if observation is None:
                 logger.warning("Failed to create RL observation")
-                return await self._fallback_decision(state, config)
+                return {"rl_decisions": {"allocations": [], "strategy": "no_action", "reasoning": "Failed to create RL observation"}}
             
             # Get RL action using dual-agent system
             regime_id = self._detect_current_regime(state)
@@ -150,7 +158,7 @@ class RLSystemBridge:
         except Exception as e:
             logger.error(f"❌ RL decision making failed: {e}")
             self.integration_stats['errors'] += 1
-            return await self._fallback_decision(state, config)
+            return {"rl_decisions": {"allocations": [], "strategy": "error_fallback", "reasoning": f"RL system error: {str(e)}", "confidence": 0.1}}
     
     def _create_rl_observation(self, state: Dict[str, Any]) -> Optional[np.ndarray]:
         """Create observation vector for RL system."""
@@ -162,35 +170,38 @@ class RLSystemBridge:
             observation = []
             
             # Use a fixed number of symbols to ensure consistent dimensions
-            # This matches what the comprehensive RL system was trained with
-            max_symbols = 8  # Fixed dimension for consistency
+            # This must match what the comprehensive RL system expects: len(symbols) * 10
+            max_symbols = len(self.symbols) if len(self.symbols) <= 10 else 10  # Match RL system expectations
             symbols_to_process = self.symbols[:max_symbols]
             
-            # Pad symbols list if needed
+            # Pad symbols list if needed to maintain consistent dimensions
             while len(symbols_to_process) < max_symbols:
                 symbols_to_process.append(f"DUMMY_{len(symbols_to_process)}")
             
-            # Process each symbol with fixed feature count
+            # Process each symbol with exactly 10 features per symbol (to match RL system)
             for symbol in symbols_to_process:
                 
                 # Find sentiment signal for this symbol
                 symbol_signal = next((s for s in sentiment_signals if s.get('symbol') == symbol), {})
                 
-                # Feature extraction - exactly 7 features per symbol
+                # Feature extraction - exactly 10 features per symbol to match RL system
                 features = [
                     symbol_signal.get('score', 0.0),  # Sentiment score
                     symbol_signal.get('confidence', 0.5),  # Confidence
                     1.0 if symbol_signal.get('signal') == 'BUY' else 0.0,  # Buy signal
                     1.0 if symbol_signal.get('signal') == 'SELL' else 0.0,  # Sell signal
+                    1.0 if symbol_signal.get('signal') == 'SHORT' else 0.0,  # Short signal
+                    symbol_signal.get('strength', 0.5),  # Signal strength
                     portfolio.get('equity', 100000) / 100000.0,  # Normalized portfolio value
                     portfolio.get('cash', 10000) / portfolio.get('equity', 100000),  # Cash ratio
-                    len(sentiment_signals) / 10.0,  # Signal count normalized
+                    len(sentiment_signals) / 20.0,  # Signal count normalized
+                    float(symbol_signal.get('has_earnings', False)),  # Earnings flag
                 ]
                 
                 observation.extend(features)
             
-            # Final dimension check - should be exactly max_symbols * 7 = 56
-            target_dim = max_symbols * 7
+            # Final dimension check - should be exactly max_symbols * 10 
+            target_dim = max_symbols * 10
             current_dim = len(observation)
             
             if current_dim != target_dim:
@@ -316,62 +327,6 @@ class RLSystemBridge:
                 "reasoning": f"RL conversion error: {e}"
             }
     
-    async def _fallback_decision(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-        """Fallback to existing RL system when comprehensive system fails."""
-        
-        self.integration_stats['fallback_decisions'] += 1
-        self.fallback_count += 1
-        
-        logger.info("🔄 Using stable RL orchestrator (comprehensive RL temporarily disabled)")
-        
-        try:
-            # Use existing online learning orchestrator
-            orchestrator = OnlineLearningOrchestrator(
-                trading_engine=TradingEngine(),
-                portfolio_manager=PortfolioManager(),
-                risk_manager=RiskManager()
-            )
-            
-            # Create enhanced state
-            enricher = LLMStateEnricher()
-            enhanced_state = await enricher.enrich_state_from_llm_analysis(
-                sentiment_data=state.get("sentiment_data", {}),
-                market_signals=state.get("sentiment_signals", []),
-                portfolio_state=state.get("portfolio", {}),
-                market_data=state.get("market_data", {})
-            )
-            
-            # Get fallback RL decisions
-            sentiment_signals = state.get("sentiment_signals", [])
-            available_symbols = [s.get('symbol') for s in sentiment_signals if s.get('symbol')][:8]
-            
-            if available_symbols:
-                rl_decisions = await orchestrator.make_portfolio_decisions(
-                    enhanced_state=enhanced_state,
-                    available_symbols=available_symbols,
-                    portfolio_value=state.get("portfolio", {}).get("equity", 50000),
-                    risk_tolerance=0.4  # Conservative
-                )
-                
-                # Mark as fallback
-                rl_decisions["fallback_mode"] = True
-                rl_decisions["comprehensive_rl"] = False
-                
-                return {"rl_decisions": rl_decisions}
-            
-            else:
-                return {"rl_decisions": {"allocations": [], "strategy": "no_action", "reasoning": "No symbols available"}}
-            
-        except Exception as e:
-            logger.error(f"❌ Fallback RL decision also failed: {e}")
-            return {
-                "rl_decisions": {
-                    "allocations": [],
-                    "strategy": "emergency_fallback",
-                    "reasoning": f"All RL systems failed: {e}",
-                    "confidence": 0.1
-                }
-            }
     
     def get_integration_stats(self) -> Dict[str, Any]:
         """Get integration performance statistics."""
@@ -382,13 +337,10 @@ class RLSystemBridge:
             "system_initialized": self.system_initialized,
             "total_calls": total_calls,
             "successful_decisions": self.integration_stats['successful_decisions'],
-            "fallback_decisions": self.integration_stats['fallback_decisions'],
             "errors": self.integration_stats['errors'],
             "success_rate": self.integration_stats['successful_decisions'] / max(total_calls, 1),
-            "fallback_rate": self.integration_stats['fallback_decisions'] / max(total_calls, 1),
             "error_rate": self.integration_stats['errors'] / max(total_calls, 1),
-            "rl_decisions_count": self.rl_decisions_count,
-            "fallback_count": self.fallback_count
+            "rl_decisions_count": self.rl_decisions_count
         }
     
     async def shutdown(self):

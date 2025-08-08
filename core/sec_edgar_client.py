@@ -93,10 +93,16 @@ class SECEdgarClient:
         self._cik_to_ticker: Optional[Dict[str, str]] = None
         
         # Headers required by SEC (must include company name and email)
+        # Updated for 2024 SEC requirements: proper company name format
+        if "ML4T Trading System" in self.user_agent and "@" in self.user_agent:
+            # Ensure proper format: "Company Name email@domain.com"
+            self.user_agent = f"ML4T Trading System research@tradingsystem.com"
+        
         self.headers = {
             'User-Agent': self.user_agent,
             'Accept-Encoding': 'gzip, deflate',
-            'Host': 'www.sec.gov'
+            'Host': 'www.sec.gov',
+            'Accept': 'application/json, text/html, */*'
         }
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -130,6 +136,18 @@ class SECEdgarClient:
                     logger.warning("Rate limited by SEC, waiting...")
                     await asyncio.sleep(2)
                     return await self._make_request(url, **kwargs)
+                elif response.status == 404:
+                    # Not found - could be wrong CIK, no filings, or incorrect endpoint
+                    logger.warning(f"SEC API 404 Not Found: {url}")
+                    logger.warning(f"This could mean: 1) CIK not found, 2) No recent filings, 3) Wrong endpoint")
+                    return None
+                elif response.status == 403:
+                    # Forbidden - likely user agent issue (2024 SEC requirements)
+                    error_text = await response.text()
+                    logger.error(f"SEC API 403 Forbidden: {url}")
+                    logger.error(f"This is likely due to user-agent requirements. Current UA: {self.user_agent}")
+                    logger.error(f"SEC Response: {error_text[:200]}...")
+                    return None
                 else:
                     logger.warning(f"SEC API request failed: {response.status} for {url}")
                     return None
@@ -137,20 +155,32 @@ class SECEdgarClient:
             logger.error(f"SEC API request error: {e}")
             return None
     
+    def normalize_cik(self, cik: int or str) -> str:
+        """Normalize CIK to 10-digit zero-padded format (SEC requirement)."""
+        return str(cik).zfill(10)
+    
     async def load_company_tickers(self) -> bool:
-        """Load company ticker to CIK mapping."""
+        """Load company ticker to CIK mapping using SEC's official mapping."""
         try:
-            url = f"{self.base_url}/files/company_tickers_exchange.json"
+            # Use SEC's latest official mapping (updated weekly)
+            url = f"{self.base_url}/files/company_tickers.json"
             data = await self._make_request(url)
             
+            if not data:
+                # Fallback to exchange mapping
+                logger.warning("Standard mapping failed, trying exchange mapping...")
+                url = f"{self.base_url}/files/company_tickers_exchange.json"
+                data = await self._make_request(url)
+                
             if not data:
                 return False
             
             self._company_tickers = {}
             self._cik_to_ticker = {}
             
-            # Handle new format: {'fields': ['cik', 'name', 'ticker', 'exchange'], 'data': [...]}
+            # Handle both old and new SEC API formats
             if 'fields' in data and 'data' in data:
+                # New format: company_tickers_exchange.json
                 fields = data['fields']
                 cik_idx = fields.index('cik')
                 name_idx = fields.index('name') 
@@ -158,7 +188,7 @@ class SECEdgarClient:
                 exchange_idx = fields.index('exchange') if 'exchange' in fields else None
                 
                 for row in data['data']:
-                    cik = str(row[cik_idx]).zfill(10)
+                    cik = self.normalize_cik(row[cik_idx])  # Always normalize CIK
                     ticker = row[ticker_idx].upper()
                     title = row[name_idx]
                     exchange = row[exchange_idx] if exchange_idx is not None else None
@@ -173,9 +203,9 @@ class SECEdgarClient:
                     self._company_tickers[ticker] = company_info
                     self._cik_to_ticker[cik] = ticker
             else:
-                # Fallback to old format if present
+                # Standard format: company_tickers.json
                 for item in data.values():
-                    cik = str(item['cik_str']).zfill(10)
+                    cik = self.normalize_cik(item['cik_str'])  # Always normalize CIK
                     ticker = item['ticker'].upper()
                     title = item['title']
                     
@@ -196,33 +226,46 @@ class SECEdgarClient:
             return False
     
     def get_cik_from_ticker(self, ticker: str) -> Optional[str]:
-        """Convert ticker symbol to CIK."""
+        """Convert ticker symbol to normalized 10-digit CIK."""
         if not self._company_tickers:
+            logger.warning("Company tickers not loaded. Call load_company_tickers() first.")
             return None
         
-        company_info = self._company_tickers.get(ticker.upper())
-        return company_info.cik if company_info else None
+        ticker = ticker.upper().strip()
+        company_info = self._company_tickers.get(ticker)
+        if not company_info:
+            logger.debug(f"CIK not found for ticker {ticker}")
+            return None
+            
+        return company_info.cik
     
-    def get_ticker_from_cik(self, cik: str) -> Optional[str]:
+    def get_ticker_from_cik(self, cik: str or int) -> Optional[str]:
         """Convert CIK to ticker symbol."""
         if not self._cik_to_ticker:
+            logger.warning("Company tickers not loaded. Call load_company_tickers() first.")
             return None
         
-        normalized_cik = str(cik).zfill(10)
-        return self._cik_to_ticker.get(normalized_cik)
+        normalized_cik = self.normalize_cik(cik)
+        ticker = self._cik_to_ticker.get(normalized_cik)
+        if not ticker:
+            logger.debug(f"Ticker not found for CIK {normalized_cik}")
+        return ticker
     
     async def get_company_facts(self, ticker: str) -> Optional[CompanyFacts]:
-        """Get company facts and fundamentals."""
+        """Get company facts and fundamentals using proper CIK format."""
         cik = self.get_cik_from_ticker(ticker)
         if not cik:
-            logger.warning(f"CIK not found for ticker {ticker}")
+            logger.warning(f"CIK not found for ticker {ticker}. Ensure company_tickers are loaded.")
             return None
         
         try:
+            # Use correct EDGAR API endpoint with normalized CIK
             url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+            logger.debug(f"Fetching company facts from: {url}")
             data = await self._make_request(url)
             
             if not data:
+                logger.warning(f"No company facts data returned for {ticker} (CIK: {cik})")
                 return None
             
             return CompanyFacts(
@@ -250,17 +293,24 @@ class SECEdgarClient:
         return units_data
     
     async def get_company_submissions(self, ticker: str, limit: int = 50) -> List[SECFiling]:
-        """Get company's recent SEC submissions."""
+        """Get company's recent SEC submissions using proper CIK format."""
         cik = self.get_cik_from_ticker(ticker)
         if not cik:
-            logger.warning(f"CIK not found for ticker {ticker}")
+            logger.warning(f"CIK not found for ticker {ticker}. Check ticker symbol or load company_tickers.")
             return []
         
         try:
+            # Use correct EDGAR API endpoint with normalized CIK
             url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+            logger.debug(f"Fetching submissions from: {url}")
             data = await self._make_request(url)
             
-            if not data or 'filings' not in data:
+            if not data:
+                logger.warning(f"No submissions data returned for {ticker} (CIK: {cik}). Company may have no recent filings.")
+                return []
+                
+            if 'filings' not in data:
+                logger.warning(f"No filings section found for {ticker} (CIK: {cik})")
                 return []
             
             filings_data = data['filings']['recent']

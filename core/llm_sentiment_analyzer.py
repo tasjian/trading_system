@@ -43,20 +43,18 @@ class SentimentAnalysis(BaseModel):
     
 
 class LLMSentimentAnalyzer:
-    """LLM-based sentiment analyzer for financial content."""
+    """LLM-based sentiment analyzer for financial content using unified LLM client."""
     
     def __init__(self, anthropic_api_key: Optional[str] = None, openai_api_key: Optional[str] = None, ollama_base_url: str = "http://localhost:11434"):
+        # Initialize unified LLM client for consistency and FinGPT support
+        from tools.llm_client import LLMClient
+        self.llm_client = LLMClient()
+        
+        # Keep legacy parameters for backward compatibility
         self.anthropic_api_key = anthropic_api_key
         self.openai_api_key = openai_api_key
         self.ollama_base_url = ollama_base_url
         self.session: Optional[aiohttp.ClientSession] = None
-        
-        # Model preferences (try Anthropic first, then Ollama, then OpenAI)
-        self.use_anthropic = bool(anthropic_api_key)
-        self.use_openai = bool(openai_api_key)
-        self.anthropic_model = "claude-3-5-sonnet-20241022"
-        self.openai_model = "gpt-4o-mini"  # Use the more available model
-        self.ollama_model = "llama3:8b"  # Match the available model
         
     async def _ensure_session(self):
         """Ensure aiohttp session exists."""
@@ -65,8 +63,34 @@ class LLMSentimentAnalyzer:
                 timeout=aiohttp.ClientTimeout(total=60)
             )
     
+    def _create_sentiment_system_prompt(self, context: str = "financial_news") -> str:
+        """Create system prompt for sentiment analysis."""
+        
+        context_descriptions = {
+            "financial_news": "financial news articles",
+            "earnings_call": "earnings call transcripts", 
+            "social_media": "social media posts about stocks/trading",
+            "analyst_report": "financial analyst reports"
+        }
+        
+        context_desc = context_descriptions.get(context, "financial text")
+        
+        return f"""You are a financial sentiment analysis expert specializing in {context_desc}. 
+
+Your task is to analyze the sentiment and provide structured JSON output with the following fields:
+- sentiment: "very_positive", "positive", "neutral", "negative", or "very_negative"
+- confidence: Your confidence level (0.0-1.0)
+- score: Numerical sentiment score (-1.0 to +1.0, where -1 is very negative, 0 is neutral, +1 is very positive)
+- reasoning: Brief explanation of your assessment
+- key_phrases: Array of important phrases that influenced your decision
+- financial_impact: Expected impact on stock price/company valuation
+- risk_factors: Array of identified risk factors
+- opportunities: Array of identified opportunities
+
+Respond ONLY with valid JSON format. Focus on financial implications and market impact."""
+    
     def _create_sentiment_prompt(self, text: str, context: str = "financial_news") -> str:
-        """Create a detailed prompt for sentiment analysis."""
+        """Create a detailed prompt for sentiment analysis (legacy method)."""
         
         context_descriptions = {
             "financial_news": "financial news article",
@@ -257,6 +281,64 @@ Respond only with valid JSON."""
             logger.error(f"Ollama API call failed: {e}")
             return None
     
+    def _parse_llm_response(self, response_content: str) -> Optional[Dict]:
+        """Parse LLM response and extract sentiment analysis data."""
+        try:
+            # Try to find JSON in the response
+            import re
+            
+            # Look for JSON block in response
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                result = json.loads(json_str)
+                
+                # Validate required fields
+                required_fields = ['sentiment', 'confidence', 'score']
+                if all(field in result for field in required_fields):
+                    # Ensure defaults for optional fields
+                    result.setdefault('reasoning', 'LLM sentiment analysis')
+                    result.setdefault('key_phrases', [])
+                    result.setdefault('financial_impact', None)
+                    result.setdefault('risk_factors', [])
+                    result.setdefault('opportunities', [])
+                    
+                    return result
+            
+            # If no valid JSON found, try to extract sentiment from text
+            response_lower = response_content.lower()
+            
+            if any(word in response_lower for word in ['very positive', 'strongly positive']):
+                sentiment = 'very_positive'
+                score = 0.8
+            elif any(word in response_lower for word in ['positive', 'bullish', 'optimistic']):
+                sentiment = 'positive'
+                score = 0.4
+            elif any(word in response_lower for word in ['very negative', 'strongly negative']):
+                sentiment = 'very_negative'
+                score = -0.8
+            elif any(word in response_lower for word in ['negative', 'bearish', 'pessimistic']):
+                sentiment = 'negative'
+                score = -0.4
+            else:
+                sentiment = 'neutral'
+                score = 0.0
+            
+            return {
+                'sentiment': sentiment,
+                'confidence': 0.6,
+                'score': score,
+                'reasoning': 'Extracted from LLM response text',
+                'key_phrases': [],
+                'financial_impact': None,
+                'risk_factors': [],
+                'opportunities': []
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to parse LLM response: {e}")
+            return None
+    
     def _fallback_sentiment_analysis(self, text: str) -> Dict:
         """Fallback sentiment analysis using keyword-based approach."""
         positive_words = [
@@ -308,38 +390,39 @@ Respond only with valid JSON."""
         }
     
     async def analyze_text(self, text: str, context: str = "financial_news") -> SentimentAnalysis:
-        """Analyze sentiment of financial text using LLM."""
+        """Analyze sentiment of financial text using unified LLM client (including FinGPT)."""
         
         # Truncate very long texts to avoid token limits
         if len(text) > 8000:
             text = text[:8000] + "... [truncated]"
         
-        prompt = self._create_sentiment_prompt(text, context)
+        system_prompt = self._create_sentiment_system_prompt(context)
+        user_message = f"Analyze the sentiment of this financial content:\n\n{text}"
         
-        # Try LLM analysis first (Anthropic -> Ollama -> OpenAI)
-        result = None
-        
-        if self.use_anthropic:
-            result = await self._call_anthropic(prompt)
-        
-        if not result:
-            result = await self._call_ollama(prompt)
-        
-        if not result and self.use_openai:
-            result = await self._call_openai(prompt)
-        
-        if not result:
-            logger.warning("LLM analysis failed, using fallback method")
-            result = self._fallback_sentiment_analysis(text)
-        
-        # Validate and create structured result
         try:
-            return SentimentAnalysis(**result)
+            # Use unified LLM client (FinGPT -> Claude -> Llama -> OpenAI)
+            llm_response = await self.llm_client.generate_response(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                temperature=0.3,  # Lower temperature for consistent sentiment analysis
+                max_tokens=500,
+                model=None  # Use default/preferred model
+            )
+            
+            # Parse JSON response
+            result = self._parse_llm_response(llm_response.content)
+            
+            if result:
+                # Validate and create structured result
+                return SentimentAnalysis(**result)
+        
         except Exception as e:
-            logger.error(f"Failed to create SentimentAnalysis: {e}")
-            # Return safe fallback
-            fallback_result = self._fallback_sentiment_analysis(text)
-            return SentimentAnalysis(**fallback_result)
+            logger.error(f"LLM sentiment analysis failed: {e}")
+        
+        # Fallback to rule-based analysis
+        logger.warning("LLM analysis failed, using fallback method")
+        result = self._fallback_sentiment_analysis(text)
+        return SentimentAnalysis(**result)
     
     async def analyze_news_articles(self, articles: List[Dict]) -> List[SentimentAnalysis]:
         """Analyze sentiment of multiple news articles."""

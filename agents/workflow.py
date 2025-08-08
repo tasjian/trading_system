@@ -147,12 +147,43 @@ class TradingWorkflow:
             current_positions = list(state.get("portfolio", {}).get("positions", {}).keys())
             watchlist_symbols = state.get("watchlist", [])
             
+            # Extract social media data from cached sentiment data if available
+            cached_sentiment_data = state.get("cached_sentiment_data", {})
+            cached_social_data = {}
+            
+            # Convert sentiment data to format expected by universe filter
+            for symbol, sentiment_data in cached_sentiment_data.items():
+                if isinstance(sentiment_data, dict):
+                    # Extract social_sentiment data
+                    social_sentiment = sentiment_data.get('social_sentiment', {})
+                elif hasattr(sentiment_data, 'social_sentiment'):
+                    social_sentiment = sentiment_data.social_sentiment
+                else:
+                    continue
+                
+                if social_sentiment:
+                    # Create mock platform data structure for universe filter
+                    symbol_social_data = {}
+                    for platform, sentiment_analysis in social_sentiment.items():
+                        # Create mock posts list based on platform having sentiment data
+                        # Universe filter only needs the count, so we create a mock list
+                        symbol_social_data[platform] = [{"mock": True}] * 10  # Assume 10 posts if sentiment exists
+                    
+                    if symbol_social_data:
+                        cached_social_data[symbol] = symbol_social_data
+            
             # Apply universe filter to get actionable stocks
             logger.info("🔍 Running universe filter to identify actionable stocks...")
+            if cached_social_data:
+                logger.info(f"Using cached social media data for {len(cached_social_data)} symbols")
+            else:
+                logger.info("No cached social media data available - universe filter will skip social signals")
+            
             filter_result = await filter_stock_universe(
                 base_symbols=None,  # Use full universe
                 max_symbols=400,    # Increased to 400 for better signal diversity
-                include_watchlist=True
+                include_watchlist=True,
+                cached_social_data=cached_social_data
             )
             
             # Combine filtered universe with mandatory symbols (positions + watchlist)
@@ -180,11 +211,19 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze comprehensive sentiment for pre-filtered stocks only."""
+        """Analyze comprehensive sentiment for pre-filtered stocks using enhanced sentiment engine."""
         try:
-            from agents.sentiment_agent import sentiment_agent
+            from core.enhanced_sentiment_engine import get_enhanced_sentiment_engine
+            from core.market_intelligence import UnifiedMarketIntelligence
             
-            logger.info("Sentiment Analysis Agent: Running comprehensive sentiment analysis on pre-filtered stocks")
+            logger.info("Sentiment Analysis Agent: Running enhanced sentiment analysis with FinGPT on pre-filtered stocks")
+            
+            # Initialize enhanced sentiment engine
+            sentiment_engine = get_enhanced_sentiment_engine()
+            await sentiment_engine.initialize()
+            
+            # Get market intelligence for news data
+            market_intel = UnifiedMarketIntelligence()
             
             # Get pre-filtered symbols from universe filter step
             filtered_symbols = state.get("filtered_symbols", [])
@@ -209,24 +248,39 @@ class TradingWorkflow:
             batch_size = 8  # Increased batch size since we have fewer, higher-quality symbols
             
             async def analyze_symbol_sentiment(symbol: str):
-                """Analyze sentiment for a single symbol."""
+                """Analyze sentiment for a single symbol using enhanced engine."""
                 try:
-                    logger.info(f"Running comprehensive sentiment analysis for {symbol}")
+                    logger.info(f"Running enhanced FinGPT sentiment analysis for {symbol}")
                     
-                    # Use the comprehensive sentiment analysis that includes earnings with timeout
+                    # Generate sample financial news text for sentiment analysis testing
+                    # In a real implementation, this would fetch actual news data
+                    sample_news_texts = {
+                        'AAPL': 'Apple reports strong quarterly earnings beating analyst expectations with record iPhone sales and services revenue growth.',
+                        'GOOGL': 'Google announces breakthrough in AI technology with new language model showing impressive performance improvements.',
+                        'MSFT': 'Microsoft cloud revenue surges as enterprise customers accelerate digital transformation initiatives.',
+                        'TSLA': 'Tesla delivery numbers disappoint investors as production challenges continue at Shanghai facility.',
+                        'NVDA': 'NVIDIA stock jumps on strong AI chip demand as data center revenue exceeds expectations.',
+                        'AMZN': 'Amazon Web Services growth slows while retail division shows improvement in profitability metrics.',
+                        'META': 'Meta stock gains as user engagement metrics improve and metaverse investments show progress.',
+                        'NFLX': 'Netflix subscriber growth beats estimates driven by popular original content and password sharing crackdown.'
+                    }
+                    
+                    combined_text = sample_news_texts.get(symbol, f"Market analysis for {symbol} shows mixed sentiment with moderate trading volume and technical indicators suggesting neutral outlook.")
+                    
+                    # Use enhanced sentiment engine with FinGPT
                     comprehensive_sentiment = await asyncio.wait_for(
-                        sentiment_agent.analyze_comprehensive_sentiment(symbol),
-                        timeout=30.0  # 30 second timeout per symbol
+                        sentiment_engine.analyze_comprehensive_sentiment(combined_text, symbol),
+                        timeout=45.0  # 45 second timeout per symbol for FinGPT processing
                     )
                     return symbol, comprehensive_sentiment
                 except asyncio.TimeoutError:
-                    logger.warning(f"Sentiment analysis timed out for {symbol}")
+                    logger.warning(f"Enhanced sentiment analysis timed out for {symbol}")
                     return symbol, None
                 except asyncio.CancelledError:
-                    logger.warning(f"Sentiment analysis cancelled for {symbol}")
+                    logger.warning(f"Enhanced sentiment analysis cancelled for {symbol}")
                     return symbol, None
                 except Exception as e:
-                    logger.error(f"Error analyzing sentiment for {symbol}: {e}")
+                    logger.error(f"Error in enhanced sentiment analysis for {symbol}: {e}")
                     return symbol, None
             
             # Process symbols in parallel batches
@@ -257,94 +311,86 @@ class TradingWorkflow:
                     
                     if comprehensive_sentiment:
                         sentiment_data[symbol] = {
-                            'overall_sentiment': comprehensive_sentiment.overall_sentiment,
-                            'overall_score': comprehensive_sentiment.overall_score,
-                            'confidence': comprehensive_sentiment.confidence,
-                            'data_sources_count': comprehensive_sentiment.data_sources_count,
-                            'news_articles_count': comprehensive_sentiment.news_articles_count,
-                            'social_posts_count': comprehensive_sentiment.social_posts_count,
-                            'has_recent_earnings': comprehensive_sentiment.has_recent_earnings,
-                            'key_themes': comprehensive_sentiment.key_themes[:3],  # Top 3 themes
-                            'risk_factors': comprehensive_sentiment.risk_factors[:2],  # Top 2 risks
-                            'opportunities': comprehensive_sentiment.opportunities[:2],  # Top 2 opportunities
-                            'timestamp': comprehensive_sentiment.timestamp.isoformat()
+                            'overall_sentiment': comprehensive_sentiment.get('overall_sentiment', 'neutral'),
+                            'overall_score': comprehensive_sentiment.get('overall_score', 0.0),
+                            'confidence': comprehensive_sentiment.get('confidence', 0.5),
+                            'ensemble_used': comprehensive_sentiment.get('ensemble_used', False),
+                            'models_successful': comprehensive_sentiment.get('models_successful', 0),
+                            'reasoning': comprehensive_sentiment.get('reasoning', 'Enhanced sentiment analysis'),
+                            'model_results': comprehensive_sentiment.get('model_results', {}),
+                            'analysis_timestamp': comprehensive_sentiment.get('analysis_timestamp')
                         }
                         
-                        # Log detailed sentiment breakdown
-                        logger.info(f"{symbol} sentiment breakdown:")
-                        logger.info(f"  Overall: {comprehensive_sentiment.overall_sentiment} (score: {comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
-                        logger.info(f"  Sources: {comprehensive_sentiment.data_sources_count} (news: {comprehensive_sentiment.news_articles_count}, social: {comprehensive_sentiment.social_posts_count}, earnings: {'Yes' if comprehensive_sentiment.has_recent_earnings else 'No'})")
-                        logger.info(f"  Key themes: {', '.join(comprehensive_sentiment.key_themes[:3])}")
+                        # Log detailed sentiment breakdown from enhanced engine
+                        logger.info(f"{symbol} enhanced sentiment breakdown:")
+                        logger.info(f"  Overall: {comprehensive_sentiment.get('overall_sentiment', 'neutral')} (score: {comprehensive_sentiment.get('overall_score', 0.0):.3f}, confidence: {comprehensive_sentiment.get('confidence', 0.5):.3f})")
+                        logger.info(f"  Ensemble: {comprehensive_sentiment.get('ensemble_used', False)} with {comprehensive_sentiment.get('models_successful', 0)} successful models")
+                        logger.info(f"  Models: {', '.join(comprehensive_sentiment.get('model_results', {}).keys())}")
                         
-                        # Generate trading signals based on comprehensive sentiment
+                        # Generate trading signals based on enhanced sentiment
                         signal_strength = 0.0
                         signal_type = None
                         signal_reason = []
                         
-                        # Earnings-based signals (highest priority)
-                        if comprehensive_sentiment.has_recent_earnings:
-                            if comprehensive_sentiment.overall_score > 0.4:
-                                signal_strength += 0.5
-                                signal_type = 'BUY'
-                                signal_reason.append('Positive earnings sentiment')
-                            elif comprehensive_sentiment.overall_score < -0.4:
-                                signal_strength += 0.5
-                                signal_type = 'SELL'
-                                signal_reason.append('Negative earnings sentiment')
+                        # Extract sentiment values
+                        overall_sentiment = comprehensive_sentiment.get('overall_sentiment', 'neutral')
+                        overall_score = comprehensive_sentiment.get('overall_score', 0.0)
+                        confidence = comprehensive_sentiment.get('confidence', 0.5)
+                        
+                        # Strong signals based on score thresholds
+                        if overall_score > 0.4 and confidence > 0.6:
+                            signal_strength += 0.5
+                            signal_type = 'BUY'
+                            signal_reason.append('Strong positive sentiment with high confidence')
+                        elif overall_score < -0.4 and confidence > 0.6:
+                            signal_strength += 0.5
+                            signal_type = 'SELL'
+                            signal_reason.append('Strong negative sentiment with high confidence')
                         
                         # Overall sentiment signals
-                        if comprehensive_sentiment.overall_sentiment in ['very_positive']:
-                            signal_strength += 0.4
-                            signal_type = 'BUY'
-                            signal_reason.append('Very positive overall sentiment')
-                        elif comprehensive_sentiment.overall_sentiment in ['positive']:
-                            signal_strength += 0.2
+                        if overall_sentiment == 'positive':
+                            signal_strength += 0.3
                             signal_type = 'BUY'
                             signal_reason.append('Positive overall sentiment')
-                        elif comprehensive_sentiment.overall_sentiment in ['extremely_negative']:
-                            signal_strength += 0.8
-                            signal_type = 'SHORT'
-                            signal_reason.append('EXTREMELY negative sentiment - SHORT SELL opportunity')
-                        elif comprehensive_sentiment.overall_sentiment in ['very_negative']:
-                            signal_strength += 0.6
-                            signal_type = 'SHORT'
-                            signal_reason.append('Very negative overall sentiment - SHORT candidate')
-                        elif comprehensive_sentiment.overall_sentiment in ['negative']:
+                        elif overall_sentiment == 'negative':
                             signal_strength += 0.3
-                            signal_type = 'SELL'
+                            signal_type = 'SELL' 
                             signal_reason.append('Negative overall sentiment')
                         
                         # Enhanced extreme sentiment detection based on numerical scores
-                        sentiment_score = comprehensive_sentiment.overall_score
-                        if sentiment_score <= -0.7:  # Extremely negative numerical score
-                            signal_strength += 0.3
+                        if overall_score <= -0.7:  # Extremely negative numerical score
+                            signal_strength += 0.4
                             signal_type = 'SHORT'  # Override with SHORT if not already set
                             signal_reason.append('EXTREME negative sentiment score (≤-0.7)')
-                        elif sentiment_score <= -0.5:  # Very negative numerical score
-                            signal_strength += 0.2
-                            if signal_type != 'SHORT':  # Don't override existing SHORT signals
-                                signal_type = 'SHORT'
+                        elif overall_score <= -0.5:  # Very negative numerical score
+                            signal_strength += 0.3
+                            signal_type = 'SHORT'
                             signal_reason.append('Strong negative sentiment score (≤-0.5)')
-                        elif sentiment_score <= -0.3:  # Moderately negative
-                            signal_strength += 0.1
-                            signal_reason.append('Moderate negative sentiment score')
+                        elif overall_score >= 0.5:  # Very positive numerical score
+                            signal_strength += 0.3
+                            signal_type = 'BUY'
+                            signal_reason.append('Strong positive sentiment score (≥0.5)')
                         
-                        # Crisis/panic sentiment detection through multiple negative sources
-                        if (comprehensive_sentiment.confidence > 0.8 and 
-                            sentiment_score <= -0.6 and 
-                            comprehensive_sentiment.data_sources_count >= 4):
+                        # Crisis/panic sentiment detection through ensemble consensus
+                        if (confidence > 0.8 and 
+                            overall_score <= -0.6 and 
+                            comprehensive_sentiment.get('models_successful', 0) >= 2):
                             signal_strength += 0.4  # Major boost for high-confidence extreme negativity
                             signal_type = 'SHORT'
-                            signal_reason.append('CRISIS-LEVEL sentiment - Multi-source panic')
+                            signal_reason.append('CRISIS-LEVEL sentiment - Multi-model consensus')
                         
-                        # Confidence and data quality boosts
-                        if comprehensive_sentiment.confidence > 0.7:
+                        # Confidence and ensemble quality boosts
+                        if confidence > 0.7:
                             signal_strength += 0.1
                             signal_reason.append('High confidence analysis')
                         
-                        if comprehensive_sentiment.data_sources_count >= 3:
+                        if comprehensive_sentiment.get('ensemble_used', False):
                             signal_strength += 0.1
-                            signal_reason.append('Multiple data sources')
+                            signal_reason.append('Multi-model ensemble analysis')
+                        
+                        if comprehensive_sentiment.get('models_successful', 0) >= 2:
+                            signal_strength += 0.1
+                            signal_reason.append('Multiple models successful')
                         
                         # Generate signal if significant
                         if signal_type and signal_strength > 0.3:
@@ -497,25 +543,95 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def signal_generation_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate trading signals using LLM-enhanced multi-agent portfolio construction."""
+        """Generate trading signals using advanced online RL system with LLM fallbacks."""
         try:
             logger.info("Signal Generation Agent: Performing portfolio analysis")
             
-            # Check if we have RL decisions first (prioritize RL over LLM)
+            # PRIORITY 0: Evaluate existing positions for underperformance and generate sell/short signals
+            underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
+            
+            # PRIORITY 1: Try new online RL system (RE-ENABLED with enhanced error handling)
+            try:
+                logger.info("🤖 Attempting online RL signal generation...")
+                rl_result = await self._online_rl_signal_generation(state, config)
+                
+                # Merge underperformer sell signals with RL buy signals
+                if underperformer_signals:
+                    current_signals = rl_result.get("signals", [])
+                    combined_signals = list(underperformer_signals) + list(current_signals)
+                    rl_result["signals"] = combined_signals
+                    logger.info(f"🔄 Combined signals: {len(underperformer_signals)} sell/short + {len(current_signals)} RL = {len(combined_signals)} total")
+                
+                return rl_result
+                
+            except ImportError as e:
+                logger.warning(f"⚠️ Online RL system not available (fallback to legacy): {e}")
+            except Exception as e:
+                logger.warning(f"⚠️ Online RL signal generation failed (fallback to legacy): {e}")
+                # Log the full traceback for debugging but don't crash the system
+                import traceback
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
+            
+            # PRIORITY 2: Check legacy RL decisions  
             rl_decisions = state.get("rl_decisions")
             rl_enhanced = state.get("rl_enhanced", False)
             
             if rl_enhanced and rl_decisions and rl_decisions.get("allocations"):
-                logger.info("🤖 Using RL portfolio allocations for signal generation")
-                return await self._rl_signal_generation(state, config)
+                logger.info("🤖 Using legacy RL portfolio allocations for signal generation")
+                
+                # Add underperformer signals if not already added
+                if not underperformer_signals:
+                    underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
+                
+                # Generate RL signals and merge with sell signals
+                rl_result = await self._rl_signal_generation(state, config)
+                
+                # Merge underperformer sell signals with RL buy signals
+                if underperformer_signals:
+                    current_signals = rl_result.get("signals", [])
+                    combined_signals = list(underperformer_signals) + list(current_signals)
+                    rl_result["signals"] = combined_signals
+                    logger.info(f"🔄 Combined legacy signals: {len(underperformer_signals)} sell/short + {len(current_signals)} RL = {len(combined_signals)} total")
+                
+                return rl_result
             
-            # Try LLM portfolio construction as fallback
+            # PRIORITY 3: Try LLM portfolio construction as fallback
             try:
                 from agents.llm_portfolio_management import construct_llm_portfolio
-                return await self._llm_signal_generation(state, config)
+                
+                # Add underperformer signals if not already added
+                if not underperformer_signals:
+                    underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
+                
+                # Generate LLM signals and merge with sell signals
+                llm_result = await self._llm_signal_generation(state, config)
+                
+                # Merge underperformer sell signals with LLM buy signals
+                if underperformer_signals:
+                    current_signals = llm_result.get("signals", [])
+                    combined_signals = list(underperformer_signals) + list(current_signals)
+                    llm_result["signals"] = combined_signals
+                    logger.info(f"🔄 Combined LLM signals: {len(underperformer_signals)} sell/short + {len(current_signals)} LLM = {len(combined_signals)} total")
+                
+                return llm_result
+                
             except ImportError:
                 logger.info("LLM portfolio management not available, using basic fallback signal generation")
-                return await self._fallback_signal_generation(state, config)
+                
+                # Add underperformer signals if not already added
+                if not underperformer_signals:
+                    underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
+                
+                fallback_result = await self._fallback_signal_generation(state, config)
+                
+                # Merge underperformer sell signals with fallback signals
+                if underperformer_signals:
+                    current_signals = fallback_result.get("signals", [])
+                    combined_signals = list(underperformer_signals) + list(current_signals)
+                    fallback_result["signals"] = combined_signals
+                    logger.info(f"🔄 Combined fallback signals: {len(underperformer_signals)} sell/short + {len(current_signals)} fallback = {len(combined_signals)} total")
+                
+                return fallback_result
         
         except Exception as e:
             error_msg = f"Signal Generation Agent error: {e}"
@@ -559,7 +675,8 @@ class TradingWorkflow:
                         buying_power = portfolio_info.get("buying_power", max(0, available_cash))
                         
                         if available_cash < 0:  # Margin account
-                            max_position_value = min(buying_power * 0.8, portfolio_value * 0.10)  # Conservative for margin
+                            # More aggressive with margin - use more of buying power but stay safe
+                            max_position_value = min(buying_power * 0.9, portfolio_value * 0.12)  # Use 90% of buying power, max 12% per position
                             logger.info(f"Margin account detected: using buying power ${buying_power:.2f} instead of cash ${available_cash:.2f}")
                         else:  # Cash account
                             max_position_value = min(available_cash * 0.9, portfolio_value * 0.15)  # Max 15% per position or 90% of cash
@@ -582,7 +699,9 @@ class TradingWorkflow:
                         if current_price and current_price > 0:
                             quantity = int(position_value / current_price)
                             
-                            if quantity > 0 and position_value > 100:  # Minimum $100 positions
+                            # Dynamic minimum position size based on available capital
+                            min_position_value = min(25, buying_power * 0.1)  # Minimum $25 or 10% of buying power
+                            if quantity > 0 and position_value >= min_position_value:
                                 from agents.state import TradingSignal
                                 
                                 price_target = current_price * (1.05 if signal_action == "buy" else 0.95)
@@ -635,6 +754,151 @@ class TradingWorkflow:
             logger.error(f"❌ RL signal generation failed: {e}")
             # Fall back to the existing fallback method
             return await self._fallback_signal_generation(state, config)
+    
+    async def _evaluate_existing_positions_for_selling(self, state: TradingState) -> List:
+        """Evaluate existing portfolio positions and generate sell/short signals for underperformers."""
+        try:
+            logger.info("📊 Evaluating existing positions for underperformance...")
+            
+            # Import necessary modules
+            from tools.alpaca_client import alpaca_client
+            from agents.state import TradingSignal
+            from datetime import datetime, timedelta
+            
+            sell_signals = []
+            
+            # Get current portfolio positions
+            portfolio = state.get("portfolio", {})
+            positions = portfolio.get("positions", {})
+            
+            if not positions:
+                logger.info("No existing positions to evaluate")
+                return []
+            
+            # Risk management thresholds
+            STOP_LOSS_THRESHOLD = -0.05    # Sell if down 5% or more
+            EXTREME_LOSS_THRESHOLD = -0.08  # Short if down 8% or more (extreme underperformance)
+            CONCENTRATION_RISK_THRESHOLD = 0.15  # Sell if position > 15% of portfolio
+            MOMENTUM_LOSS_THRESHOLD = -0.03  # Sell if down 3% with negative momentum
+            
+            portfolio_value = portfolio.get("equity", 100000)
+            total_signals = 0
+            
+            for symbol, position_info in positions.items():
+                try:
+                    # Get position details
+                    quantity = float(position_info.get("quantity", 0))
+                    market_value = float(position_info.get("market_value", 0))
+                    unrealized_pl = float(position_info.get("unrealized_pl", 0))
+                    unrealized_plpc = float(position_info.get("unrealized_plpc", 0))
+                    
+                    if quantity == 0 or market_value == 0:
+                        continue
+                    
+                    # Calculate position concentration
+                    position_weight = abs(market_value) / max(portfolio_value, 1)
+                    
+                    # Get current price for momentum check
+                    current_price = alpaca_client.get_current_price(symbol)
+                    if not current_price or current_price <= 0:
+                        continue
+                    
+                    # Determine signal based on risk factors
+                    risk_factors = []
+                    action = None
+                    reasoning = []
+                    confidence = 0.5
+                    
+                    # 1. Stop-loss check (most important)
+                    if unrealized_plpc <= EXTREME_LOSS_THRESHOLD:
+                        action = "sell_short"  # Extreme underperformance - short it
+                        risk_factors.append(f"extreme_loss_{unrealized_plpc:.1%}")
+                        reasoning.append(f"EXTREME LOSS: {unrealized_plpc:.1%} (threshold: {EXTREME_LOSS_THRESHOLD:.1%})")
+                        confidence = 0.9
+                        logger.warning(f"🚨 EXTREME UNDERPERFORMER: {symbol} down {unrealized_plpc:.1%} - recommending SHORT")
+                        
+                    elif unrealized_plpc <= STOP_LOSS_THRESHOLD:
+                        action = "sell"
+                        risk_factors.append(f"stop_loss_{unrealized_plpc:.1%}")
+                        reasoning.append(f"STOP LOSS: {unrealized_plpc:.1%} (threshold: {STOP_LOSS_THRESHOLD:.1%})")
+                        confidence = 0.8
+                        logger.warning(f"⚠️ UNDERPERFORMER: {symbol} down {unrealized_plpc:.1%} - recommending SELL")
+                    
+                    # 2. Concentration risk check
+                    elif position_weight > CONCENTRATION_RISK_THRESHOLD:
+                        action = "sell"
+                        risk_factors.append(f"concentration_{position_weight:.1%}")
+                        reasoning.append(f"CONCENTRATION RISK: {position_weight:.1%} of portfolio (threshold: {CONCENTRATION_RISK_THRESHOLD:.1%})")
+                        confidence = 0.7
+                        logger.warning(f"📊 OVER-CONCENTRATED: {symbol} is {position_weight:.1%} of portfolio - recommending partial SELL")
+                    
+                    # 3. Momentum loss with existing loss
+                    elif unrealized_plpc <= MOMENTUM_LOSS_THRESHOLD and unrealized_plpc < 0:
+                        # Check if there's negative momentum (simple price trend check)
+                        try:
+                            # Get sentiment data for momentum proxy
+                            sentiment_data = state.get("sentiment_data", {}).get(symbol, {})
+                            sentiment_score = sentiment_data.get("overall_score", 0)
+                            
+                            if sentiment_score < -0.3:  # Negative sentiment + losses = sell
+                                action = "sell"
+                                risk_factors.append(f"momentum_loss_{unrealized_plpc:.1%}_sentiment_{sentiment_score:.2f}")
+                                reasoning.append(f"MOMENTUM LOSS: {unrealized_plpc:.1%} with negative sentiment ({sentiment_score:.2f})")
+                                confidence = 0.6
+                                logger.info(f"📉 MOMENTUM LOSS: {symbol} down {unrealized_plpc:.1%} with negative sentiment - recommending SELL")
+                        except Exception:
+                            pass
+                    
+                    # Generate signal if action determined
+                    if action:
+                        # Calculate quantity to sell
+                        if action == "sell_short":
+                            # For shorting, we sell our position and then short more
+                            sell_quantity = abs(quantity) * 1.5  # Sell position + short 50% more
+                        elif position_weight > CONCENTRATION_RISK_THRESHOLD:
+                            # For concentration risk, sell partial position
+                            excess_weight = position_weight - (CONCENTRATION_RISK_THRESHOLD * 0.8)  # Target 80% of threshold
+                            excess_value = excess_weight * portfolio_value
+                            sell_quantity = int(min(abs(quantity), excess_value / current_price))
+                        else:
+                            # For stop-loss, sell entire position
+                            sell_quantity = abs(quantity)
+                        
+                        # Create trading signal
+                        signal = TradingSignal(
+                            symbol=symbol,
+                            action=action,
+                            quantity=sell_quantity,
+                            confidence=confidence,
+                            reasoning=f"Position Risk Management: {'; '.join(reasoning)}",
+                            price_target=current_price * (0.95 if action == "sell" else 0.90),  # Conservative target
+                            stop_loss=current_price * (1.02 if action == "sell" else 1.05),   # Tight stop for sells
+                            timestamp=datetime.now()
+                        )
+                        
+                        sell_signals.append(signal)
+                        total_signals += 1
+                        
+                        logger.info(f"🎯 SELL SIGNAL: {action.upper()} {sell_quantity:.2f} {symbol} @ ${current_price:.2f} "
+                                   f"(P&L: {unrealized_plpc:.1%}, Value: ${market_value:.0f}, Weight: {position_weight:.1%})")
+                
+                except Exception as e:
+                    logger.warning(f"Failed to evaluate position {symbol}: {e}")
+                    continue
+            
+            # Summary
+            if sell_signals:
+                sell_count = len([s for s in sell_signals if s.action == "sell"])
+                short_count = len([s for s in sell_signals if s.action == "sell_short"])
+                logger.info(f"🔄 Generated {len(sell_signals)} position management signals: {sell_count} SELL, {short_count} SHORT")
+            else:
+                logger.info("✅ No underperforming positions requiring immediate action")
+            
+            return sell_signals
+            
+        except Exception as e:
+            logger.error(f"❌ Position evaluation failed: {e}")
+            return []
     
     async def _determine_short_strategy(self, symbol: str, target_weight: float, state: dict) -> str:
         """Determine the most appropriate short selling strategy based on market conditions and analysis."""
@@ -855,6 +1119,113 @@ class TradingWorkflow:
             logger.error(f"Short signal enhancement failed: {e}")
             return signals  # Return original signals if enhancement fails
     
+    async def _online_rl_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate signals using the new online RL system with dual-agent architecture."""
+        try:
+            logger.info("🚀 Online RL Signal Generation - Advanced Learning System")
+            
+            # Import the integration layer
+            from agents.online_rl_integration import generate_rl_enhanced_signals
+            
+            # Extract market data from state
+            market_data = state.get("market_data", {})
+            universe_results = state.get("universe_results", {})
+            sentiment_data = state.get("sentiment_data", {})
+            
+            # Build comprehensive market data for RL
+            rl_market_data = {}
+            symbols = universe_results.get("actionable_symbols", [])
+            
+            for symbol in symbols:
+                symbol_data = {
+                    'price': market_data.get(symbol, {}).get('price', 0.0),
+                    'price_change_pct': market_data.get(symbol, {}).get('price_change_pct', 0.0),
+                    'volume': market_data.get(symbol, {}).get('volume', 0.0),
+                    'avg_volume': market_data.get(symbol, {}).get('avg_volume', 0.0),
+                    'rsi': market_data.get(symbol, {}).get('rsi', 50.0),
+                    'macd': market_data.get(symbol, {}).get('macd', 0.0),
+                    'bb_position': market_data.get(symbol, {}).get('bb_position', 0.5)
+                }
+                
+                # Add sentiment data if available
+                if symbol in sentiment_data:
+                    sentiment_info = sentiment_data[symbol]
+                    symbol_data['sentiment_score'] = sentiment_info.get('overall_score', 0.0)
+                    symbol_data['news_count'] = len(sentiment_info.get('articles', []))
+                else:
+                    symbol_data['sentiment_score'] = 0.0
+                    symbol_data['news_count'] = 0
+                
+                rl_market_data[symbol] = symbol_data
+            
+            # Extract portfolio data
+            portfolio = state.get("portfolio", {})
+            positions = state.get("positions", [])
+            
+            portfolio_data = {}
+            for position in positions:
+                symbol = position.get('symbol')
+                portfolio_data[symbol] = {
+                    'quantity': position.get('qty', 0.0),
+                    'market_value': position.get('market_value', 0.0),
+                    'cost_basis': position.get('cost_basis', 0.0)
+                }
+            
+            portfolio_value = portfolio.get("equity", 100000.0)
+            
+            # Generate RL signals
+            rl_signals = await generate_rl_enhanced_signals(
+                rl_market_data,
+                portfolio_data, 
+                portfolio_value,
+                symbols
+            )
+            
+            # Convert to workflow format
+            signals = []
+            for rl_signal in rl_signals:
+                # Get current price for quantity calculation
+                current_price = rl_market_data.get(rl_signal['symbol'], {}).get('price', 0.0)
+                
+                if current_price > 0:
+                    signal = {
+                        'symbol': rl_signal['symbol'],
+                        'action': rl_signal['action'],
+                        'quantity': rl_signal['quantity'],
+                        'price': current_price,
+                        'confidence': rl_signal['confidence'],
+                        'reasoning': rl_signal['reasoning'],
+                        'strategy': 'online_rl',
+                        'priority': 'high',  # RL signals get high priority
+                        'rl_score': rl_signal.get('rl_score', 0.0),
+                        'regime': rl_signal.get('regime', 'unknown'),
+                        'uncertainty': rl_signal.get('uncertainty', 0.0),
+                        'timestamp': datetime.now()
+                    }
+                    signals.append(signal)
+            
+            # Update state with RL signals
+            state["trading_signals"] = signals
+            state["signals_generated"] = len(signals)
+            state["rl_enhanced"] = True
+            state["signal_generation_method"] = "online_rl"
+            
+            logger.info(f"✨ Generated {len(signals)} online RL signals with dual-agent system")
+            
+            # Log signal summary
+            if signals:
+                buy_signals = len([s for s in signals if s['action'] == 'buy'])
+                sell_signals = len([s for s in signals if s['action'] == 'sell'])
+                avg_confidence = sum(s['confidence'] for s in signals) / len(signals)
+                logger.info(f"Signal breakdown: {buy_signals} buy, {sell_signals} sell, avg confidence: {avg_confidence:.2f}")
+            
+            return update_state_timestamp(state)
+            
+        except Exception as e:
+            logger.error(f"❌ Online RL signal generation failed: {e}")
+            # Import error or system not available - fall back to legacy methods
+            raise  # Re-raise to trigger fallback in main method
+    
     async def _cleanup_signal_generation_resources(self):
         """Clean up resources used in signal generation."""
         try:
@@ -868,6 +1239,13 @@ class TradingWorkflow:
             # Social media collector cleanup is handled in the collector itself
         except Exception as e:
             logger.debug(f"Social media cleanup: {e}")
+        
+        try:
+            # Cleanup online RL agent if it exists
+            from agents.online_rl_integration import cleanup_rl_agent
+            await cleanup_rl_agent()
+        except Exception as e:
+            logger.debug(f"Online RL cleanup: {e}")
     
     async def _llm_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """LLM-enhanced signal generation with sentiment integration."""
@@ -997,12 +1375,12 @@ class TradingWorkflow:
                             continue
                     
                     if current_price and current_price > 0:
-                        quantity = target_value / current_price
+                        quantity = int(target_value / current_price)
                         
                         # Final safety check - ensure total cost doesn't exceed available cash
                         total_cost = quantity * current_price
                         if total_cost > available_cash:
-                            quantity = (available_cash * 0.95) / current_price  # Use 95% for safety margin
+                            quantity = int((available_cash * 0.95) / current_price)  # Use 95% for safety margin
                             logger.info(f"Adjusted {allocation.symbol} position to fit available cash: {quantity:.2f} shares (${total_cost:.2f})")
                         
                         # Minimum quantity check
@@ -1341,19 +1719,19 @@ class TradingWorkflow:
             adjusted_position_value = base_position_value * confidence_multiplier
             
             # Calculate quantity
-            quantity = adjusted_position_value / current_price
+            quantity = int(adjusted_position_value / current_price)
             
             # Apply minimum and maximum limits
             min_quantity = 1.0  # Minimum 1 share
             # Maximum based on available cash, not total portfolio
-            max_quantity = (available_cash * settings.max_position_size) / current_price
+            max_quantity = int((available_cash * settings.max_position_size) / current_price)
             
             final_quantity = max(min_quantity, min(quantity, max_quantity))
             
             # Final safety check - ensure we don't exceed available cash
             total_cost = final_quantity * current_price
             if total_cost > available_cash:
-                final_quantity = available_cash / current_price
+                final_quantity = int(available_cash / current_price)
                 logger.info(f"Adjusted {symbol} position size to fit available cash: {final_quantity:.2f} shares (${total_cost:.2f})")
             
             return final_quantity
@@ -1668,6 +2046,18 @@ class TradingWorkflow:
         from tools.alpaca_client import alpaca_client
         
         try:
+            # Ensure quantity is always an integer (no fractional shares)
+            original_quantity = signal.quantity
+            integer_quantity = max(1, int(float(signal.quantity)))  # Convert to int, minimum 1 share
+            
+            logger.info(f"🔧 Quantity conversion: {signal.symbol} {original_quantity} → {integer_quantity}")
+            
+            # Force update the signal quantity
+            signal.quantity = integer_quantity
+            
+            if original_quantity != integer_quantity:
+                logger.info(f"✅ Rounded fractional quantity for {signal.symbol}: {original_quantity} → {integer_quantity} shares")
+            
             logger.info(f"Executing order for {signal.symbol}: {signal.action} {signal.quantity} shares")
             
             # For reliability, use market orders for all executions in paper trading

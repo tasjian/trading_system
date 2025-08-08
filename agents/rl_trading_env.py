@@ -15,6 +15,7 @@ from enum import Enum
 
 from gym import spaces
 from stable_baselines3.common.env_checker import check_env
+from config.settings import is_crypto_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +370,7 @@ class LLMTradingEnvironment(gym.Env):
         return {
             'hour_of_day': timestamp.hour / 24.0,
             'day_of_week': timestamp.weekday() / 6.0,
-            'is_market_open': 1.0 if 9 <= timestamp.hour <= 16 else 0.0
+            'is_market_open': 1.0 if (9 <= timestamp.hour <= 16) or self._is_crypto_trading() else 0.0
         }
     
     async def _get_current_state(self) -> TradingState:
@@ -451,6 +452,12 @@ class LLMTradingEnvironment(gym.Env):
             day_of_week=int(time_features['day_of_week'] * 6),
             is_market_open=bool(time_features['is_market_open'])
         )
+    
+    def _is_crypto_trading(self) -> bool:
+        """Check if we're trading crypto (24/7 market)."""
+        # If we have symbols configured, check if any are crypto
+        # For now, return False as default - can be overridden by subclasses
+        return False
     
     def _state_to_array(self, state: TradingState) -> np.ndarray:
         """Convert TradingState to numpy array for RL agent."""

@@ -8,25 +8,26 @@ Focuses on stocks with actual trading signals and market activity.
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set, Optional, Tuple, Any
 from dataclasses import dataclass
 import yfinance as yf
 import pandas as pd
 
 from tools.alpaca_client import alpaca_client
-from core.social_media_collector_optimized import SocialMediaCollector
-from config.settings import settings
+# SocialMediaCollector no longer directly used - using cached data instead
+from config.settings import settings, get_crypto_pairs, is_crypto_symbol
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class StockSignal:
-    """Individual stock signal for universe filtering."""
+    """Individual stock/crypto signal for universe filtering."""
     symbol: str
-    signal_type: str  # earnings, price_move, social, institutional
+    signal_type: str  # earnings, price_move, social, institutional, crypto_momentum
     strength: float   # 0.0 to 1.0
     description: str
     timestamp: datetime
+    asset_type: str = "stock"  # "stock" or "crypto"
 
 @dataclass
 class UniverseFilterResult:
@@ -38,14 +39,20 @@ class UniverseFilterResult:
     processing_time: float
 
 class StockUniverseFilter:
-    """Lightweight filter to identify actionable stocks from the full universe."""
+    """Lightweight filter to identify actionable stocks and crypto from the full universe."""
     
     def __init__(self):
         """Initialize the universe filter."""
+        # Stock filtering parameters
         self.min_price = 5.0          # Minimum stock price
         self.max_price = 1000.0       # Maximum stock price  
         self.min_volume = 100000      # Minimum daily volume
         self.min_market_cap = 1e9     # Minimum market cap ($1B)
+        
+        # Crypto filtering parameters
+        self.crypto_min_volume = 1000000    # Minimum crypto daily volume (higher for liquidity)
+        self.crypto_min_price = 0.01        # Minimum crypto price
+        self.crypto_max_price = 100000      # Maximum crypto price
         
         # Signal thresholds
         self.price_move_threshold = 0.02    # 2% price move
@@ -61,21 +68,28 @@ class StockUniverseFilter:
         self, 
         base_symbols: Optional[List[str]] = None,
         max_symbols: int = 400,
-        include_watchlist: bool = True
+        include_watchlist: bool = True,
+        cached_social_data: Optional[Dict[str, Any]] = None
     ) -> UniverseFilterResult:
         """Filter the stock universe to actionable candidates."""
         
         start_time = datetime.now()
-        logger.info("🔍 FILTERING STOCK UNIVERSE")
-        logger.info(f"Target: Reduce from 5000+ to max {max_symbols} actionable stocks")
+        logger.info("🔍 FILTERING STOCK & CRYPTO UNIVERSE")
+        logger.info(f"Target: Reduce from 5000+ to max {max_symbols} actionable assets")
         
-        # Step 1: Get base universe
+        # Step 1: Get base universe (stocks + crypto if enabled)
         if base_symbols:
             all_symbols = base_symbols
             logger.info(f"Using provided base symbols: {len(all_symbols)}")
         else:
             all_symbols = await self._get_tradeable_symbols()
             logger.info(f"Retrieved tradeable universe: {len(all_symbols)} symbols")
+        
+        # Add crypto pairs if enabled
+        if settings.crypto_enabled:
+            crypto_pairs = get_crypto_pairs()
+            all_symbols.extend(crypto_pairs)
+            logger.info(f"Added {len(crypto_pairs)} crypto pairs to universe")
         
         # Step 2: Apply basic filters (price, volume, market cap)
         logger.info("📊 Applying basic filters (price, volume, market cap)...")
@@ -84,7 +98,7 @@ class StockUniverseFilter:
         
         # Step 3: Collect signals in parallel
         logger.info("🚀 Collecting trading signals in parallel...")
-        signals = await self._collect_signals_parallel(basic_filtered)
+        signals = await self._collect_signals_parallel(basic_filtered, cached_social_data)
         logger.info(f"Collected {len(signals)} trading signals")
         
         # Step 4: Rank and select top candidates
@@ -160,35 +174,57 @@ class StockUniverseFilter:
         # Focus on liquid, tradeable stocks without hardcoded lists
         filtered_symbols = []
         
-        # Apply intelligent filtering to all symbols
+        # Apply filtering to all symbols (stocks and crypto)
         for symbol in symbols:
-            # Quick heuristics for potentially interesting stocks
-            if (len(symbol) <= 5 and                    # Not complex ticker
-                symbol.isalpha() and                    # Only letters
-                not any(char.islower() for char in symbol) and  # All caps
-                symbol not in ['ETF', 'FUND', 'INDEX']):  # Exclude obvious ETFs
+            if is_crypto_symbol(symbol):
+                # Crypto-specific filtering
+                # All configured crypto pairs pass basic filtering
                 filtered_symbols.append(symbol)
+            else:
+                # Stock-specific filtering
+                # Quick heuristics for potentially interesting stocks
+                if (len(symbol) <= 5 and                    # Not complex ticker
+                    symbol.isalpha() and                    # Only letters
+                    not any(char.islower() for char in symbol) and  # All caps
+                    symbol not in ['ETF', 'FUND', 'INDEX']):  # Exclude obvious ETFs
+                    filtered_symbols.append(symbol)
         
-        # Limit to manageable size for processing
-        filtered_symbols = filtered_symbols[:300]
+        # Count crypto vs stocks
+        crypto_count = sum(1 for s in filtered_symbols if is_crypto_symbol(s))
+        stock_count = len(filtered_symbols) - crypto_count
+        
+        # Limit to manageable size for processing (but preserve all crypto)
+        # Keep all crypto pairs and limit stocks
+        crypto_symbols = [s for s in filtered_symbols if is_crypto_symbol(s)]
+        stock_symbols = [s for s in filtered_symbols if not is_crypto_symbol(s)][:300 - len(crypto_symbols)]
+        
+        filtered_symbols = crypto_symbols + stock_symbols
         
         logger.info(f"Dynamic filtering applied to {len(symbols)} symbols")
-        logger.info(f"Selected {len(filtered_symbols)} candidates for signal analysis")
+        logger.info(f"Selected {len(filtered_symbols)} candidates ({crypto_count} crypto, {stock_count} stocks)")
         
         return filtered_symbols
     
-    async def _collect_signals_parallel(self, symbols: List[str]) -> List[StockSignal]:
+    async def _collect_signals_parallel(self, symbols: List[str], cached_social_data: Optional[Dict[str, Any]] = None) -> List[StockSignal]:
         """Collect trading signals in parallel for efficiency."""
         
         signals = []
         
+        # Separate crypto and stock symbols for appropriate signal collection
+        crypto_symbols = [s for s in symbols if is_crypto_symbol(s)]
+        stock_symbols = [s for s in symbols if not is_crypto_symbol(s)]
+        
         # Create tasks for different signal types
         tasks = [
-            self._collect_price_move_signals(symbols),
-            self._collect_earnings_signals(symbols),
-            self._collect_social_signals(symbols[:100]),  # Limit social to top 100 for API limits
-            self._collect_news_signals(symbols[:200])     # Limit news to top 200
+            self._collect_price_move_signals(symbols),  # Works for both crypto and stocks
+            self._collect_earnings_signals(stock_symbols),  # Only for stocks
+            self._collect_social_signals(symbols[:100], cached_social_data),  # Works for both
+            self._collect_news_signals(symbols[:200]),     # Works for both
+            self._collect_crypto_momentum_signals(crypto_symbols) if crypto_symbols else None  # Crypto-specific
         ]
+        
+        # Filter out None tasks
+        tasks = [task for task in tasks if task is not None]
         
         # Execute in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -340,49 +376,52 @@ class StockUniverseFilter:
         logger.info(f"Found {len(signals)} earnings signals")
         return signals
     
-    async def _collect_social_signals(self, symbols: List[str]) -> List[StockSignal]:
-        """Collect signals from social media activity."""
+    async def _collect_social_signals(self, symbols: List[str], cached_social_data: Dict[str, Any] = None) -> List[StockSignal]:
+        """Collect signals from cached social media activity."""
         
         signals = []
-        logger.info(f"💬 Checking social activity for {len(symbols)} symbols...")
+        logger.info(f"💬 Using cached social data for {len(symbols)} symbols...")
+        
+        if not cached_social_data:
+            logger.info("No cached social media data available - skipping social signals")
+            return signals
         
         try:
-            # Use shared social media collector instance with proper cleanup
-            social_media_collector = SocialMediaCollector()
-            try:
-                for symbol in symbols[:50]:  # Limit to avoid API overload
-                    try:
-                        # Get social media data (using collect_all_platforms instead of collect_social_data)
-                        platform_results = await social_media_collector.collect_all_platforms(symbol, limit_per_platform=5)
-                        
-                        total_mentions = 0
-                        for platform_data in platform_results.values():
-                            if isinstance(platform_data, list):
-                                total_mentions += len(platform_data)
-                        
-                        if total_mentions >= self.social_mention_threshold:
-                            strength = min(1.0, total_mentions / 50.0)  # Scale to 0-1
-                            
-                            signals.append(StockSignal(
-                                symbol=symbol,
-                                signal_type="social",
-                                strength=strength,
-                                description=f"{total_mentions} social mentions",
-                                timestamp=datetime.now()
-                            ))
-                    
-                    except Exception as e:
-                        logger.debug(f"Social check failed for {symbol}: {e}")
+            for symbol in symbols[:50]:  # Limit to match original behavior
+                try:
+                    # Check if we have cached social data for this symbol
+                    symbol_social_data = cached_social_data.get(symbol, {})
+                    if not symbol_social_data:
                         continue
-            
-            finally:
-                # Always cleanup the collector to prevent resource leaks
-                await social_media_collector.cleanup()
+                    
+                    # Extract mention count from cached data
+                    total_mentions = 0
+                    
+                    # Count mentions from all platforms
+                    for platform in ['reddit', 'twitter', 'tiktok']:
+                        platform_data = symbol_social_data.get(platform, [])
+                        if isinstance(platform_data, list):
+                            total_mentions += len(platform_data)
+                    
+                    if total_mentions >= self.social_mention_threshold:
+                        strength = min(1.0, total_mentions / 50.0)  # Scale to 0-1
+                        
+                        signals.append(StockSignal(
+                            symbol=symbol,
+                            signal_type="social",
+                            strength=strength,
+                            description=f"{total_mentions} cached social mentions",
+                            timestamp=datetime.now()
+                        ))
+                
+                except Exception as e:
+                    logger.debug(f"Cached social check failed for {symbol}: {e}")
+                    continue
         
         except Exception as e:
-            logger.error(f"Social signal collection failed: {e}")
+            logger.error(f"Cached social signal processing failed: {e}")
         
-        logger.info(f"Found {len(signals)} social signals")
+        logger.info(f"Found {len(signals)} cached social signals")
         return signals
     
     async def _collect_news_signals(self, symbols: List[str]) -> List[StockSignal]:
@@ -473,6 +512,44 @@ class StockUniverseFilter:
             summary[signal_type] = summary.get(signal_type, 0) + 1
         
         return summary
+    
+    async def _collect_crypto_momentum_signals(self, symbols: List[str]) -> List[StockSignal]:
+        """Collect crypto-specific momentum signals."""
+        
+        signals = []
+        logger.info(f"🚀 Checking crypto momentum for {len(symbols)} pairs...")
+        
+        for symbol in symbols:
+            try:
+                # Get recent crypto market data
+                market_data = alpaca_client.get_market_data(symbol, limit=20)
+                
+                if len(market_data) >= 10:
+                    prices = market_data["close"]
+                    volumes = market_data["volume"]
+                    
+                    # Calculate crypto-specific momentum indicators
+                    recent_return = (prices.iloc[-1] / prices.iloc[-5] - 1) if len(prices) >= 5 else 0
+                    volume_spike = volumes.iloc[-1] / volumes.mean() if volumes.mean() > 0 else 1
+                    
+                    # Crypto momentum signal (higher volatility tolerance)
+                    if abs(recent_return) > 0.05 and volume_spike > 1.5:  # 5% move with volume
+                        signal = StockSignal(
+                            symbol=symbol,
+                            signal_type="crypto_momentum",
+                            strength=min(1.0, abs(recent_return) * 5 + (volume_spike - 1) * 0.2),
+                            description=f"Crypto momentum: {recent_return:.2%} move with {volume_spike:.1f}x volume",
+                            timestamp=datetime.now(),
+                            asset_type="crypto"
+                        )
+                        signals.append(signal)
+                        
+            except Exception as e:
+                logger.warning(f"Error checking crypto momentum for {symbol}: {e}")
+                continue
+        
+        logger.info(f"Found {len(signals)} crypto momentum signals")
+        return signals
 
 # Global instance
 universe_filter = StockUniverseFilter()
@@ -480,7 +557,8 @@ universe_filter = StockUniverseFilter()
 async def filter_stock_universe(
     base_symbols: Optional[List[str]] = None,
     max_symbols: int = 400,
-    include_watchlist: bool = True
+    include_watchlist: bool = True,
+    cached_social_data: Optional[Dict[str, Any]] = None
 ) -> UniverseFilterResult:
     """Convenience function for filtering stock universe."""
-    return await universe_filter.filter_universe(base_symbols, max_symbols, include_watchlist)
+    return await universe_filter.filter_universe(base_symbols, max_symbols, include_watchlist, cached_social_data)

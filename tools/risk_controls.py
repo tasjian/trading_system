@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from tools.alpaca_client import alpaca_client
-from config.settings import settings
+from config.settings import settings, is_crypto_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,10 @@ class RiskMonitor:
             "max_correlation": 0.8,
             "min_liquidity_ratio": 0.1,
             "max_volatility": 0.5,
+            # Crypto-specific thresholds
+            "crypto_max_position_size": getattr(settings, 'crypto_max_position_size', 0.20),
+            "crypto_max_volatility": 1.0,  # Higher volatility tolerance for crypto
+            "crypto_max_daily_loss": 0.10,  # Higher daily loss limit for crypto
             "max_drawdown": 0.15
         }
         
@@ -175,6 +179,7 @@ class RiskMonitor:
             # Calculate position exposures
             exposures = {}
             max_exposure = 0.0
+            crypto_exposures = {}
             
             for pos in positions:
                 symbol = pos["symbol"]
@@ -182,24 +187,50 @@ class RiskMonitor:
                 exposure = market_value / portfolio_value
                 exposures[symbol] = exposure
                 max_exposure = max(max_exposure, exposure)
+                
+                # Track crypto exposures separately
+                if is_crypto_symbol(symbol):
+                    crypto_exposures[symbol] = exposure
             
+            # Use crypto-specific thresholds for crypto assets
             max_position_size = self.risk_thresholds["max_position_size"]
+            
+            # Check individual position concentration with appropriate thresholds
+            concentration_violations = []
+            for symbol, exposure in exposures.items():
+                if is_crypto_symbol(symbol):
+                    threshold = self.risk_thresholds["crypto_max_position_size"]
+                    asset_type = "crypto"
+                else:
+                    threshold = max_position_size
+                    asset_type = "equity"
+                
+                if exposure > threshold:
+                    concentration_violations.append({
+                        "symbol": symbol,
+                        "exposure": exposure,
+                        "threshold": threshold,
+                        "asset_type": asset_type
+                    })
             
             assessment["metrics"]["concentration"] = {
                 "exposures": exposures,
+                "crypto_exposures": crypto_exposures,
                 "max_exposure": max_exposure,
                 "threshold": max_position_size,
-                "status": "CRITICAL" if max_exposure > max_position_size else "OK"
+                "crypto_threshold": self.risk_thresholds["crypto_max_position_size"],
+                "violations": concentration_violations,
+                "status": "CRITICAL" if concentration_violations else "OK"
             }
             
-            if max_exposure > max_position_size:
-                largest_position = max(exposures, key=exposures.get)
+            # Create alerts for concentration violations
+            for violation in concentration_violations:
                 alert = RiskAlert(
                     level=RiskLevel.HIGH,
-                    message=f"Position concentration risk: {largest_position} at {max_exposure:.2%}",
+                    message=f"{violation['asset_type'].title()} position concentration risk: {violation['symbol']} at {violation['exposure']:.2%} (limit: {violation['threshold']:.2%})",
                     metric="concentration",
-                    value=max_exposure,
-                    threshold=max_position_size,
+                    value=violation['exposure'],
+                    threshold=violation['threshold'],
                     timestamp=datetime.now()
                 )
                 assessment["alerts"].append(alert)
@@ -311,9 +342,11 @@ class RiskMonitor:
                 assessment["metrics"]["volatility"] = {"status": "OK", "estimate": 0.0}
                 return 0.0
             
-            # Get recent price data for volatility estimation
+            # Get recent price data for volatility estimation with crypto-aware thresholds
             total_volatility = 0.0
+            crypto_volatility = 0.0
             valid_positions = 0
+            crypto_positions = 0
             
             for pos in positions:
                 try:
@@ -322,35 +355,66 @@ class RiskMonitor:
                     
                     if len(market_data) >= 10:
                         returns = market_data["close"].pct_change().dropna()
-                        volatility = returns.std() * (252 ** 0.5)  # Annualized
+                        # For crypto, use 365 days (24/7 trading), for stocks use 252 days
+                        annualization_factor = 365 if is_crypto_symbol(symbol) else 252
+                        volatility = returns.std() * (annualization_factor ** 0.5)
+                        
                         total_volatility += volatility
                         valid_positions += 1
+                        
+                        if is_crypto_symbol(symbol):
+                            crypto_volatility += volatility
+                            crypto_positions += 1
                         
                 except Exception:
                     continue
             
             avg_volatility = total_volatility / valid_positions if valid_positions > 0 else 0.0
+            avg_crypto_volatility = crypto_volatility / crypto_positions if crypto_positions > 0 else 0.0
+            
+            # Use different thresholds for crypto vs traditional assets
             max_volatility = self.risk_thresholds["max_volatility"]
+            max_crypto_volatility = self.risk_thresholds["crypto_max_volatility"]
             
             assessment["metrics"]["volatility"] = {
                 "estimated_volatility": avg_volatility,
+                "crypto_volatility": avg_crypto_volatility,
                 "threshold": max_volatility,
+                "crypto_threshold": max_crypto_volatility,
+                "crypto_positions": crypto_positions,
                 "status": "HIGH" if avg_volatility > max_volatility else "OK"
             }
+            
+            # Check for volatility violations
+            volatility_risk_score = 0.0
             
             if avg_volatility > max_volatility:
                 alert = RiskAlert(
                     level=RiskLevel.MEDIUM,
-                    message=f"High portfolio volatility: {avg_volatility:.2%}",
+                    message=f"High portfolio volatility: {avg_volatility:.2%} (limit: {max_volatility:.2%})",
                     metric="volatility",
                     value=avg_volatility,
                     threshold=max_volatility,
                     timestamp=datetime.now()
                 )
                 assessment["alerts"].append(alert)
-                return 70.0
+                volatility_risk_score = 70.0
             
-            return min(70.0, (avg_volatility / max_volatility) * 70)
+            # Separate check for crypto volatility (with higher tolerance)
+            if avg_crypto_volatility > max_crypto_volatility and crypto_positions > 0:
+                alert = RiskAlert(
+                    level=RiskLevel.LOW,  # Lower severity for crypto volatility
+                    message=f"High crypto volatility: {avg_crypto_volatility:.2%} (limit: {max_crypto_volatility:.2%})",
+                    metric="crypto_volatility",
+                    value=avg_crypto_volatility,
+                    threshold=max_crypto_volatility,
+                    timestamp=datetime.now()
+                )
+                assessment["alerts"].append(alert)
+                # Don't penalize as heavily for crypto volatility
+                volatility_risk_score = max(volatility_risk_score, 40.0)
+            
+            return max(volatility_risk_score, min(70.0, (avg_volatility / max_volatility) * 70))
             
         except Exception as e:
             logger.error(f"Error assessing volatility: {e}")

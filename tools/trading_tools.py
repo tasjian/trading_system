@@ -128,8 +128,9 @@ def place_market_order(symbol: str, quantity: float, side: str) -> Dict[str, Any
         if quantity <= 0:
             return {"error": "Quantity must be positive"}
         
-        # Additional safety check
-        if not alpaca_client.is_market_open():
+        # Additional safety check - skip market hours check for crypto
+        from config.settings import is_crypto_symbol
+        if not is_crypto_symbol(symbol) and not alpaca_client.is_market_open(symbol):
             return {"error": "Market is currently closed"}
         
         order = alpaca_client.place_order(
@@ -248,10 +249,10 @@ def get_asset_info(symbol: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 @tool
-def check_market_status() -> Dict[str, Any]:
+def check_market_status(symbol: Optional[str] = None) -> Dict[str, Any]:
     """Check if the market is currently open."""
     try:
-        is_open = alpaca_client.is_market_open()
+        is_open = alpaca_client.is_market_open(symbol)
         calendar = alpaca_client.get_market_calendar()
         
         return {

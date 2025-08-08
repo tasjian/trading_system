@@ -146,9 +146,42 @@ class AlpacaClient:
     
     def get_market_data(self, symbol: str, timeframe: str = "1Day", 
                        limit: int = 100) -> pd.DataFrame:
-        """Get market data for a symbol (using current quotes for free tier)."""
+        """Get market data for a symbol with crypto-optimized data sources."""
         try:
-            # For free tier - use current quote and yfinance for historical data
+            is_crypto = self._is_crypto_symbol(symbol)
+            
+            # For crypto assets, try Alpaca crypto API first
+            if is_crypto:
+                try:
+                    # Alpaca crypto data
+                    quote = self.api.get_latest_trade(symbol)
+                    price = float(quote.price)
+                    volume = float(quote.size)
+                    
+                    # Create dataframe with current crypto data
+                    import pandas as pd
+                    df = pd.DataFrame({
+                        'timestamp': [datetime.now()],
+                        'open': [price],
+                        'high': [price],
+                        'low': [price], 
+                        'close': [price],
+                        'volume': [volume]
+                    })
+                    
+                    logger.info(f"Got Alpaca crypto data for {symbol}: ${price:.2f}")
+                    return df
+                    
+                except Exception as crypto_error:
+                    logger.warning(f"Alpaca crypto data failed for {symbol}: {crypto_error}")
+                    
+                    # Fallback to crypto-specific data sources
+                    try:
+                        return self._get_crypto_fallback_data(symbol, timeframe, limit)
+                    except Exception as fallback_error:
+                        logger.warning(f"Crypto fallback failed for {symbol}: {fallback_error}")
+            
+            # For stocks or when crypto fails, use traditional approach
             try:
                 # Try to get latest quote from Alpaca
                 quote = self.api.get_latest_trade(symbol)
@@ -172,7 +205,7 @@ class AlpacaClient:
             except Exception as quote_error:
                 logger.warning(f"Alpaca quote failed for {symbol}: {quote_error}")
                 
-                # Fallback to yfinance
+                # Fallback to yfinance for stocks
                 try:
                     import yfinance as yf
                     ticker = yf.Ticker(symbol)
@@ -199,38 +232,62 @@ class AlpacaClient:
     
     def place_order(self, symbol: str, qty: float, side: str, 
                    order_type: str = "market", limit_price: Optional[float] = None,
-                   stop_price: Optional[float] = None, time_in_force: str = "gtc") -> Dict:
+                   stop_price: Optional[float] = None, time_in_force: str = "gtc",
+                   notional: Optional[float] = None) -> Dict:
         """
         Place a trading order with safety checks.
         
         Args:
-            symbol: Stock symbol
-            qty: Quantity to trade
+            symbol: Stock symbol or crypto pair (e.g., BTCUSD, ETHUSD)
+            qty: Quantity to trade (ignored if notional is provided)
             side: "buy", "sell", or "sell_short"
             order_type: "market", "limit", "stop", "stop_limit"
             limit_price: Price for limit orders
             stop_price: Price for stop orders
-            time_in_force: "gtc", "day", "ioc", "fok"
+            time_in_force: "gtc", "day", "ioc", "fok" (crypto only supports "gtc", "ioc")
+            notional: Dollar amount for fractional crypto orders
         """
         try:
             # Safety checks
-            if not self._pre_trade_checks(symbol, qty, side):
+            if not self._pre_trade_checks(symbol, qty, side, notional):
                 raise ValueError("Pre-trade safety checks failed")
             
             # Prepare order parameters
             # Handle sell_short by converting to sell with proper side
             alpaca_side = "sell" if side.lower() == "sell_short" else side.lower()
             
+            # Check if this is a crypto symbol
+            is_crypto = self._is_crypto_symbol(symbol)
+            
             order_params = {
                 "symbol": symbol,
-                "qty": abs(qty),  # Ensure positive quantity
                 "side": alpaca_side,
                 "type": order_type.lower(),
                 "time_in_force": time_in_force.lower()
             }
             
+            # Handle quantity vs notional for crypto fractional orders
+            if notional is not None and is_crypto:
+                order_params["notional"] = str(notional)
+                logger.info(f"Using notional amount ${notional} for crypto order")
+            else:
+                order_params["qty"] = abs(qty)  # Ensure positive quantity
+            
+            # Check if this is a fractional stock order (non-crypto)
+            is_fractional_stock_order = not is_crypto and float(qty) != int(float(qty))
+            
+            # Handle time_in_force requirements for fractional orders
+            if is_fractional_stock_order and time_in_force.lower() != "day":
+                logger.info(f"Fractional stock order detected for {symbol} (qty: {qty}), forcing time_in_force to 'day'")
+                order_params["time_in_force"] = "day"
+            elif is_crypto and time_in_force.lower() not in ["gtc", "ioc"]:
+                logger.warning(f"Invalid time_in_force '{time_in_force}' for crypto. Using 'gtc'")
+                order_params["time_in_force"] = "gtc"
+            
             # Add position intent for short selling (if supported by broker)
             if side.lower() == "sell_short":
+                if is_crypto:
+                    logger.warning(f"Short selling may not be supported for crypto {symbol}")
                 logger.info(f"Placing short sell order for {symbol}")
                 # Note: Alpaca handles short selling automatically if shares are available
             
@@ -264,6 +321,40 @@ class AlpacaClient:
             }
             
         except Exception as e:
+            error_message = str(e).lower()
+            
+            # Handle specific fractional order errors
+            if "not fractionable" in error_message and float(qty) != int(float(qty)):
+                logger.warning(f"Asset {symbol} is not fractionable, retrying with integer quantity")
+                try:
+                    # Retry with integer quantity
+                    integer_qty = max(1, int(float(qty)))
+                    order_params["qty"] = integer_qty
+                    
+                    logger.info(f"Retrying {symbol} order with integer quantity: {integer_qty}")
+                    order = self.trading_client.submit_order(order_data=order_params)
+                    
+                    # Send batched email notification asynchronously
+                    try:
+                        asyncio.create_task(self._send_batched_transaction_notification(
+                            order, symbol, integer_qty, side, order_type, limit_price
+                        ))
+                    except Exception as notification_error:
+                        logger.warning(f"Batched email notification failed: {notification_error}")
+                    
+                    return {
+                        "id": order.id,
+                        "symbol": order.symbol,
+                        "qty": float(order.qty),
+                        "side": order.side,
+                        "order_type": order.order_type,
+                        "status": order.status,
+                        "submitted_at": order.submitted_at
+                    }
+                except Exception as retry_error:
+                    logger.error(f"Retry with integer quantity also failed for {symbol}: {retry_error}")
+                    raise
+            
             logger.error(f"Failed to place order: {e}")
             raise
     
@@ -312,7 +403,7 @@ class AlpacaClient:
             logger.error(f"Failed to close position {symbol}: {e}")
             raise
     
-    def _pre_trade_checks(self, symbol: str, qty: float, side: str) -> bool:
+    def _pre_trade_checks(self, symbol: str, qty: float, side: str, notional: Optional[float] = None) -> bool:
         """Perform pre-trade safety checks."""
         try:
             # Check account status
@@ -323,19 +414,24 @@ class AlpacaClient:
             
             # Check buying power for buy orders
             if side.lower() == "buy":
-                # Estimate order value (using current market price)
+                # Estimate order value (using current market price or notional)
                 try:
-                    market_data = self.get_market_data(symbol, limit=1)
-                    if not market_data.empty:
-                        current_price = market_data.iloc[-1]["close"]
-                        order_value = qty * current_price
-                        
-                        if order_value > account["buying_power"]:
-                            logger.error(f"Insufficient buying power: ${order_value:.2f} > ${account['buying_power']:.2f}")
-                            return False
+                    if notional is not None:
+                        order_value = notional
                     else:
-                        # If no market data, skip buying power check and let Alpaca handle it
-                        logger.warning(f"No market data for {symbol}, skipping buying power check")
+                        market_data = self.get_market_data(symbol, limit=1)
+                        if not market_data.empty:
+                            current_price = market_data.iloc[-1]["close"]
+                            order_value = qty * current_price
+                        else:
+                            # If no market data, skip buying power check and let Alpaca handle it
+                            logger.warning(f"No market data for {symbol}, skipping buying power check")
+                            return True
+                    
+                    if order_value > account["buying_power"]:
+                        logger.error(f"Insufficient buying power: ${order_value:.2f} > ${account['buying_power']:.2f}")
+                        return False
+                        
                 except Exception as e:
                     logger.warning(f"Could not verify buying power: {e}")
                     # Continue without buying power check - let Alpaca API handle it
@@ -344,17 +440,27 @@ class AlpacaClient:
             portfolio_value = account["portfolio_value"]
             if portfolio_value > 0:
                 try:
-                    market_data = self.get_market_data(symbol, limit=1)
-                    if not market_data.empty:
-                        current_price = market_data.iloc[-1]["close"]
-                        position_value = qty * current_price
-                        position_percent = position_value / portfolio_value
-                        
-                        if position_percent > settings.max_position_size:
-                            logger.error(f"Position size too large: {position_percent:.2%} > {settings.max_position_size:.2%}")
-                            return False
+                    if notional is not None:
+                        position_value = notional
                     else:
-                        logger.warning(f"No market data for {symbol}, skipping position size check")
+                        market_data = self.get_market_data(symbol, limit=1)
+                        if not market_data.empty:
+                            current_price = market_data.iloc[-1]["close"]
+                            position_value = qty * current_price
+                        else:
+                            logger.warning(f"No market data for {symbol}, skipping position size check")
+                            return True
+                    
+                    position_percent = position_value / portfolio_value
+                    
+                    # Use crypto-specific position limits if available
+                    is_crypto = self._is_crypto_symbol(symbol)
+                    max_position = getattr(settings, 'crypto_max_position_size', settings.max_position_size) if is_crypto else settings.max_position_size
+                    
+                    if position_percent > max_position:
+                        logger.error(f"Position size too large: {position_percent:.2%} > {max_position:.2%}")
+                        return False
+                        
                 except Exception as e:
                     logger.warning(f"Could not verify position size: {e}")
                     # Continue without position size check
@@ -369,21 +475,55 @@ class AlpacaClient:
         """Get asset information and tradability."""
         try:
             asset = self.api.get_asset(symbol)
-            return {
+            
+            # Enhanced info for crypto assets
+            asset_info = {
                 "symbol": asset.symbol,
-                "name": asset.name,
-                "exchange": asset.exchange,
-                "asset_class": asset.asset_class,
-                "status": asset.status,
-                "tradable": asset.tradable,
-                "marginable": asset.marginable,
-                "shortable": asset.shortable,
-                "easy_to_borrow": asset.easy_to_borrow,
-                "fractionable": asset.fractionable
+                "name": getattr(asset, 'name', asset.symbol),
+                "exchange": getattr(asset, 'exchange', 'Unknown'),
+                "asset_class": getattr(asset, 'asset_class', 'crypto' if self._is_crypto_symbol(asset.symbol) else 'us_equity'),
+                "status": getattr(asset, 'status', 'active'),
+                "tradable": getattr(asset, 'tradable', True),
+                "marginable": getattr(asset, 'marginable', False),
+                "shortable": getattr(asset, 'shortable', False),
+                "easy_to_borrow": getattr(asset, 'easy_to_borrow', False),
+                "fractionable": getattr(asset, 'fractionable', True)
             }
+            
+            # Add crypto-specific info
+            if self._is_crypto_symbol(symbol):
+                asset_info.update({
+                    "is_crypto": True,
+                    "trading_hours": "24/7",
+                    "supported_order_types": ["market", "limit", "stop_limit"],
+                    "supported_time_in_force": ["gtc", "ioc"],
+                    "fractional_supported": True
+                })
+            else:
+                asset_info.update({
+                    "is_crypto": False,
+                    "trading_hours": "9:30 AM - 4:00 PM ET",
+                    "supported_order_types": ["market", "limit", "stop", "stop_limit"],
+                    "supported_time_in_force": ["gtc", "day", "ioc", "fok"]
+                })
+            
+            return asset_info
+            
         except Exception as e:
             logger.error(f"Failed to get asset info for {symbol}: {e}")
-            raise
+            
+            # Return safe defaults with crypto detection
+            is_crypto = self._is_crypto_symbol(symbol)
+            return {
+                "symbol": symbol,
+                "name": symbol,
+                "tradable": True,
+                "fractionable": is_crypto,  # Crypto supports fractional by default
+                "is_crypto": is_crypto,
+                "trading_hours": "24/7" if is_crypto else "9:30 AM - 4:00 PM ET",
+                "supported_order_types": ["market", "limit", "stop_limit"] if is_crypto else ["market", "limit", "stop", "stop_limit"],
+                "supported_time_in_force": ["gtc", "ioc"] if is_crypto else ["gtc", "day", "ioc", "fok"]
+            }
     
     def get_current_price(self, symbol: str) -> float:
         """Get current price for a symbol."""
@@ -401,14 +541,20 @@ class AlpacaClient:
                 logger.warning(f"Fallback price lookup failed for {symbol}: {fallback_error}")
             raise ValueError(f"Could not get price for {symbol}")
     
-    def is_market_open(self) -> bool:
-        """Check if the market is currently open."""
+    def is_market_open(self, symbol: Optional[str] = None) -> bool:
+        """Check if the market is currently open. Crypto markets are always open."""
         try:
+            # Crypto markets are open 24/7
+            if symbol and self._is_crypto_symbol(symbol):
+                return True
+                
+            # For stocks, check market hours
             clock = self.api.get_clock()
             return clock.is_open
         except Exception as e:
             logger.error(f"Failed to check market status: {e}")
-            return False
+            # Default to open for crypto, closed for stocks
+            return symbol and self._is_crypto_symbol(symbol) if symbol else False
     
     def get_market_calendar(self, start_date: Optional[str] = None, 
                            end_date: Optional[str] = None) -> List[Dict]:
@@ -475,6 +621,92 @@ class AlpacaClient:
             
         except Exception as e:
             logger.error(f"Failed to add transaction to batch queue: {e}")
+    
+    def _get_crypto_fallback_data(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        """Get crypto data from alternative sources when Alpaca fails."""
+        import pandas as pd
+        
+        try:
+            # Try yfinance with crypto suffix conversion
+            yf_symbol = self._convert_to_yfinance_crypto_symbol(symbol)
+            if yf_symbol:
+                import yfinance as yf
+                ticker = yf.Ticker(yf_symbol)
+                
+                # Get appropriate period for crypto (24/7 data)
+                period = '1d' if limit <= 100 else '5d'
+                interval = '1m' if timeframe == '1Min' else '1h'
+                
+                hist = ticker.history(period=period, interval=interval)
+                
+                if not hist.empty:
+                    df = hist.reset_index()
+                    df.columns = [col.lower() for col in df.columns]
+                    df['timestamp'] = df['datetime'] if 'datetime' in df.columns else df.index
+                    
+                    logger.info(f"Got yfinance crypto data for {symbol} ({yf_symbol}): ${df.iloc[-1]['close']:.2f}")
+                    return df.tail(limit)
+            
+            # If yfinance fails, create synthetic data (for testing purposes)
+            logger.warning(f"Creating synthetic data for crypto {symbol}")
+            base_price = 50000 if 'BTC' in symbol else 3000 if 'ETH' in symbol else 1.0
+            
+            timestamps = pd.date_range(end=datetime.now(), periods=limit, freq='1min')
+            
+            # Add some realistic crypto volatility
+            import numpy as np
+            np.random.seed(42)  # For reproducible results
+            price_changes = np.random.normal(0, base_price * 0.001, limit)  # 0.1% volatility
+            prices = base_price + np.cumsum(price_changes)
+            volumes = np.random.uniform(1000, 10000, limit)
+            
+            df = pd.DataFrame({
+                'timestamp': timestamps,
+                'open': prices,
+                'high': prices * 1.002,
+                'low': prices * 0.998,
+                'close': prices,
+                'volume': volumes
+            })
+            
+            logger.info(f"Created synthetic crypto data for {symbol}: ${prices[-1]:.2f}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Crypto fallback data failed for {symbol}: {e}")
+            raise
+    
+    def _convert_to_yfinance_crypto_symbol(self, symbol: str) -> Optional[str]:
+        """Convert Alpaca crypto symbol to yfinance format."""
+        # Map common crypto pairs to yfinance format
+        crypto_mapping = {
+            'BTCUSD': 'BTC-USD',
+            'ETHUSD': 'ETH-USD', 
+            'DOGEUSD': 'DOGE-USD',
+            'LTCUSD': 'LTC-USD',
+            'BCHUSD': 'BCH-USD',
+            'LINKUSD': 'LINK-USD',
+            'UNIUSD': 'UNI-USD',
+            'AAVEUSD': 'AAVE-USD'
+        }
+        
+        return crypto_mapping.get(symbol.upper())
+    
+    def _is_crypto_symbol(self, symbol: str) -> bool:
+        """Check if a symbol represents a cryptocurrency pair."""
+        # Common crypto symbols end with USD, USDT, USDC or are known crypto pairs
+        crypto_suffixes = ['USD', 'USDT', 'USDC', 'BTC']
+        crypto_prefixes = ['BTC', 'ETH', 'DOGE', 'LTC', 'BCH', 'AAVE', 'UNI', 'LINK', 'MKR']
+        
+        # Check if symbol matches crypto patterns
+        for prefix in crypto_prefixes:
+            for suffix in crypto_suffixes:
+                if symbol.upper() == f"{prefix}{suffix}":
+                    return True
+        
+        # Additional known crypto patterns
+        known_crypto_symbols = ['BTCUSD', 'ETHUSD', 'DOGEUSD', 'LTCUSD', 'BCHUSD']
+        return symbol.upper() in known_crypto_symbols
 
 # Global client instance
 alpaca_client = AlpacaClient()

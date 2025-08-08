@@ -1,0 +1,34 @@
+{
+  "training_completed": "2025-08-08T07:46:24.450864",
+  "episodes_trained": 500,
+  "total_training_steps": 0,
+  "best_episode_reward": 0,
+  "average_reward": 0.0,
+  "symbols_used": [
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "TSLA",
+    "NVDA",
+    "META",
+    "JPM",
+    "BAC",
+    "WFC",
+    "GS",
+    "V",
+    "MA",
+    "JNJ",
+    "PG",
+    "KO",
+    "PFE",
+    "UNH",
+    "WMT",
+    "CAT"
+  ],
+  "data_sources": [
+    "alpaca",
+    "yfinance"
+  ],
+  "model_architecture": "comprehensive_rl_dual_agent"
+}

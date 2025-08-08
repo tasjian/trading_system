@@ -16,9 +16,14 @@ class TradingSettings(BaseSettings):
     alpaca_secret_key: str = Field(..., env="ALPACA_SECRET_KEY")
     alpaca_base_url: str = Field(default="https://paper-api.alpaca.markets/v2", env="ALPACA_BASE_URL")
     
-    # LLM API Configuration
-    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+    # LLM API Configuration - OpenAI DISABLED, using only FinGPT and Ollama
+    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")  # PRESENT BUT IGNORED
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
+    
+    # FinGPT Configuration (HuggingFace)
+    huggingface_api_key: Optional[str] = Field(default=None, env="HUGGINGFACE_API_KEY")
+    fingpt_model: str = Field(default="FinGPT/fingpt-sentiment_llama2-13b_lora", env="FINGPT_MODEL")
+    use_fingpt_primary: bool = Field(default=True, env="USE_FINGPT_PRIMARY")
     
     # Llama 3.1 Configuration (via Ollama)
     ollama_base_url: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
@@ -52,10 +57,18 @@ class TradingSettings(BaseSettings):
     focus_etfs: str = Field(default="SPY,QQQ,IWM,VXX", env="FOCUS_ETFS")  # Comma-separated ETFs for testing/fallback
     excluded_symbols: str = Field(default="", env="EXCLUDED_SYMBOLS")  # Comma-separated symbols to exclude
     
+    # Crypto Trading Configuration
+    crypto_enabled: bool = Field(default=False, env="CRYPTO_ENABLED")
+    crypto_pairs: str = Field(default="BTCUSD,ETHUSD,DOGEUSD,LTCUSD,BCHUSD", env="CRYPTO_PAIRS")
+    crypto_base_currencies: str = Field(default="USD,USDT,USDC", env="CRYPTO_BASE_CURRENCIES")
+    crypto_max_position_size: float = Field(default=0.20, env="CRYPTO_MAX_POSITION_SIZE")  # Higher limit for crypto volatility
+    crypto_stop_loss_percent: float = Field(default=0.15, env="CRYPTO_STOP_LOSS_PERCENT")  # Wider stops for crypto
+    crypto_min_trade_amount: float = Field(default=10.0, env="CRYPTO_MIN_TRADE_AMOUNT")  # Minimum $10 crypto trades
+    
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
     max_daily_loss: float = Field(default=0.05, env="MAX_DAILY_LOSS")  # 5% daily loss limit
-    min_cash_reserve: float = Field(default=0.02, env="MIN_CASH_RESERVE")  # 10% cash reserve
+    min_cash_reserve: float = Field(default=0.02, env="MIN_CASH_RESERVE")  # 2% cash reserve
     
     # Logging
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
@@ -113,12 +126,21 @@ settings = TradingSettings()
 # Dynamic symbol management
 def get_focus_symbols():
     """Get focus symbols for trading (dynamic or fallback ETFs)."""
+    symbols = []
+    
+    # Add traditional symbols
     if settings.use_dynamic_universe:
         # In production, this would come from the universe filter
         # For now, return ETFs as a safe fallback
-        return settings.focus_etfs.split(',')
+        symbols.extend(settings.focus_etfs.split(','))
     else:
-        return settings.focus_etfs.split(',')
+        symbols.extend(settings.focus_etfs.split(','))
+    
+    # Add crypto pairs if enabled
+    if settings.crypto_enabled:
+        symbols.extend(get_crypto_pairs())
+    
+    return symbols
 
 def get_excluded_symbols():
     """Get symbols to exclude from trading."""
@@ -126,20 +148,53 @@ def get_excluded_symbols():
         return settings.excluded_symbols.split(',')
     return []
 
+def get_crypto_pairs():
+    """Get enabled crypto trading pairs."""
+    if settings.crypto_enabled and settings.crypto_pairs:
+        return [pair.strip() for pair in settings.crypto_pairs.split(',')]
+    return []
+
+def get_crypto_base_currencies():
+    """Get supported crypto base currencies."""
+    if settings.crypto_base_currencies:
+        return [curr.strip() for curr in settings.crypto_base_currencies.split(',')]
+    return ['USD']
+
+def is_crypto_symbol(symbol: str) -> bool:
+    """Check if a symbol is a cryptocurrency pair."""
+    return symbol.upper() in [pair.upper() for pair in get_crypto_pairs()]
+
 # Validation
 def validate_settings():
     """Validate critical settings."""
     if not settings.alpaca_api_key or not settings.alpaca_secret_key:
         raise ValueError("Alpaca API credentials are required")
     
-    if not settings.openai_api_key and not settings.use_llama_fallback:
-        raise ValueError("Either OpenAI API key or Llama fallback must be configured")
+    if not any([settings.huggingface_api_key, settings.openai_api_key, settings.anthropic_api_key, settings.use_llama_fallback]):
+        raise ValueError("At least one LLM provider (FinGPT/HuggingFace, OpenAI, Anthropic, or Llama) must be configured")
     
     if settings.trading_mode not in ["paper", "live"]:
         raise ValueError("Trading mode must be 'paper' or 'live'")
     
     if settings.max_portfolio_risk <= 0 or settings.max_portfolio_risk > 0.1:
         raise ValueError("Max portfolio risk must be between 0 and 0.1 (10%)")
+    
+    # Crypto-specific validation
+    if settings.crypto_enabled:
+        if settings.crypto_max_position_size <= 0 or settings.crypto_max_position_size > 0.5:
+            raise ValueError("Crypto max position size must be between 0 and 0.5 (50%)")
+        
+        if settings.crypto_stop_loss_percent <= 0 or settings.crypto_stop_loss_percent > 0.3:
+            raise ValueError("Crypto stop loss must be between 0 and 0.3 (30%)")
+        
+        if settings.crypto_min_trade_amount < 1.0:
+            raise ValueError("Crypto minimum trade amount must be at least $1.00")
+        
+        # Validate crypto pairs format
+        crypto_pairs = get_crypto_pairs()
+        for pair in crypto_pairs:
+            if len(pair) < 6 or not pair.isalpha():
+                raise ValueError(f"Invalid crypto pair format: {pair}. Expected format: BTCUSD, ETHUSD, etc.")
 
 if __name__ == "__main__":
     validate_settings()
@@ -147,3 +202,11 @@ if __name__ == "__main__":
     print(f"Trading Mode: {settings.trading_mode}")
     print(f"Max Portfolio Risk: {settings.max_portfolio_risk}")
     print(f"Max Position Size: {settings.max_position_size}")
+    
+    if settings.crypto_enabled:
+        print(f"Crypto Trading: Enabled")
+        print(f"Crypto Pairs: {', '.join(get_crypto_pairs())}")
+        print(f"Crypto Max Position: {settings.crypto_max_position_size}")
+        print(f"Crypto Stop Loss: {settings.crypto_stop_loss_percent}")
+    else:
+        print(f"Crypto Trading: Disabled")

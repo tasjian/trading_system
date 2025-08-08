@@ -30,6 +30,48 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+    # Create fallback classes when PyTorch is not available
+    class nn:
+        class Module:
+            def __init__(self):
+                pass
+            def to(self, device):
+                return self
+            def parameters(self):
+                return []
+        
+        class Embedding:
+            def __init__(self, *args, **kwargs):
+                pass
+        
+        class ModuleList:
+            def __init__(self, modules):
+                self.modules = modules
+        
+        class Sequential:
+            def __init__(self, *args):
+                pass
+        
+        class Linear:
+            def __init__(self, *args, **kwargs):
+                pass
+        
+        class ReLU:
+            def __init__(self, *args, **kwargs):
+                pass
+        
+        class Softmax:
+            def __init__(self, *args, **kwargs):
+                pass
+    
+    class torch:
+        @staticmethod
+        def cat(*args, **kwargs):
+            return None
+        
+        @staticmethod
+        def clamp(*args, **kwargs):
+            return None
 
 # Import our custom components
 from agents.hybrid_data_sources import HybridDataGenerator, MarketRegimeData, SentimentData
@@ -271,10 +313,14 @@ class RegimeAwarePolicy(nn.Module):
             nn.Linear(hidden_dim, num_experts),
             nn.Softmax(dim=-1)
         )
-        
+    
     def forward(self, state, regime_id):
         """Forward pass with regime conditioning."""
         
+        if not TORCH_AVAILABLE:
+            # Return dummy values when PyTorch is not available
+            return None, None, None
+            
         # Get regime embedding
         regime_emb = self.regime_embeddings(regime_id)
         
@@ -544,10 +590,17 @@ class ComprehensiveRLPretrainingSystem:
         self.config = config
         self.device = device
         
-        # Environment setup
+        # Environment setup with consistent dimensions
         self.env = RealisticTradingEnvironment(symbols)
-        state_dim = len(symbols) * 10  # Adjust based on feature engineering
-        action_dim = len(symbols)
+        
+        # FIXED DIMENSIONS: Ensure consistency across all components
+        # Using fixed symbol count and feature count for stable tensor operations
+        self.fixed_symbol_count = 10  # Fixed number of symbols for consistent dimensions
+        self.features_per_symbol = 10  # Fixed number of features per symbol
+        state_dim = self.fixed_symbol_count * self.features_per_symbol  # 10 * 10 = 100
+        action_dim = self.fixed_symbol_count  # Actions for 10 symbols
+        
+        logger.info(f"RL System Dimensions: state_dim={state_dim}, action_dim={action_dim}")
         
         # Core components
         self.dual_agent = DualAgentSystem(state_dim, action_dim, config, device)
@@ -593,8 +646,11 @@ class ComprehensiveRLPretrainingSystem:
             num_epochs=50
         )
         
-        state_dim = len(self.symbols) * 7  # Simplified features for DT
-        action_dim = len(self.symbols)
+        # Use consistent dimensions for Decision Transformer
+        state_dim = self.fixed_symbol_count * self.features_per_symbol  # 10 * 10 = 100
+        action_dim = self.fixed_symbol_count  # Actions for 10 symbols
+        
+        logger.info(f"Decision Transformer Dimensions: state_dim={state_dim}, action_dim={action_dim}")
         
         dt_model = DecisionTransformer(state_dim, action_dim, dt_config)
         
@@ -852,13 +908,52 @@ class ComprehensiveRLPretrainingSystem:
         logger.info("⏹️ Online learning stopped")
 
 # Factory function
-def create_comprehensive_rl_system(symbols: List[str], **kwargs) -> ComprehensiveRLPretrainingSystem:
-    """Create comprehensive RL pre-training system."""
+def create_comprehensive_rl_system(symbols: List[str], **kwargs) -> 'OnlineRLTradingSystem':
+    """Create modern online RL trading system (replaces old pretraining approach)."""
     
-    config = OnlineLearningConfig(**kwargs)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    return ComprehensiveRLPretrainingSystem(symbols, config, device)
+    # Import the new online RL system
+    try:
+        from agents.online_rl_system import create_online_rl_system, OnlineLearningConfig as NewConfig
+        
+        # Convert old config parameters to new format
+        new_kwargs = {}
+        
+        # Map common parameters
+        if 'batch_update_freq' in kwargs:
+            new_kwargs['batch_update_frequency'] = kwargs['batch_update_freq']
+        if 'stable_policy_update_freq' in kwargs:
+            new_kwargs['stable_update_frequency'] = kwargs['stable_policy_update_freq']
+            
+        # Use dynamic symbol count (no more fixed 10 symbol limitation)
+        logger.info(f"🚀 Creating modern online RL system with {len(symbols)} symbols: {symbols[:5]}{'...' if len(symbols) > 5 else ''}")
+        logger.info("✨ New system features: Dynamic dimensions, dual-agent architecture, safe online learning")
+        
+        # Create new online learning config
+        config = NewConfig(**new_kwargs)
+        device = 'cuda' if TORCH_AVAILABLE and torch.cuda.is_available() else 'cpu'
+        
+        return create_online_rl_system(symbols, **new_kwargs)
+        
+    except ImportError as e:
+        logger.error(f"❌ Could not import new online RL system: {e}")
+        logger.error("Falling back to legacy system with fixed dimensions")
+        
+        # Fallback to old system with dimension fixes
+        fixed_symbols = symbols[:10]  # Ensure exactly 10 symbols maximum
+        if len(symbols) > 10:
+            logger.warning(f"Limiting symbols from {len(symbols)} to 10 for consistent RL dimensions")
+        elif len(symbols) < 10:
+            # Pad with repeated symbols if needed (for consistent dimensions)
+            while len(fixed_symbols) < 10:
+                fixed_symbols.extend(symbols[:min(10-len(fixed_symbols), len(symbols))])
+            logger.info(f"Padded symbols from {len(symbols)} to 10 for consistent RL dimensions")
+        
+        logger.info(f"Creating legacy RL system with {len(fixed_symbols)} symbols: {fixed_symbols[:5]}{'...' if len(fixed_symbols) > 5 else ''}")
+        
+        config = OnlineLearningConfig(**kwargs)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        return ComprehensiveRLPretrainingSystem(fixed_symbols, config, device)
 
 if __name__ == "__main__":
     # Test the comprehensive system

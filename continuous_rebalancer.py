@@ -223,16 +223,20 @@ class ContinuousRebalancer:
             logger.warning(f"Too many consecutive failures ({self.health.consecutive_failures}), pausing operations")
             return False
         
-        # Check market hours for optimal timing
+        # Check market hours for optimal timing (crypto-aware)
         try:
+            # Check if we have any crypto positions or symbols
+            from config.settings import settings, get_crypto_pairs
+            has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+            
             market_open = alpaca_client.is_market_open()
             market_calendar = alpaca_client.get_market_calendar()
             
-            # During market hours: run more frequently
-            if market_open:
+            # During market hours OR if trading crypto (24/7): run more frequently
+            if market_open or has_crypto:
                 return True
             
-            # After hours: run less frequently but still monitor
+            # After hours for stocks only: run less frequently but still monitor
             if self.last_run_time:
                 hours_since_last = (now - self.last_run_time).total_seconds() / 3600
                 return hours_since_last >= (self.after_hours_interval_minutes / 60)
@@ -368,8 +372,11 @@ class ContinuousRebalancer:
         """Run sentiment analysis only every 90 minutes, use cached data otherwise."""
         from tools.alpaca_client import alpaca_client
         
-        # Check if market is open
-        market_open = alpaca_client.is_market_open()
+        # Check if market is open (crypto-aware)
+        from config.settings import settings, get_crypto_pairs
+        has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+        
+        market_open = alpaca_client.is_market_open() or has_crypto  # Crypto = always open
         current_time = datetime.now()
         
         # Determine if we should run sentiment analysis
@@ -396,6 +403,7 @@ class ContinuousRebalancer:
             
             # Cache the results and update timestamp
             self.cached_sentiment_data = state.get("sentiment_data", {})
+            state["cached_sentiment_data"] = self.cached_sentiment_data.copy()  # Also provide for universe filter
             self.last_sentiment_run = current_time
             
             logger.info(f"✅ Sentiment analysis complete: {len(self.cached_sentiment_data)} symbols analyzed")
@@ -406,6 +414,7 @@ class ContinuousRebalancer:
             # Use cached sentiment data
             if self.cached_sentiment_data:
                 state["sentiment_data"] = self.cached_sentiment_data.copy()
+                state["cached_sentiment_data"] = self.cached_sentiment_data.copy()  # Also provide for universe filter
                 
                 # Reconstruct sentiment_signals from cached sentiment_data for RL integration
                 sentiment_signals = []
@@ -542,9 +551,17 @@ class ContinuousRebalancer:
             account = alpaca_client.get_account_info()
             logger.info(f"✅ Alpaca connected: {account['id']}")
             
-            # Check market status
+            # Check market status (crypto-aware)
+            from config.settings import settings, get_crypto_pairs
+            has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+            
             market_open = alpaca_client.is_market_open()
-            logger.info(f"📈 Market status: {'Open' if market_open else 'Closed'}")
+            effective_market_open = market_open or has_crypto
+            
+            if has_crypto:
+                logger.info(f"📈 Market status: Stock {'Open' if market_open else 'Closed'}, Crypto: Always Open")
+            else:
+                logger.info(f"📈 Market status: {'Open' if market_open else 'Closed'}")
             
             # Check available cash
             cash = account.get('cash', 0)
@@ -723,239 +740,77 @@ class ContinuousRebalancer:
     
     async def _run_rl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Enhanced RL Decision Layer with FinRL Integration
+        Comprehensive RL Decision Layer
         
         Architecture:
         [LLM Analysis Layer: sentiment_data, market_signals] 
                     ↓
-        [FinRL Agent: Advanced RL Decision Layer] ← This method
+        [Comprehensive RL Agent: Online learning with dual-agent system] ← This method
                     ↓
         [Enhanced state with sophisticated RL portfolio decisions]
         """
         try:
-            # Try FinRL integration first (advanced RL system)
-            try:
-                from agents.finrl_integration import create_finrl_trading_system, integrate_finrl_with_workflow
-                
-                logger.info("🚀 Initializing Enhanced FinRL Decision Layer...")
-                
-                # Extract symbols from sentiment signals AND sell signals for short selling
-                sentiment_signals = state.get("sentiment_signals", [])
-                buy_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY']
-                sell_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'SELL']
-                available_symbols = list(set(buy_symbols + sell_symbols))[:12]  # Increased to 12 symbols
-                
-                if not available_symbols:
-                    logger.warning("No symbols available for FinRL - using fallback universe")
-                    # Use filtered universe as fallback
-                    universe_result = state.get("universe_filter_result")
-                    if universe_result and universe_result.filtered_symbols:
-                        available_symbols = universe_result.filtered_symbols[:8]
-                    else:
-                        available_symbols = ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"]  # Safe fallback
-                
-                logger.info(f"📊 FinRL symbols: {len(buy_symbols)} BUY, {len(sell_symbols)} SELL, {len(available_symbols)} total")
-                
-                logger.info(f"📊 FinRL Processing: {len(available_symbols)} symbols")
-                
-                # Create or reuse FinRL orchestrator
-                if not hasattr(self, '_finrl_orchestrator') or self._finrl_orchestrator is None:
-                    self._finrl_orchestrator = await create_finrl_trading_system(
-                        symbols=available_symbols,
-                        initial_balance=state.get("portfolio", {}).get("equity", 100000),
-                        enable_short_selling=True,
-                        enable_limit_orders=True,
-                        paper_trading=True,
-                        max_position_size=0.15
-                    )
-                    logger.info("✅ FinRL Trading System created with short selling enabled")
-                
-                # Prepare market data for FinRL
-                enhanced_state = await self._prepare_market_data_for_finrl(state, available_symbols)
-                
-                # Integrate with workflow
-                state = await integrate_finrl_with_workflow(self._finrl_orchestrator, enhanced_state)
-                
-                # Extract FinRL decisions
-                finrl_decisions = state.get("finrl_decisions", {})
-                
-                if finrl_decisions and finrl_decisions.get('orders'):
-                    # Convert FinRL decisions to standard RL format
-                    rl_decisions = {
-                        "strategy": finrl_decisions.get('strategy', 'finrl_optimized'),
-                        "risk_level": finrl_decisions.get('risk_level', 'moderate'),
-                        "allocations": [],
-                        "confidence": finrl_decisions.get('confidence', 0.8),
-                        "reasoning": f"FinRL agent with {len(finrl_decisions['orders'])} positions",
-                        "advanced_features": {
-                            "short_selling": True,
-                            "limit_orders": True,
-                            "risk_management": True,
-                            "finrl_enabled": True
-                        }
-                    }
-                    
-                    # Convert orders to allocations
-                    portfolio_value = state.get("portfolio", {}).get("equity", 100000)
-                    for order in finrl_decisions['orders']:
-                        allocation_value = order['quantity'] * order['price']
-                        weight = allocation_value / portfolio_value
-                        
-                        # Adjust weight for short positions
-                        if order['side'] in ['short', 'sell']:
-                            weight = -abs(weight)
-                        
-                        allocation = {
-                            "symbol": order['symbol'],
-                            "weight": weight,
-                            "confidence": order.get('confidence', 0.8),
-                            "action": order['side'],
-                            "reasoning": f"FinRL {order['side']} decision",
-                            "order_type": order.get('order_type', 'market'),
-                            "limit_price": order.get('limit_price')
-                        }
-                        
-                        rl_decisions["allocations"].append(allocation)
-                    
-                    state["rl_decisions"] = rl_decisions
-                    state["rl_enhanced"] = True
-                    state["finrl_integrated"] = True
-                    
-                    logger.info(f"✅ FinRL Agent generated {len(rl_decisions['allocations'])} advanced allocations")
-                    logger.info(f"📈 FinRL Strategy: {rl_decisions['strategy']}")
-                    logger.info(f"⚖️ FinRL Risk Level: {rl_decisions['risk_level']}")
-                    logger.info(f"🔧 Advanced Features: {rl_decisions['advanced_features']}")
-                    
-                    # Count different order types
-                    buy_count = len([a for a in rl_decisions['allocations'] if a['action'] == 'buy'])
-                    sell_count = len([a for a in rl_decisions['allocations'] if a['action'] in ['sell', 'short']])
-                    logger.info(f"📊 Order Distribution: {buy_count} BUY, {sell_count} SELL/SHORT")
-                    
-                    # Log top allocations with enhanced info
-                    for allocation in rl_decisions["allocations"][:3]:
-                        weight_str = f"{allocation['weight']:+.1%}"  # + sign for positive weights
-                        action_str = allocation['action']
-                        order_type = allocation.get('order_type', 'market')
-                        logger.info(f"   🎯 {allocation['symbol']}: {action_str} {weight_str} ({order_type})")
-                    
-                    return state
-                
-                else:
-                    logger.warning("FinRL generated no decisions - falling back to basic RL")
-                    raise Exception("No FinRL decisions generated")
-                    
-            except (ImportError, Exception) as finrl_error:
-                logger.warning(f"FinRL integration failed: {finrl_error}")
-                logger.info("Falling back to comprehensive RL system...")
-                
-                # ENHANCED: Try comprehensive RL system first, then basic RL orchestrator
-                try:
-                    from agents.rl_integration_bridge import integrate_comprehensive_rl_system
-                    
-                    logger.info("🚀 Initializing Comprehensive RL Decision Layer...")
-                    
-                    # Use comprehensive RL system
-                    result = await integrate_comprehensive_rl_system(state, config)
-                    
-                    if result and result.get("rl_decisions"):
-                        state.update(result)
-                        state["rl_enhanced"] = True
-                        state["finrl_integrated"] = False
-                        state["comprehensive_rl"] = True
-                        
-                        rl_decisions = result["rl_decisions"]
-                        logger.info(f"✅ Comprehensive RL generated {len(rl_decisions.get('allocations', []))} decisions")
-                        logger.info(f"🎯 Strategy: {rl_decisions.get('strategy', 'unknown')}")
-                        logger.info(f"🤖 Agent: {rl_decisions.get('active_agent', 'unknown')}")
-                        
-                        return state
-                    else:
-                        logger.warning("Comprehensive RL system returned no decisions")
-                        raise Exception("No comprehensive RL decisions generated")
-                        
-                except Exception as comprehensive_rl_error:
-                    logger.warning(f"Comprehensive RL failed: {comprehensive_rl_error}")
-                    logger.info("Falling back to basic RL orchestrator...")
-                
-                # Final fallback to basic RL orchestrator
-                from agents.online_learning_orchestrator import OnlineLearningOrchestrator, TradingEngine, PortfolioManager, RiskManager
-                from agents.llm_rl_integration import LLMStateEnricher
-                
-                logger.info("🤖 Initializing Basic RL Decision Layer...")
-                
-                # Extract LLM analysis results (Feature Store)
-                sentiment_data = state.get("sentiment_data", {})
-                sentiment_signals = state.get("sentiment_signals", [])
-                market_data = state.get("market_data", {})
-                portfolio = state.get("portfolio", {})
-                
-                logger.info(f"📊 Feature Store Input: {len(sentiment_data)} sentiment analyses, {len(sentiment_signals)} signals")
-                
-                # Create enhanced state for RL agent
-                enricher = LLMStateEnricher()
-                enhanced_state = await enricher.enrich_state_from_llm_analysis(
-                    sentiment_data=sentiment_data,
-                    market_signals=sentiment_signals,
-                    portfolio_state=portfolio,
-                    market_data=market_data
-                )
-                
-                # Initialize online learning orchestrator with default components
-                orchestrator = OnlineLearningOrchestrator(
-                    trading_engine=TradingEngine(),
-                    portfolio_manager=PortfolioManager(), 
-                    risk_manager=RiskManager()
-                )
-                
-                # Get RL portfolio decisions
-                logger.info("🧠 Basic RL Agent making portfolio allocation decisions...")
-                
-                # Extract symbols for both BUY and SELL for short selling support
-                buy_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'BUY']
-                sell_symbols = [s['symbol'] for s in sentiment_signals if s.get('signal') == 'SELL']
-                all_symbols = list(set(buy_symbols + sell_symbols))[:10]
-                
-                logger.info(f"📊 Basic RL symbols: {len(buy_symbols)} BUY, {len(sell_symbols)} SELL, {len(all_symbols)} total")
-                
-                # Run RL decision making
-                rl_decisions = await orchestrator.make_portfolio_decisions(
-                    enhanced_state=enhanced_state,
-                    available_symbols=all_symbols,
-                    portfolio_value=portfolio.get("equity", 50000),
-                    risk_tolerance=state.get("risk_tolerance", 0.5)
-                )
-                
-                # Ensure RL decisions include short selling support
-                if rl_decisions and not rl_decisions.get("advanced_features"):
-                    rl_decisions["advanced_features"] = {
-                        "short_selling": True,
-                        "limit_orders": False,
-                        "risk_management": True,
-                        "finrl_enabled": False
-                    }
-                
-                # Store RL decisions in state for signal generation
-                state["rl_decisions"] = rl_decisions
+            # Use comprehensive RL system only
+            from agents.rl_integration_bridge import integrate_comprehensive_rl_system
+            
+            logger.info("🚀 Initializing Comprehensive RL Decision Layer...")
+            
+            # Use comprehensive RL system
+            result = await integrate_comprehensive_rl_system(state, config)
+            
+            if result and result.get("rl_decisions"):
+                state.update(result)
                 state["rl_enhanced"] = True
-                state["finrl_integrated"] = False
+                state["comprehensive_rl"] = True
                 
-                # Log RL insights
-                if rl_decisions:
-                    logger.info(f"✅ Basic RL Agent generated {len(rl_decisions.get('allocations', []))} allocation decisions")
-                    logger.info(f"📈 RL Portfolio Strategy: {rl_decisions.get('strategy', 'adaptive')}")
-                    logger.info(f"⚖️ RL Risk Assessment: {rl_decisions.get('risk_level', 'moderate')}")
-                    
-                    # Log top allocations
-                    for allocation in rl_decisions.get('allocations', [])[:3]:
-                        logger.info(f"   🎯 {allocation.get('symbol')}: {allocation.get('weight', 0):.1%} allocation")
+                rl_decisions = result["rl_decisions"]
+                logger.info(f"✅ Comprehensive RL generated {len(rl_decisions.get('allocations', []))} decisions")
+                logger.info(f"🎯 Strategy: {rl_decisions.get('strategy', 'unknown')}")
+                logger.info(f"🤖 Agent: {rl_decisions.get('active_agent', 'unknown')}")
+                
+                # Log allocations
+                for allocation in rl_decisions.get('allocations', [])[:3]:
+                    weight_str = f"{allocation['weight']:+.1%}"
+                    action_str = allocation['action']
+                    logger.info(f"   🎯 {allocation['symbol']}: {action_str} {weight_str}")
                 
                 return state
+            else:
+                logger.warning("⚠️ Comprehensive RL system failed - using minimal allocation")
+                
+                sentiment_signals = state.get("sentiment_signals", [])
+                buy_signals = [s for s in sentiment_signals if s.get('signal') == 'BUY'][:1]
+                
+                if buy_signals:
+                    minimal_decisions = {
+                        "strategy": "minimal_allocation",
+                        "risk_level": "very_low", 
+                        "allocations": [{
+                            "symbol": buy_signals[0]['symbol'],
+                            "weight": 0.05,
+                            "confidence": 0.3,
+                            "action": "buy",
+                            "reasoning": "Minimal allocation fallback"
+                        }],
+                        "confidence": 0.3,
+                        "reasoning": "Minimal fallback allocation"
+                    }
+                    
+                    state["rl_decisions"] = minimal_decisions
+                    state["rl_enhanced"] = False
+                    
+                    logger.warning("🔧 Minimal allocation: 1 conservative position")
+                    return state
+                else:
+                    state["rl_decisions"] = {"allocations": [], "strategy": "no_action", "reasoning": "No viable signals"}
+                    return state
+                
             
         except Exception as e:
             logger.error(f"RL Decision Layer error: {e}")
             logger.info("Falling back to LLM-only analysis...")
             state["rl_enhanced"] = False
-            state["finrl_integrated"] = False
+            state["comprehensive_rl"] = False
             return state
     
     def get_status_report(self) -> Dict[str, Any]:

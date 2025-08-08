@@ -27,7 +27,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-from config.settings import settings
+from config.settings import settings, is_crypto_symbol
 from .llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
 from .earnings_scraper import EarningsCallScraper
 
@@ -218,20 +218,29 @@ class UnifiedMarketIntelligence:
     async def analyze_stock(self, symbol: str) -> AnalysisResult:
         """Comprehensive stock analysis."""
         try:
-            logger.info(f"📊 Analyzing {symbol}")
+            logger.info(f"📊 Analyzing {symbol} {'(crypto)' if is_crypto_symbol(symbol) else '(stock)'}")
             
             # Get current price
             market_data = await self.get_market_data(symbol)
             if market_data.price <= 0:
                 return self._create_fallback_result(symbol, "No price data available")
             
-            # Run analysis components concurrently
-            tasks = [
-                self._analyze_technical(symbol, market_data.price),
-                self._analyze_fundamental(symbol),
-                self._analyze_sentiment(symbol),
-                self._analyze_market_structure(symbol)
-            ]
+            # Run analysis components concurrently - adjust for crypto vs stocks
+            if is_crypto_symbol(symbol):
+                # Crypto analysis focuses on technical and sentiment (no fundamentals/earnings)
+                tasks = [
+                    self._analyze_technical(symbol, market_data.price),
+                    self._analyze_sentiment(symbol),
+                    self._analyze_crypto_momentum(symbol, market_data.price)
+                ]
+            else:
+                # Traditional stock analysis
+                tasks = [
+                    self._analyze_technical(symbol, market_data.price),
+                    self._analyze_fundamental(symbol),
+                    self._analyze_sentiment(symbol),
+                    self._analyze_market_structure(symbol)
+                ]
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -682,6 +691,70 @@ class UnifiedMarketIntelligence:
                 logger.error(f"Analysis failed: {result}")
         
         return valid_results
+    
+    async def _analyze_crypto_momentum(self, symbol: str, current_price: float) -> Optional[float]:
+        """Crypto-specific momentum analysis with 24/7 market patterns."""
+        try:
+            # Get extended historical data for crypto (24/7 market)
+            import yfinance as yf
+            yf_symbol = self._convert_crypto_symbol_for_yf(symbol)
+            
+            if yf_symbol:
+                ticker = yf.Ticker(yf_symbol)
+                hist = ticker.history(period='7d', interval='1h')  # 7 days of hourly data
+                
+                if len(hist) >= 24:  # At least 24 hours of data
+                    prices = hist['Close']
+                    volumes = hist['Volume']
+                    
+                    # Crypto-specific momentum indicators
+                    # 1. 24h momentum
+                    momentum_24h = (prices.iloc[-1] / prices.iloc[-24] - 1) if len(prices) >= 24 else 0
+                    
+                    # 2. Volume-weighted momentum
+                    recent_volume = volumes.iloc[-6:].mean()  # Last 6 hours
+                    avg_volume = volumes.mean()
+                    volume_factor = min(2.0, recent_volume / avg_volume) if avg_volume > 0 else 1.0
+                    
+                    # 3. Volatility-adjusted score (crypto has higher volatility tolerance)
+                    volatility = prices.pct_change().std()
+                    
+                    # Combine factors with crypto-appropriate weights
+                    score = 0.0
+                    
+                    # Strong 24h momentum (higher threshold for crypto)
+                    if abs(momentum_24h) > 0.10:  # 10% daily move
+                        score += 0.4 if momentum_24h > 0 else -0.4
+                    
+                    # Volume confirmation
+                    if volume_factor > 1.2:
+                        score += 0.3
+                    
+                    # Trend consistency (check if momentum is sustained)
+                    if len(prices) >= 48:  # 48 hours
+                        momentum_48h = (prices.iloc[-1] / prices.iloc[-48] - 1)
+                        if momentum_24h * momentum_48h > 0:  # Same direction
+                            score += 0.2
+                    
+                    logger.debug(f"Crypto momentum analysis for {symbol}: 24h={momentum_24h:.2%}, volume_factor={volume_factor:.2f}, score={score:.2f}")
+                    return max(-1.0, min(1.0, score))
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Crypto momentum analysis error for {symbol}: {e}")
+            return None
+    
+    def _convert_crypto_symbol_for_yf(self, symbol: str) -> Optional[str]:
+        """Convert crypto symbol to yfinance format."""
+        crypto_mapping = {
+            'BTCUSD': 'BTC-USD',
+            'ETHUSD': 'ETH-USD', 
+            'DOGEUSD': 'DOGE-USD',
+            'LTCUSD': 'LTC-USD',
+            'BCHUSD': 'BCH-USD'
+        }
+        return crypto_mapping.get(symbol.upper())
     
     async def close(self):
         """Clean up resources."""
