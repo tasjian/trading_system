@@ -144,14 +144,23 @@ class PrioritizedReplayBuffer:
             
         # Convert to numpy for efficient sampling
         priorities = np.array(self.priorities)
-        probabilities = priorities / priorities.sum()
+        priorities_sum = priorities.sum()
+        if priorities_sum > 0:
+            probabilities = priorities / priorities_sum
+        else:
+            # Equal probabilities if all priorities are 0
+            probabilities = np.ones(len(priorities)) / len(priorities)
         
         # Sample indices
         indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=False)
         
         # Calculate importance sampling weights
         weights = (len(self.buffer) * probabilities[indices]) ** (-self.beta)
-        weights = weights / weights.max()  # Normalize
+        max_weight = weights.max()
+        if max_weight > 0:
+            weights = weights / max_weight  # Normalize
+        else:
+            weights = np.ones_like(weights)  # Equal weights if max is 0
         
         # Get experiences
         experiences = [self.buffer[i] for i in indices]
@@ -255,8 +264,11 @@ class SafetyMonitor:
         # 1. Drawdown check
         if len(self.drawdown_tracker) > 0:
             peak_value = max(self.drawdown_tracker)
-            current_drawdown = (peak_value - current_portfolio_value) / peak_value
-            violations['max_drawdown'] = current_drawdown > self.constraints.max_drawdown
+            if peak_value > 0:
+                current_drawdown = (peak_value - current_portfolio_value) / peak_value
+                violations['max_drawdown'] = current_drawdown > self.constraints.max_drawdown
+            else:
+                violations['max_drawdown'] = False  # Cannot calculate drawdown if peak is 0
         else:
             violations['max_drawdown'] = False
             

@@ -26,7 +26,7 @@ try:
     from peft import PeftModel
     import torch
     TRANSFORMERS_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError) as e:
     TRANSFORMERS_AVAILABLE = False
 
 from config.settings import settings
@@ -63,8 +63,8 @@ class FinGPTSentimentAnalyzer:
             }
         }
         
-        # Current model
-        self.current_model_key = 'fingpt_sentiment_llama2_13b'  # Default
+        # Current model - using smaller 7B model for faster initialization
+        self.current_model_key = 'fingpt_mt_llama2_7b'  # Smaller model for speed
         
         # Sentiment classification prompts
         self.sentiment_prompts = {
@@ -203,7 +203,7 @@ Trading Analysis:"""
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize FinGPT model: {e}")
-            logger.info("🔄 Falling back to rule-based sentiment analysis")
+            logger.info("🔄 Falling back to FinGPT-enhanced Ollama analysis")
             self.fallback_mode = True
             return True  # Still return True to allow fallback operation
     

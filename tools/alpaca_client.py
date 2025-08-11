@@ -284,11 +284,33 @@ class AlpacaClient:
                 logger.warning(f"Invalid time_in_force '{time_in_force}' for crypto. Using 'gtc'")
                 order_params["time_in_force"] = "gtc"
             
-            # Add position intent for short selling (if supported by broker)
+            # Add position intent for short selling (if supported by broker) with balanced risk management
             if side.lower() == "sell_short":
                 if is_crypto:
                     logger.warning(f"Short selling may not be supported for crypto {symbol}")
                 logger.info(f"Placing short sell order for {symbol}")
+                
+                # Additional short selling checks for balanced trading
+                try:
+                    account = self.get_account_info()
+                    if notional is not None:
+                        short_value = notional
+                    else:
+                        current_price = self.get_current_price(symbol)
+                        short_value = qty * current_price
+                    
+                    # Estimate margin requirement for short (typically 150% of position value)
+                    margin_requirement = short_value * 1.5
+                    
+                    # Check if we have adequate buying power for margin, but be more lenient for small shorts
+                    if short_value < 500 or margin_requirement <= account["buying_power"] * 2:
+                        logger.info(f"Short selling approved: ${short_value:.2f} position, ${margin_requirement:.2f} margin requirement")
+                    else:
+                        logger.warning(f"Short may require more margin: ${margin_requirement:.2f} vs ${account['buying_power']:.2f} available")
+                        # Don't block, let Alpaca decide
+                        
+                except Exception as e:
+                    logger.warning(f"Could not verify short selling requirements: {e}")
                 # Note: Alpaca handles short selling automatically if shares are available
             
             if limit_price is not None:
@@ -428,15 +450,21 @@ class AlpacaClient:
                             logger.warning(f"No market data for {symbol}, skipping buying power check")
                             return True
                     
-                    if order_value > account["buying_power"]:
-                        logger.error(f"Insufficient buying power: ${order_value:.2f} > ${account['buying_power']:.2f}")
+                    # More flexible buying power check for balanced trading
+                    if order_value > account["buying_power"] * 1.5:  # Allow 1.5x buying power for margin trading
+                        logger.error(f"Order too large: ${order_value:.2f} > ${account['buying_power'] * 1.5:.2f} (1.5x buying power)")
                         return False
+                    
+                    # For small orders under $1000, be more lenient
+                    if order_value < 1000 and (order_value <= account["buying_power"] or account["buying_power"] > 50):
+                        logger.info(f"Allowing small order: ${order_value:.2f} with ${account['buying_power']:.2f} buying power")
+                        return True
                         
                 except Exception as e:
                     logger.warning(f"Could not verify buying power: {e}")
                     # Continue without buying power check - let Alpaca API handle it
             
-            # Check position size limits
+            # Check position size limits - more flexible for balanced trading
             portfolio_value = account["portfolio_value"]
             if portfolio_value > 0:
                 try:
@@ -448,14 +476,15 @@ class AlpacaClient:
                             current_price = market_data.iloc[-1]["close"]
                             position_value = qty * current_price
                         else:
-                            logger.warning(f"No market data for {symbol}, skipping position size check")
-                            return True
+                            logger.warning(f"No market data for {symbol}, allowing small orders")
+                            return qty <= 10  # Allow small orders without market data
                     
                     position_percent = position_value / portfolio_value
                     
-                    # Use crypto-specific position limits if available
+                    # Use crypto-specific position limits if available, but make them more reasonable
                     is_crypto = self._is_crypto_symbol(symbol)
-                    max_position = getattr(settings, 'crypto_max_position_size', settings.max_position_size) if is_crypto else settings.max_position_size
+                    base_max_position = getattr(settings, 'crypto_max_position_size', getattr(settings, 'max_position_size', 0.05)) if is_crypto else getattr(settings, 'max_position_size', 0.05)
+                    max_position = max(base_max_position, 0.15)  # Minimum 15% position limit for balanced trading
                     
                     if position_percent > max_position:
                         logger.error(f"Position size too large: {position_percent:.2%} > {max_position:.2%}")
@@ -710,3 +739,13 @@ class AlpacaClient:
 
 # Global client instance
 alpaca_client = AlpacaClient()
+
+# Apply balanced risk management for better cash management and trading balance
+try:
+    from tools.risk_balanced_alpaca_client import apply_balanced_risk_management
+    alpaca_client = apply_balanced_risk_management(alpaca_client)
+    logger.info("✅ Balanced risk management applied to alpaca_client")
+except ImportError as e:
+    logger.warning(f"Could not load balanced risk management: {e}")
+except Exception as e:
+    logger.error(f"Failed to apply balanced risk management: {e}")

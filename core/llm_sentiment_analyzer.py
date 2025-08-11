@@ -60,34 +60,25 @@ class LLMSentimentAnalyzer:
         """Ensure aiohttp session exists."""
         if not self.session:
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=60)
+                timeout=aiohttp.ClientTimeout(total=90)  # Increased based on llama3:8b performance
             )
     
     def _create_sentiment_system_prompt(self, context: str = "financial_news") -> str:
-        """Create system prompt for sentiment analysis."""
+        """Create fast, optimized system prompt for sentiment analysis."""
         
-        context_descriptions = {
-            "financial_news": "financial news articles",
-            "earnings_call": "earnings call transcripts", 
-            "social_media": "social media posts about stocks/trading",
-            "analyst_report": "financial analyst reports"
-        }
-        
-        context_desc = context_descriptions.get(context, "financial text")
-        
-        return f"""You are a financial sentiment analysis expert specializing in {context_desc}. 
+        return """Analyze financial sentiment. Respond with JSON only:
+{
+    "sentiment": "very_positive|positive|neutral|negative|very_negative",
+    "confidence": 0.8,
+    "score": 0.5,
+    "reasoning": "brief explanation",
+    "key_phrases": ["key", "phrases"],
+    "financial_impact": "impact on stock price",
+    "risk_factors": ["risk1"],
+    "opportunities": ["opportunity1"]
+}
 
-Your task is to analyze the sentiment and provide structured JSON output with the following fields:
-- sentiment: "very_positive", "positive", "neutral", "negative", or "very_negative"
-- confidence: Your confidence level (0.0-1.0)
-- score: Numerical sentiment score (-1.0 to +1.0, where -1 is very negative, 0 is neutral, +1 is very positive)
-- reasoning: Brief explanation of your assessment
-- key_phrases: Array of important phrases that influenced your decision
-- financial_impact: Expected impact on stock price/company valuation
-- risk_factors: Array of identified risk factors
-- opportunities: Array of identified opportunities
-
-Respond ONLY with valid JSON format. Focus on financial implications and market impact."""
+Be fast and concise."""
     
     def _create_sentiment_prompt(self, text: str, context: str = "financial_news") -> str:
         """Create a detailed prompt for sentiment analysis (legacy method)."""
@@ -299,7 +290,20 @@ Respond only with valid JSON."""
                     # Ensure defaults for optional fields
                     result.setdefault('reasoning', 'LLM sentiment analysis')
                     result.setdefault('key_phrases', [])
-                    result.setdefault('financial_impact', None)
+                    
+                    # Fix financial_impact if it's a dict (common LLM mistake)
+                    financial_impact = result.get('financial_impact')
+                    if isinstance(financial_impact, dict):
+                        # Extract the main content from the dict
+                        if 'expected_price_move' in financial_impact:
+                            result['financial_impact'] = str(financial_impact['expected_price_move'])
+                        else:
+                            result['financial_impact'] = str(list(financial_impact.values())[0]) if financial_impact else None
+                    elif financial_impact is None:
+                        result['financial_impact'] = None
+                    else:
+                        result['financial_impact'] = str(financial_impact)
+                    
                     result.setdefault('risk_factors', [])
                     result.setdefault('opportunities', [])
                     

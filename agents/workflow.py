@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, Literal, Optional
+from typing import Dict, Any, Literal, Optional, List
 from datetime import datetime
 
 from langgraph.graph import StateGraph, START, END
@@ -107,18 +107,41 @@ class TradingWorkflow:
                 pos["symbol"]: pos for pos in positions
             }
             
-            # Update watchlist data
+            # Update watchlist data (stocks and crypto)
+            from config.settings import is_crypto_symbol
+            from core.crypto_data_collector import crypto_collector
+            
             for symbol in state["watchlist"]:
                 try:
-                    market_data = alpaca_client.get_market_data(symbol, limit=50)
-                    if not market_data.empty:
-                        latest_data = market_data.iloc[-1]
-                        state["market_data"]["symbols"] = state["market_data"].get("symbols", {})
-                        state["market_data"]["symbols"][symbol] = {
-                            "price": float(latest_data["close"]),
-                            "volume": float(latest_data["volume"]),
-                            "timestamp": datetime.now()
-                        }
+                    if is_crypto_symbol(symbol):
+                        # Get crypto data from crypto collector
+                        ticker = crypto_collector.alpaca_collector.get_latest_ticker(symbol)
+                        if ticker:
+                            state["market_data"]["symbols"] = state["market_data"].get("symbols", {})
+                            state["market_data"]["symbols"][symbol] = {
+                                "price": float(ticker.price),
+                                "volume": float(ticker.volume_24h),
+                                "timestamp": ticker.timestamp,
+                                "change_24h": float(ticker.change_24h),
+                                "bid": float(ticker.bid),
+                                "ask": float(ticker.ask),
+                                "asset_type": "crypto"
+                            }
+                            logger.debug(f"📈 {symbol}: ${ticker.price:.2f} ({ticker.change_24h:+.2f}%)")
+                        else:
+                            logger.warning(f"No crypto data available for {symbol}")
+                    else:
+                        # Get stock data from Alpaca
+                        market_data = alpaca_client.get_market_data(symbol, limit=50)
+                        if not market_data.empty:
+                            latest_data = market_data.iloc[-1]
+                            state["market_data"]["symbols"] = state["market_data"].get("symbols", {})
+                            state["market_data"]["symbols"][symbol] = {
+                                "price": float(latest_data["close"]),
+                                "volume": float(latest_data["volume"]),
+                                "timestamp": datetime.now(),
+                                "asset_type": "stock"
+                            }
                 except Exception as e:
                     logger.warning(f"Failed to get data for {symbol}: {e}")
             
@@ -213,14 +236,13 @@ class TradingWorkflow:
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze comprehensive sentiment for pre-filtered stocks using enhanced sentiment engine."""
         try:
-            from core.enhanced_sentiment_engine import get_enhanced_sentiment_engine
+            from core.llm_sentiment_analyzer import LLMSentimentAnalyzer
             from core.market_intelligence import UnifiedMarketIntelligence
             
-            logger.info("Sentiment Analysis Agent: Running enhanced sentiment analysis with FinGPT on pre-filtered stocks")
+            logger.info("Sentiment Analysis Agent: Running Ollama-based sentiment analysis on pre-filtered stocks")
             
-            # Initialize enhanced sentiment engine
-            sentiment_engine = get_enhanced_sentiment_engine()
-            await sentiment_engine.initialize()
+            # Initialize direct LLM sentiment analyzer (Ollama only)
+            sentiment_engine = LLMSentimentAnalyzer()
             
             # Get market intelligence for news data
             market_intel = UnifiedMarketIntelligence()
@@ -228,24 +250,44 @@ class TradingWorkflow:
             # Get pre-filtered symbols from universe filter step
             filtered_symbols = state.get("filtered_symbols", [])
             
-            if not filtered_symbols:
-                logger.warning("No filtered symbols provided by universe filter")
+            # ALWAYS include current portfolio positions for sentiment analysis
+            portfolio_positions = list(state.get("portfolio", {}).get("positions", {}).keys())
+            
+            # Combine filtered symbols with portfolio positions (remove duplicates)
+            all_symbols_set = set(filtered_symbols)
+            all_symbols_set.update(portfolio_positions)
+            
+            # Prioritize portfolio positions first, then filtered symbols
+            symbols_to_analyze = portfolio_positions + [s for s in filtered_symbols if s not in portfolio_positions]
+            
+            # Limit total symbols but ensure all portfolio positions are included
+            max_symbols = 50
+            if len(portfolio_positions) > max_symbols:
+                # If we have more portfolio positions than max_symbols, analyze all positions
+                symbols_to_analyze = portfolio_positions
+                logger.warning(f"Portfolio has {len(portfolio_positions)} positions, analyzing all despite {max_symbols} limit")
+            else:
+                # Include all portfolio positions + top filtered symbols up to max_symbols
+                remaining_slots = max_symbols - len(portfolio_positions)
+                additional_symbols = [s for s in filtered_symbols if s not in portfolio_positions][:remaining_slots]
+                symbols_to_analyze = portfolio_positions + additional_symbols
+            
+            if not symbols_to_analyze:
+                logger.warning("No symbols to analyze (no filtered symbols or portfolio positions)")
                 state["sentiment_data"] = {}
                 state["current_agent"] = "sentiment_analyzer" 
                 return update_state_timestamp(state)
             
-            logger.info(f"💭 Analyzing sentiment for {len(filtered_symbols)} pre-filtered symbols")
+            logger.info(f"💭 Analyzing sentiment for {len(symbols_to_analyze)} symbols")
+            logger.info(f"   📊 Portfolio positions: {len(portfolio_positions)} (all included)")
+            logger.info(f"   🔍 Additional filtered: {len(symbols_to_analyze) - len(portfolio_positions)}")
             
             # Run comprehensive sentiment analysis for each symbol
             sentiment_data = {}
             sentiment_signals = []
             
-            # Limit to top 50 symbols for sentiment analysis to balance quality vs performance
-            symbols_to_analyze = filtered_symbols[:50]
-            logger.info(f"🎯 Processing top {len(symbols_to_analyze)} symbols: {', '.join(symbols_to_analyze[:5])}{'...' if len(symbols_to_analyze) > 5 else ''}")
-            
-            # Process symbols in parallel batches to speed up analysis
-            batch_size = 8  # Increased batch size since we have fewer, higher-quality symbols
+            # Process symbols in parallel batches to speed up analysis  
+            batch_size = 2  # Further reduced to prevent Ollama overload and timeouts
             
             async def analyze_symbol_sentiment(symbol: str):
                 """Analyze sentiment for a single symbol using enhanced engine."""
@@ -267,10 +309,10 @@ class TradingWorkflow:
                     
                     combined_text = sample_news_texts.get(symbol, f"Market analysis for {symbol} shows mixed sentiment with moderate trading volume and technical indicators suggesting neutral outlook.")
                     
-                    # Use enhanced sentiment engine with FinGPT
+                    # Use direct LLM sentiment analyzer with Ollama
                     comprehensive_sentiment = await asyncio.wait_for(
-                        sentiment_engine.analyze_comprehensive_sentiment(combined_text, symbol),
-                        timeout=45.0  # 45 second timeout per symbol for FinGPT processing
+                        sentiment_engine.analyze_text(combined_text, "financial_news"),
+                        timeout=45.0  # 45 second timeout per symbol for Ollama processing
                     )
                     return symbol, comprehensive_sentiment
                 except asyncio.TimeoutError:
@@ -311,21 +353,21 @@ class TradingWorkflow:
                     
                     if comprehensive_sentiment:
                         sentiment_data[symbol] = {
-                            'overall_sentiment': comprehensive_sentiment.get('overall_sentiment', 'neutral'),
-                            'overall_score': comprehensive_sentiment.get('overall_score', 0.0),
-                            'confidence': comprehensive_sentiment.get('confidence', 0.5),
-                            'ensemble_used': comprehensive_sentiment.get('ensemble_used', False),
-                            'models_successful': comprehensive_sentiment.get('models_successful', 0),
-                            'reasoning': comprehensive_sentiment.get('reasoning', 'Enhanced sentiment analysis'),
-                            'model_results': comprehensive_sentiment.get('model_results', {}),
-                            'analysis_timestamp': comprehensive_sentiment.get('analysis_timestamp')
+                            'overall_sentiment': str(comprehensive_sentiment.sentiment),
+                            'overall_score': comprehensive_sentiment.score,
+                            'confidence': comprehensive_sentiment.confidence,
+                            'ensemble_used': False,  # Not using ensemble anymore
+                            'models_successful': 1,  # Single Ollama model
+                            'reasoning': comprehensive_sentiment.reasoning,
+                            'model_results': {'ollama': comprehensive_sentiment.sentiment},
+                            'analysis_timestamp': None  # Not tracked in simple version
                         }
                         
-                        # Log detailed sentiment breakdown from enhanced engine
-                        logger.info(f"{symbol} enhanced sentiment breakdown:")
-                        logger.info(f"  Overall: {comprehensive_sentiment.get('overall_sentiment', 'neutral')} (score: {comprehensive_sentiment.get('overall_score', 0.0):.3f}, confidence: {comprehensive_sentiment.get('confidence', 0.5):.3f})")
-                        logger.info(f"  Ensemble: {comprehensive_sentiment.get('ensemble_used', False)} with {comprehensive_sentiment.get('models_successful', 0)} successful models")
-                        logger.info(f"  Models: {', '.join(comprehensive_sentiment.get('model_results', {}).keys())}")
+                        # Log detailed sentiment breakdown from Ollama analysis
+                        logger.info(f"{symbol} sentiment breakdown:")
+                        logger.info(f"  Overall: {comprehensive_sentiment.sentiment} (score: {comprehensive_sentiment.score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
+                        logger.info(f"  Reasoning: {comprehensive_sentiment.reasoning[:100]}...")
+                        logger.info(f"  Key phrases: {', '.join(comprehensive_sentiment.key_phrases[:3])}")
                         
                         # Generate trading signals based on enhanced sentiment
                         signal_strength = 0.0
@@ -333,9 +375,9 @@ class TradingWorkflow:
                         signal_reason = []
                         
                         # Extract sentiment values
-                        overall_sentiment = comprehensive_sentiment.get('overall_sentiment', 'neutral')
-                        overall_score = comprehensive_sentiment.get('overall_score', 0.0)
-                        confidence = comprehensive_sentiment.get('confidence', 0.5)
+                        overall_sentiment = str(comprehensive_sentiment.sentiment)
+                        overall_score = comprehensive_sentiment.score
+                        confidence = comprehensive_sentiment.confidence
                         
                         # Strong signals based on score thresholds
                         if overall_score > 0.4 and confidence > 0.6:
@@ -371,26 +413,21 @@ class TradingWorkflow:
                             signal_type = 'BUY'
                             signal_reason.append('Strong positive sentiment score (≥0.5)')
                         
-                        # Crisis/panic sentiment detection through ensemble consensus
-                        if (confidence > 0.8 and 
-                            overall_score <= -0.6 and 
-                            comprehensive_sentiment.get('models_successful', 0) >= 2):
+                        # Crisis/panic sentiment detection with high confidence
+                        if (confidence > 0.8 and overall_score <= -0.6):
                             signal_strength += 0.4  # Major boost for high-confidence extreme negativity
                             signal_type = 'SHORT'
-                            signal_reason.append('CRISIS-LEVEL sentiment - Multi-model consensus')
+                            signal_reason.append('CRISIS-LEVEL sentiment - High confidence extreme negative')
                         
-                        # Confidence and ensemble quality boosts
+                        # Confidence boosts
                         if confidence > 0.7:
                             signal_strength += 0.1
                             signal_reason.append('High confidence analysis')
                         
-                        if comprehensive_sentiment.get('ensemble_used', False):
+                        # Ollama model quality boost
+                        if confidence > 0.8:
                             signal_strength += 0.1
-                            signal_reason.append('Multi-model ensemble analysis')
-                        
-                        if comprehensive_sentiment.get('models_successful', 0) >= 2:
-                            signal_strength += 0.1
-                            signal_reason.append('Multiple models successful')
+                            signal_reason.append('Very high confidence Ollama analysis')
                         
                         # Generate signal if significant
                         if signal_type and signal_strength > 0.3:
@@ -543,95 +580,33 @@ class TradingWorkflow:
             return add_error_to_state(state, error_msg)
     
     async def signal_generation_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate trading signals using advanced online RL system with LLM fallbacks."""
+        """Generate trading signals using dual-agent online RL system ONLY."""
         try:
-            logger.info("Signal Generation Agent: Performing portfolio analysis")
+            logger.info("Signal Generation Agent: Using dual-agent online RL system")
             
-            # PRIORITY 0: Evaluate existing positions for underperformance and generate sell/short signals
+            # ONLY USE: Dual-agent online RL system - no fallbacks
+            logger.info("🤖 Using DUAL-AGENT ONLINE RL SYSTEM (no fallbacks)")
+            
+            # Evaluate existing positions for underperformance
             underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
             
-            # PRIORITY 1: Try new online RL system (RE-ENABLED with enhanced error handling)
-            try:
-                logger.info("🤖 Attempting online RL signal generation...")
-                rl_result = await self._online_rl_signal_generation(state, config)
-                
-                # Merge underperformer sell signals with RL buy signals
-                if underperformer_signals:
-                    current_signals = rl_result.get("signals", [])
-                    combined_signals = list(underperformer_signals) + list(current_signals)
-                    rl_result["signals"] = combined_signals
-                    logger.info(f"🔄 Combined signals: {len(underperformer_signals)} sell/short + {len(current_signals)} RL = {len(combined_signals)} total")
-                
-                return rl_result
-                
-            except ImportError as e:
-                logger.warning(f"⚠️ Online RL system not available (fallback to legacy): {e}")
-            except Exception as e:
-                logger.warning(f"⚠️ Online RL signal generation failed (fallback to legacy): {e}")
-                # Log the full traceback for debugging but don't crash the system
-                import traceback
-                logger.debug(f"Full traceback: {traceback.format_exc()}")
+            # Use the dual-agent online RL system
+            rl_result = await self._online_rl_signal_generation(state, config)
             
-            # PRIORITY 2: Check legacy RL decisions  
-            rl_decisions = state.get("rl_decisions")
-            rl_enhanced = state.get("rl_enhanced", False)
+            # Merge underperformer sell signals with RL buy signals
+            if underperformer_signals:
+                current_signals = rl_result.get("signals", [])
+                combined_signals = list(underperformer_signals) + list(current_signals)
+                rl_result["signals"] = combined_signals
+                logger.info(f"🔄 Combined RL signals: {len(underperformer_signals)} sell/short + {len(current_signals)} RL = {len(combined_signals)} total")
             
-            if rl_enhanced and rl_decisions and rl_decisions.get("allocations"):
-                logger.info("🤖 Using legacy RL portfolio allocations for signal generation")
-                
-                # Add underperformer signals if not already added
-                if not underperformer_signals:
-                    underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
-                
-                # Generate RL signals and merge with sell signals
-                rl_result = await self._rl_signal_generation(state, config)
-                
-                # Merge underperformer sell signals with RL buy signals
-                if underperformer_signals:
-                    current_signals = rl_result.get("signals", [])
-                    combined_signals = list(underperformer_signals) + list(current_signals)
-                    rl_result["signals"] = combined_signals
-                    logger.info(f"🔄 Combined legacy signals: {len(underperformer_signals)} sell/short + {len(current_signals)} RL = {len(combined_signals)} total")
-                
-                return rl_result
+            # If RL system fails, raise error - NO FALLBACKS
+            if not rl_result.get("signals"):
+                error_msg = "Dual-agent RL system failed to generate signals"
+                logger.error(f"❌ {error_msg}")
+                raise RuntimeError(error_msg)
             
-            # PRIORITY 3: Try LLM portfolio construction as fallback
-            try:
-                from agents.llm_portfolio_management import construct_llm_portfolio
-                
-                # Add underperformer signals if not already added
-                if not underperformer_signals:
-                    underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
-                
-                # Generate LLM signals and merge with sell signals
-                llm_result = await self._llm_signal_generation(state, config)
-                
-                # Merge underperformer sell signals with LLM buy signals
-                if underperformer_signals:
-                    current_signals = llm_result.get("signals", [])
-                    combined_signals = list(underperformer_signals) + list(current_signals)
-                    llm_result["signals"] = combined_signals
-                    logger.info(f"🔄 Combined LLM signals: {len(underperformer_signals)} sell/short + {len(current_signals)} LLM = {len(combined_signals)} total")
-                
-                return llm_result
-                
-            except ImportError:
-                logger.info("LLM portfolio management not available, using basic fallback signal generation")
-                
-                # Add underperformer signals if not already added
-                if not underperformer_signals:
-                    underperformer_signals = await self._evaluate_existing_positions_for_selling(state)
-                
-                fallback_result = await self._fallback_signal_generation(state, config)
-                
-                # Merge underperformer sell signals with fallback signals
-                if underperformer_signals:
-                    current_signals = fallback_result.get("signals", [])
-                    combined_signals = list(underperformer_signals) + list(current_signals)
-                    fallback_result["signals"] = combined_signals
-                    logger.info(f"🔄 Combined fallback signals: {len(underperformer_signals)} sell/short + {len(current_signals)} fallback = {len(combined_signals)} total")
-                
-                return fallback_result
+            return rl_result
         
         except Exception as e:
             error_msg = f"Signal Generation Agent error: {e}"
@@ -1477,6 +1452,7 @@ class TradingWorkflow:
     async def _fallback_signal_generation(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Simple fallback signal generation using sentiment signals."""
         try:
+            logger.info("DEBUG: ENTERED _fallback_signal_generation method")
             logger.info("Using simple fallback signal generation")
             
             portfolio_value = state["portfolio"].get("equity", 26100.0)
@@ -1637,15 +1613,19 @@ class TradingWorkflow:
                 top_sentiment_signals = [s for s in sentiment_signals if s.get('signal') == 'BUY'][:5]
                 
                 logger.info(f"Converting {len(top_sentiment_signals)} sentiment signals to trading signals")
+                logger.info(f"DEBUG: max_position_value=${max_position_value}, available_cash=${available_cash}")
                 
                 for sentiment_signal in top_sentiment_signals:
                     symbol = sentiment_signal['symbol']
                     strength = sentiment_signal.get('strength', 0.3)
                     
+                    logger.info(f"DEBUG: Processing {symbol} with strength {strength}")
+                    
                     # Get current price from Alpaca
                     try:
                         from tools.alpaca_client import alpaca_client
                         current_price = alpaca_client.get_current_price(symbol)
+                        logger.info(f"DEBUG: Got price for {symbol}: ${current_price}")
                         
                         if current_price and current_price > 0:
                             # Calculate position size based on sentiment strength
@@ -1848,12 +1828,20 @@ class TradingWorkflow:
                     continue
                 
                 try:
-                    # Check if market is open (skip for paper trading as it's always available)
-                    market_open = alpaca_client.is_market_open()
+                    from config.settings import is_crypto_symbol
                     
-                    # For paper trading, we can execute orders even when market is closed
-                    if not market_open:
-                        logger.info("Market closed - executing paper trade anyway for testing")
+                    # Check market status based on asset type
+                    if is_crypto_symbol(signal.symbol):
+                        # Crypto trades 24/7
+                        market_open = True
+                        logger.debug(f"Crypto trading active 24/7 for {signal.symbol}")
+                    else:
+                        # Check stock market hours
+                        market_open = alpaca_client.is_market_open()
+                        
+                        # For paper trading, we can execute stock orders even when market is closed
+                        if not market_open:
+                            logger.info("Stock market closed - executing paper trade anyway for testing")
                     
                     # Execute the order with advanced order type support
                     logger.info(f"Executing balanced order: {signal.action} {signal.quantity:.2f} {signal.symbol}")
@@ -2046,17 +2034,35 @@ class TradingWorkflow:
         from tools.alpaca_client import alpaca_client
         
         try:
-            # Ensure quantity is always an integer (no fractional shares)
+            from config.settings import is_crypto_symbol, settings
+            
+            # Handle quantity conversion based on asset type
             original_quantity = signal.quantity
-            integer_quantity = max(1, int(float(signal.quantity)))  # Convert to int, minimum 1 share
             
-            logger.info(f"🔧 Quantity conversion: {signal.symbol} {original_quantity} → {integer_quantity}")
+            if is_crypto_symbol(signal.symbol):
+                # Crypto allows fractional quantities, but enforce minimum trade amount
+                min_trade_amount = settings.crypto_min_trade_amount
+                market_data = state.get("market_data", {}).get("symbols", {}).get(signal.symbol, {})
+                current_price = market_data.get("price", 1)
+                
+                # Calculate minimum quantity based on price
+                min_quantity = min_trade_amount / current_price if current_price > 0 else 0.001
+                final_quantity = max(min_quantity, float(signal.quantity))
+                
+                logger.info(f"🪙 Crypto quantity validation: {signal.symbol} ${original_quantity:.6f} → ${final_quantity:.6f} (min=${min_quantity:.6f})")
+            else:
+                # Stocks require integer quantities (no fractional shares in paper trading)
+                integer_quantity = max(1, int(float(signal.quantity)))
+                final_quantity = integer_quantity
+                
+                logger.info(f"📈 Stock quantity conversion: {signal.symbol} {original_quantity} → {final_quantity} shares")
             
-            # Force update the signal quantity
-            signal.quantity = integer_quantity
+            # Update signal quantity
+            signal.quantity = final_quantity
             
-            if original_quantity != integer_quantity:
-                logger.info(f"✅ Rounded fractional quantity for {signal.symbol}: {original_quantity} → {integer_quantity} shares")
+            if original_quantity != final_quantity:
+                asset_type = "crypto" if is_crypto_symbol(signal.symbol) else "stock"
+                logger.info(f"✅ Adjusted {asset_type} quantity for {signal.symbol}: {original_quantity} → {final_quantity}")
             
             logger.info(f"Executing order for {signal.symbol}: {signal.action} {signal.quantity} shares")
             

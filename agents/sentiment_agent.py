@@ -20,7 +20,8 @@ from core.llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
 from core.social_media_collector_optimized import SocialMediaCollector, SocialMediaPost
 from core.earnings_scraper import EarningsCallScraper, EarningsTranscript
 from core.sec_edgar_client import SECEdgarClient, SECFiling
-from config.settings import settings
+from core.crypto_sentiment_analyzer import crypto_sentiment_analyzer, CryptoSentimentResult
+from config.settings import settings, is_crypto_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +112,18 @@ class SentimentAgent:
         
         logger.info(f"Starting comprehensive sentiment analysis for {symbol}")
         
-        # Collect data from all sources in parallel with timeouts
-        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=30.0)
-        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=45.0)
+        # Check if this is a crypto symbol and use specialized analysis
+        if is_crypto_symbol(symbol):
+            logger.info(f"🚀 Using crypto-specialized sentiment analysis for {symbol}")
+            return await self._analyze_crypto_sentiment(symbol)
+        
+        # Collect data from all sources in parallel with performance-tested timeouts
+        # Based on llama3:8b performance test: ~17s average, setting 25s buffer
+        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=45.0)
+        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=50.0)
         earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=60.0)
-        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=90.0)
-        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=15.0)
+        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=70.0)
+        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=35.0)
         
         # Execute all tasks with graceful failure handling
         results = await asyncio.gather(
@@ -264,8 +271,11 @@ class SentimentAgent:
     async def _analyze_social_sentiment(self, symbol: str) -> Dict[str, SentimentAnalysis]:
         """Analyze sentiment from social media platforms."""
         try:
-            # Collect posts from all platforms
-            platform_results = await self.social_collector.collect_all_platforms(symbol)
+            # Collect posts from all platforms with timeout
+            platform_results = await asyncio.wait_for(
+                self.social_collector.collect_all_platforms(symbol), 
+                timeout=15.0
+            )
             
             sentiment_results = {}
             
@@ -273,17 +283,31 @@ class SentimentAgent:
                 if not posts:
                     continue
                 
-                # Combine posts into text for analysis
+                # Combine posts into text for analysis (limit text length)
                 combined_text = ""
-                for post in posts[:20]:  # Limit to 20 posts per platform
+                for post in posts[:10]:  # Reduced from 20 to 10 for faster processing
                     combined_text += f"{post.content}\n"
+                    if len(combined_text) > 2000:  # Limit text length
+                        break
                 
                 if combined_text.strip():
-                    sentiment = await self.llm_analyzer.analyze_text(combined_text, "social_media")
-                    sentiment_results[platform] = sentiment
+                    # Add timeout for LLM analysis (increased for Ollama)
+                    try:
+                        sentiment = await asyncio.wait_for(
+                            self.llm_analyzer.analyze_text(combined_text, "social_media"),
+                            timeout=15.0  # Increased timeout for Ollama performance
+                        )
+                        if sentiment:
+                            sentiment_results[platform] = sentiment
+                    except asyncio.TimeoutError:
+                        logger.warning(f"LLM sentiment analysis timed out for {platform}")
+                        continue
             
             return sentiment_results
             
+        except asyncio.TimeoutError:
+            logger.warning(f"Social media collection timed out for {symbol}")
+            return {}
         except Exception as e:
             logger.error(f"Error analyzing social sentiment for {symbol}: {e}")
             return {}
@@ -322,10 +346,15 @@ class SentimentAgent:
         try:
             import yfinance as yf
             
+            # Add timeout for yfinance data fetch
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1mo")
+            hist = await asyncio.wait_for(
+                asyncio.to_thread(ticker.history, period="1mo"),
+                timeout=5.0
+            )
             
             if hist.empty or len(hist) < 5:
+                logger.debug(f"Insufficient market data for {symbol}")
                 return None
             
             # Calculate momentum indicators
@@ -342,8 +371,15 @@ class SentimentAgent:
             Market momentum appears {'positive' if recent_return > 0 else 'negative'}.
             """
             
-            return await self.llm_analyzer.analyze_text(market_text, "financial_news")
+            # Add timeout for LLM analysis (increased for Ollama)
+            return await asyncio.wait_for(
+                self.llm_analyzer.analyze_text(market_text, "financial_news"),
+                timeout=12.0
+            )
             
+        except asyncio.TimeoutError:
+            logger.warning(f"Market sentiment analysis timed out for {symbol}")
+            return None
         except Exception as e:
             logger.error(f"Error analyzing market sentiment for {symbol}: {e}")
             return None
@@ -719,11 +755,111 @@ class SentimentAgent:
         
         return results
     
+    async def _analyze_crypto_sentiment(self, symbol: str) -> ComprehensiveSentiment:
+        """Specialized sentiment analysis for cryptocurrency symbols."""
+        
+        try:
+            # Use crypto sentiment analyzer
+            crypto_result = await crypto_sentiment_analyzer.analyze_crypto_sentiment(symbol)
+            
+            # Convert to standard ComprehensiveSentiment format
+            sentiment_result = ComprehensiveSentiment(
+                symbol=symbol,
+                timestamp=crypto_result.timestamp,
+                overall_score=crypto_result.overall_score,
+                overall_sentiment=crypto_result.overall_sentiment,
+                confidence=crypto_result.confidence,
+                
+                # Map crypto components to standard format
+                news_sentiment=SentimentAnalysis(
+                    score=crypto_result.news_sentiment,
+                    confidence=crypto_result.confidence,
+                    reasoning=f"Analyzed {crypto_result.news_count} crypto news articles"
+                ) if crypto_result.news_count > 0 else None,
+                
+                social_sentiment={
+                    'crypto_social': SentimentAnalysis(
+                        score=crypto_result.social_sentiment,
+                        confidence=crypto_result.confidence,
+                        reasoning=f"Social mentions: {crypto_result.social_mentions}"
+                    )
+                } if crypto_result.social_mentions > 0 else {},
+                
+                market_sentiment=SentimentAnalysis(
+                    score=crypto_result.technical_sentiment,
+                    confidence=min(0.8, abs(crypto_result.price_momentum) / 10),
+                    reasoning=f"Price momentum: {crypto_result.price_momentum:.2f}%"
+                ),
+                
+                # Crypto-specific metadata
+                data_sources_count=3 if crypto_result.news_count > 0 else 2,
+                news_articles_count=crypto_result.news_count,
+                social_posts_count=crypto_result.social_mentions,
+                
+                # Map crypto insights to standard format
+                key_themes=crypto_result.key_themes,
+                risk_factors=crypto_result.risk_factors,
+                opportunities=[theme for theme in crypto_result.key_themes 
+                             if theme in ['adoption', 'technology', 'partnerships']],
+                
+                # Additional crypto metrics
+                volume_spike=crypto_result.volume_spike,
+                news_sources=crypto_result.news_sources
+            )
+            
+            # Cache the result
+            cache_key = f"{symbol}_{datetime.now().date()}"
+            self.cache[cache_key] = (sentiment_result, datetime.now())
+            
+            logger.info(f"✅ Crypto sentiment analysis complete for {symbol}: "
+                       f"{sentiment_result.overall_sentiment} ({sentiment_result.overall_score:.3f})")
+            
+            return sentiment_result
+            
+        except Exception as e:
+            logger.error(f"Error in crypto sentiment analysis for {symbol}: {e}")
+            
+            # Return neutral result on error
+            return ComprehensiveSentiment(
+                symbol=symbol,
+                timestamp=datetime.now(),
+                overall_score=0.0,
+                overall_sentiment='neutral',
+                confidence=0.1,
+                data_sources_count=0,
+                key_themes=['insufficient_data'],
+                risk_factors=['analysis_error']
+            )
+    
     async def close(self):
         """Close all connections and clean up resources."""
-        await self.llm_analyzer.close()
-        await self.earnings_scraper.close()
-        await self.sec_edgar_client.cleanup()
+        try:
+            await self.llm_analyzer.close()
+        except Exception as e:
+            logger.debug(f"LLM analyzer close error: {e}")
+        
+        try:
+            await self.social_collector.cleanup()
+        except Exception as e:
+            logger.debug(f"Social collector cleanup error: {e}")
+        
+        try:
+            if hasattr(self.earnings_scraper, 'close'):
+                await self.earnings_scraper.close()
+            elif hasattr(self.earnings_scraper, 'cleanup'):
+                await self.earnings_scraper.cleanup()
+        except Exception as e:
+            logger.debug(f"Earnings scraper close error: {e}")
+        
+        try:
+            await self.sec_edgar_client.cleanup()
+        except Exception as e:
+            logger.debug(f"SEC client cleanup error: {e}")
+        
+        try:
+            await crypto_sentiment_analyzer.close()
+        except Exception as e:
+            logger.debug(f"Crypto sentiment analyzer close error: {e}")
 
 
 # Global sentiment agent instance

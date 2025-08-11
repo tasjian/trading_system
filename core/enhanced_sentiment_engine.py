@@ -25,11 +25,11 @@ class EnhancedSentimentEngine:
         self.llm_analyzer = None
         self.llm_client = None
         
-        # Sentiment weights for ensemble
+        # Sentiment weights for ensemble - prioritizing Ollama
         self.model_weights = {
-            'fingpt': 0.5,      # Specialized financial model
-            'ollama': 0.3,      # Local general model  
-            'traditional': 0.2  # Rule-based fallback
+            'ollama': 0.8,      # Local LLM (primary - fast and reliable)
+            'fingpt': 0.1,      # Specialized financial model (fallback only)
+            'traditional': 0.1  # Rule-based fallback
         }
         
         logger.info("✅ Enhanced Sentiment Engine initialized")

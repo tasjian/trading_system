@@ -377,8 +377,23 @@ async def integrate_comprehensive_rl_system(state: Dict[str, Any],
         sentiment_signals = state.get("sentiment_signals", [])
         symbols = list(set([s.get('symbol') for s in sentiment_signals if s.get('symbol')]))[:10]
     
+    # If no sentiment signals, use filtered symbols from universe filter
     if not symbols:
-        symbols = ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"]  # Default fallback
+        filtered_symbols = state.get("filtered_symbols", [])
+        if filtered_symbols:
+            symbols = filtered_symbols[:10]  # Use top 10 filtered symbols
+            logger.info(f"🔄 Using top {len(symbols)} filtered symbols for RL: {symbols}")
+        else:
+            # Last resort: use current portfolio positions if any
+            portfolio_positions = state.get("portfolio", {}).get("positions", [])
+            if portfolio_positions:
+                symbols = [pos.get('symbol') for pos in portfolio_positions if pos.get('symbol')][:5]
+                logger.info(f"🔄 Using portfolio positions for RL: {symbols}")
+    
+    # Only use hardcoded symbols if absolutely no other data available
+    if not symbols:
+        logger.warning("⚠️ No symbols available from sentiment, universe filter, or portfolio - skipping RL decisions")
+        return []
     
     # Get or create bridge
     bridge = get_rl_bridge(symbols)

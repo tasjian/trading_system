@@ -85,11 +85,22 @@ class StockUniverseFilter:
             all_symbols = await self._get_tradeable_symbols()
             logger.info(f"Retrieved tradeable universe: {len(all_symbols)} symbols")
         
-        # Add crypto pairs if enabled
+        # Add crypto pairs if enabled and check market status for prioritization
+        crypto_pairs = []
+        market_closed = False
         if settings.crypto_enabled:
             crypto_pairs = get_crypto_pairs()
             all_symbols.extend(crypto_pairs)
             logger.info(f"Added {len(crypto_pairs)} crypto pairs to universe")
+            
+            # Check if stock market is closed to prioritize crypto
+            try:
+                from tools.alpaca_client import alpaca_client
+                market_closed = not alpaca_client.is_market_open()
+                if market_closed:
+                    logger.info("🌙 Stock market is closed - prioritizing crypto assets for 24/7 trading")
+            except Exception:
+                pass
         
         # Step 2: Apply basic filters (price, volume, market cap)
         logger.info("📊 Applying basic filters (price, volume, market cap)...")
@@ -101,9 +112,9 @@ class StockUniverseFilter:
         signals = await self._collect_signals_parallel(basic_filtered, cached_social_data)
         logger.info(f"Collected {len(signals)} trading signals")
         
-        # Step 4: Rank and select top candidates
+        # Step 4: Rank and select top candidates (crypto-aware)
         logger.info("🎯 Ranking candidates by signal strength...")
-        filtered_symbols = self._rank_and_select_candidates(signals, max_symbols)
+        filtered_symbols = self._rank_and_select_candidates(signals, max_symbols, market_closed, crypto_pairs)
         
         # Step 5: Include dynamic watchlist if requested (no hardcoded stocks)
         if include_watchlist:
@@ -377,13 +388,13 @@ class StockUniverseFilter:
         return signals
     
     async def _collect_social_signals(self, symbols: List[str], cached_social_data: Dict[str, Any] = None) -> List[StockSignal]:
-        """Collect signals from cached social media activity."""
+        """Collect signals from social media activity using cached data from sentiment analysis."""
         
         signals = []
         logger.info(f"💬 Using cached social data for {len(symbols)} symbols...")
         
         if not cached_social_data:
-            logger.info("No cached social media data available - skipping social signals")
+            logger.info("No cached social media data available - will be populated on next 90-minute sentiment cycle")
             return signals
         
         try:
@@ -460,8 +471,8 @@ class StockUniverseFilter:
         logger.info(f"Found {len(signals)} news signals")
         return signals
     
-    def _rank_and_select_candidates(self, signals: List[StockSignal], max_symbols: int) -> List[str]:
-        """Rank candidates by signal strength and select top performers."""
+    def _rank_and_select_candidates(self, signals: List[StockSignal], max_symbols: int, market_closed: bool = False, crypto_pairs: List[str] = None) -> List[str]:
+        """Rank candidates by signal strength and select top performers with crypto prioritization when markets closed."""
         
         # Group signals by symbol
         symbol_scores = {}
@@ -489,7 +500,13 @@ class StockUniverseFilter:
             # Bonus for multiple signals of same type (conviction)
             volume_bonus = min(0.2, (data['signal_count'] - 1) * 0.05)
             
-            final_score = avg_score + type_bonus + volume_bonus
+            # Crypto priority bonus when stock market is closed
+            crypto_bonus = 0.0
+            if market_closed and crypto_pairs and symbol in crypto_pairs:
+                crypto_bonus = 0.3  # Significant boost for crypto when markets closed
+                logger.debug(f"🌙 Crypto priority bonus applied to {symbol}")
+            
+            final_score = avg_score + type_bonus + volume_bonus + crypto_bonus
             final_scores.append((symbol, final_score))
         
         # Sort by score and return top candidates

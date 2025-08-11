@@ -23,11 +23,11 @@ class TradingSettings(BaseSettings):
     # FinGPT Configuration (HuggingFace)
     huggingface_api_key: Optional[str] = Field(default=None, env="HUGGINGFACE_API_KEY")
     fingpt_model: str = Field(default="FinGPT/fingpt-sentiment_llama2-13b_lora", env="FINGPT_MODEL")
-    use_fingpt_primary: bool = Field(default=True, env="USE_FINGPT_PRIMARY")
+    use_fingpt_primary: bool = Field(default=False, env="USE_FINGPT_PRIMARY")  # Disabled - using Ollama
     
     # Llama 3.1 Configuration (via Ollama)
     ollama_base_url: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="llama3:8b", env="OLLAMA_MODEL")
+    ollama_model: str = Field(default="llama3:8b", env="OLLAMA_MODEL")  # Optimized for reliability over speed
     use_llama_fallback: bool = Field(default=True, env="USE_LLAMA_FALLBACK")
     
     # Trading Parameters
@@ -58,12 +58,14 @@ class TradingSettings(BaseSettings):
     excluded_symbols: str = Field(default="", env="EXCLUDED_SYMBOLS")  # Comma-separated symbols to exclude
     
     # Crypto Trading Configuration
-    crypto_enabled: bool = Field(default=False, env="CRYPTO_ENABLED")
-    crypto_pairs: str = Field(default="BTCUSD,ETHUSD,DOGEUSD,LTCUSD,BCHUSD", env="CRYPTO_PAIRS")
+    crypto_enabled: bool = Field(default=True, env="CRYPTO_ENABLED")  # Enable crypto for 24/7 trading
+    crypto_pairs: str = Field(default="BTCUSD,ETHUSD,DOGEUSD,LTCUSD,BCHUSD,LINKUSD,UNIUSD,AAVEUSD", env="CRYPTO_PAIRS")  # All supported Alpaca crypto pairs
     crypto_base_currencies: str = Field(default="USD,USDT,USDC", env="CRYPTO_BASE_CURRENCIES")
     crypto_max_position_size: float = Field(default=0.20, env="CRYPTO_MAX_POSITION_SIZE")  # Higher limit for crypto volatility
     crypto_stop_loss_percent: float = Field(default=0.15, env="CRYPTO_STOP_LOSS_PERCENT")  # Wider stops for crypto
     crypto_min_trade_amount: float = Field(default=10.0, env="CRYPTO_MIN_TRADE_AMOUNT")  # Minimum $10 crypto trades
+    crypto_portfolio_allocation: float = Field(default=0.15, env="CRYPTO_PORTFOLIO_ALLOCATION")  # Max 15% of total portfolio in crypto
+    crypto_max_single_position: float = Field(default=0.05, env="CRYPTO_MAX_SINGLE_POSITION")  # Max 5% per crypto asset
     
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
@@ -98,6 +100,12 @@ class TradingSettings(BaseSettings):
     
     # RapidAPI Configuration for Enhanced Twitter Access
     rapidapi_key: Optional[str] = Field(default=None, env="RAPIDAPI_KEY")
+    
+    # Crypto Data Sources
+    cryptocompare_api_key: Optional[str] = Field(default=None, env="CRYPTOCOMPARE_API_KEY")
+    binance_api_key: Optional[str] = Field(default=None, env="BINANCE_API_KEY")
+    binance_secret_key: Optional[str] = Field(default=None, env="BINANCE_SECRET_KEY")
+    coinmarketcap_api_key: Optional[str] = Field(default=None, env="COINMARKETCAP_API_KEY")
     
     # Redis Configuration for Inter-Agent Communication
     redis_host: str = Field(default="localhost", env="REDIS_HOST")
@@ -190,6 +198,12 @@ def validate_settings():
         if settings.crypto_min_trade_amount < 1.0:
             raise ValueError("Crypto minimum trade amount must be at least $1.00")
         
+        if settings.crypto_portfolio_allocation <= 0 or settings.crypto_portfolio_allocation > 0.5:
+            raise ValueError("Crypto portfolio allocation must be between 0 and 0.5 (50%)")
+            
+        if settings.crypto_max_single_position <= 0 or settings.crypto_max_single_position > 0.2:
+            raise ValueError("Crypto max single position must be between 0 and 0.2 (20%)")
+        
         # Validate crypto pairs format
         crypto_pairs = get_crypto_pairs()
         for pair in crypto_pairs:
@@ -204,9 +218,12 @@ if __name__ == "__main__":
     print(f"Max Position Size: {settings.max_position_size}")
     
     if settings.crypto_enabled:
+        crypto_pairs = get_crypto_pairs()
         print(f"Crypto Trading: Enabled")
-        print(f"Crypto Pairs: {', '.join(get_crypto_pairs())}")
-        print(f"Crypto Max Position: {settings.crypto_max_position_size}")
-        print(f"Crypto Stop Loss: {settings.crypto_stop_loss_percent}")
+        print(f"Crypto Pairs ({len(crypto_pairs)}): {', '.join(crypto_pairs)}")
+        print(f"Crypto Portfolio Allocation: {settings.crypto_portfolio_allocation*100:.1f}%")
+        print(f"Crypto Max Single Position: {settings.crypto_max_single_position*100:.1f}%")
+        print(f"Crypto Max Position: {settings.crypto_max_position_size*100:.1f}%")
+        print(f"Crypto Stop Loss: {settings.crypto_stop_loss_percent*100:.1f}%")
     else:
         print(f"Crypto Trading: Disabled")

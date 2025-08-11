@@ -19,6 +19,9 @@ from agents.online_rl_system import (
     OnlineLearningConfig,
     MarketRegime
 )
+from agents.unified_reward_calculator import (
+    UnifiedRewardCalculator, TradeMetrics, TradeType, RewardComponents
+)
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,16 @@ class OnlineRLAgent:
         self.system = None
         self.initialized = False
         
+        # Initialize unified reward calculator
+        self.reward_calculator = UnifiedRewardCalculator(
+            lambda_c=1.2,    # Higher cost penalty weight
+            lambda_r=1.5,    # Higher risk penalty weight
+            lambda_e=0.8,    # Moderate execution penalty weight
+            lambda_s=0.6,    # Moderate sentiment alignment weight
+            lambda_reg=0.4,  # Lower regime alignment weight
+            lambda_div=0.3   # Lower diversification bonus weight
+        )
+        
         # Performance tracking
         self.signal_history = []
         self.execution_history = []
@@ -51,6 +64,7 @@ class OnlineRLAgent:
         self.last_market_state = None
         self.last_action = None
         self.last_portfolio_value = None
+        self.last_trade_metrics = None
         
         # Configuration
         self.config = OnlineLearningConfig(
@@ -168,7 +182,7 @@ class OnlineRLAgent:
         
         # Data completeness check
         complete_symbols = sum(1 for s in self.symbols if s in market_data and market_data[s].get('price', 0) > 0)
-        data_completeness = complete_symbols / len(self.symbols)
+        data_completeness = complete_symbols / max(1, len(self.symbols))  # Prevent division by zero
         
         return {
             'volatility': market_volatility,
@@ -192,12 +206,25 @@ class OnlineRLAgent:
             market_metadata = self.extract_market_metadata(market_data)
             market_metadata['portfolio_value'] = portfolio_value
             
-            # Calculate reward from previous step if available
+            # Calculate reward using unified reward calculator
             previous_reward = 0.0
-            if self.last_portfolio_value is not None and self.last_portfolio_value != 0:
+            if self.last_portfolio_value is not None and self.last_trade_metrics is not None:
+                # Use comprehensive reward calculation
+                reward_components = self.reward_calculator.calculate_reward(self.last_trade_metrics)
+                previous_reward = reward_components.total_reward
+                
+                # Log detailed reward breakdown for debugging
+                if abs(previous_reward) > 0.001:  # Only log significant rewards
+                    breakdown = self.reward_calculator.get_reward_breakdown(self.last_trade_metrics)
+                    logger.debug(f"RL Reward breakdown: PnL={breakdown['pnl_change']:.4f}, "
+                               f"Cost={breakdown['cost_penalty']:.4f}, "
+                               f"Risk={breakdown['risk_penalty']:.4f}, "
+                               f"Total={previous_reward:.4f}")
+            elif self.last_portfolio_value is not None and self.last_portfolio_value > 0:
+                # Fallback to simple calculation if trade metrics unavailable
                 previous_reward = (portfolio_value - self.last_portfolio_value) / self.last_portfolio_value
             elif self.last_portfolio_value is not None:
-                # Handle case where last portfolio value was 0
+                # Handle case where last portfolio value was 0 or negative
                 previous_reward = 0.01 if portfolio_value > 0 else 0.0
             
             # Process market step with RL system
@@ -215,6 +242,11 @@ class OnlineRLAgent:
                 action_info, 
                 market_data, 
                 portfolio_data
+            )
+            
+            # Create trade metrics for next reward calculation
+            self.last_trade_metrics = self._create_trade_metrics(
+                portfolio_value, action_info, market_data, portfolio_data, signals
             )
             
             # Update state tracking
@@ -353,6 +385,98 @@ class OnlineRLAgent:
             'execution_rate_24h': execution_rate,
             'total_executions': len(self.execution_history)
         }
+    
+    def _create_trade_metrics(self, 
+                             portfolio_value: float, 
+                             action_info: Dict[str, Any], 
+                             market_data: Dict[str, Any], 
+                             portfolio_data: Dict[str, Any],
+                             signals: List) -> TradeMetrics:
+        """Create comprehensive trade metrics for reward calculation."""
+        
+        # Determine trade type from action info
+        trade_type = TradeType.HOLD  # Default
+        position_size = 0.0
+        
+        if signals:
+            # Get dominant signal type
+            buy_signals = [s for s in signals if s.action == 'buy']
+            sell_signals = [s for s in signals if s.action == 'sell']
+            short_signals = [s for s in signals if s.action == 'short']
+            
+            if buy_signals:
+                trade_type = TradeType.MARKET_BUY  # Assume market orders for now
+                position_size = sum(s.quantity for s in buy_signals)
+            elif sell_signals:
+                trade_type = TradeType.MARKET_SELL
+                position_size = sum(s.quantity for s in sell_signals)
+            elif short_signals:
+                trade_type = TradeType.SHORT_SELL
+                position_size = sum(s.quantity for s in short_signals)
+        
+        # Calculate portfolio metrics
+        portfolio_value_t = self.last_portfolio_value if self.last_portfolio_value else portfolio_value
+        portfolio_value_t1 = portfolio_value
+        
+        # Estimate trading costs (simplified)
+        estimated_slippage = abs(position_size) * 0.001  # 0.1% slippage estimate
+        estimated_commission = abs(position_size) * 0.005  # $0.005 per share
+        
+        # Calculate risk metrics
+        total_positions = sum(abs(pos.get('market_value', 0)) for pos in portfolio_data.get('positions', []))
+        position_concentration = abs(position_size * 100) / max(portfolio_value, 1) if portfolio_value > 0 else 0.0  # Rough estimate
+        
+        # Get market sentiment (if available)
+        sentiment_score = 0.0
+        regime_alignment = 0.0
+        volatility = 0.02  # Default volatility estimate
+        
+        if market_data:
+            # Try to extract sentiment from market data
+            for symbol_data in market_data.values():
+                if isinstance(symbol_data, dict):
+                    sentiment_score += symbol_data.get('sentiment_score', 0.0)
+                    volatility = max(volatility, symbol_data.get('volatility', 0.02))
+            
+            if len(market_data) > 0:
+                sentiment_score /= len(market_data)  # Average sentiment
+        
+        # Regime alignment from action info
+        if 'regime' in action_info:
+            regime_info = action_info['regime']
+            if regime_info == 'trending_up' and position_size > 0:
+                regime_alignment = 0.3
+            elif regime_info == 'trending_down' and position_size < 0:
+                regime_alignment = 0.3
+            elif regime_info == 'sideways':
+                regime_alignment = 0.1 if abs(position_size) < 50 else -0.1
+        
+        # Calculate drawdown (simplified)
+        drawdown = max(0.0, (self.last_portfolio_value - portfolio_value) / max(self.last_portfolio_value, 1)) if self.last_portfolio_value else 0.0
+        
+        return TradeMetrics(
+            portfolio_value_t=portfolio_value_t,
+            portfolio_value_t1=portfolio_value_t1,
+            trade_type=trade_type,
+            position_size=position_size,
+            current_price=100.0,  # Placeholder - would need actual price data
+            
+            # Cost estimates
+            slippage=estimated_slippage,
+            commission=estimated_commission,
+            borrow_fee=abs(position_size) * 0.0001 if trade_type == TradeType.SHORT_SELL else 0.0,
+            
+            # Risk metrics
+            leverage=1.0,  # Assume no leverage for now
+            volatility=volatility,
+            position_concentration=position_concentration,
+            drawdown=drawdown,
+            
+            # Market alignment
+            sentiment_score=sentiment_score,
+            regime_alignment=regime_alignment,
+            technical_momentum=action_info.get('uncertainty', 0.0)  # Use uncertainty as momentum proxy
+        )
 
 # Global instance for integration with existing workflow
 _global_rl_agent: Optional[OnlineRLAgent] = None

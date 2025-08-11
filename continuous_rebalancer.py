@@ -51,7 +51,8 @@ import traceback
 from agents.workflow import TradingWorkflow
 from agents.state import create_initial_state
 from tools.alpaca_client import alpaca_client
-from config.settings import settings
+from config.settings import settings, get_crypto_pairs
+from core.crypto_data_collector import crypto_collector
 
 # Configure logging with rotation
 logging.basicConfig(
@@ -101,7 +102,8 @@ class ContinuousRebalancer:
         # Rate limiting and timing
         self.min_interval_minutes = 2       # Minimum time between runs (safety buffer)
         self.standard_interval_minutes = 5   # Standard interval during market hours (RL trading)
-        self.after_hours_interval_minutes = 30  # Reduced interval after hours
+        self.after_hours_interval_minutes = 30  # Reduced interval after hours (stocks only)
+        self.crypto_only_interval_minutes = 10   # Crypto trading interval when stock market closed
         self.last_run_time = None
         
         # Error handling
@@ -152,8 +154,18 @@ class ContinuousRebalancer:
         
         logger.info(f"Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Min Interval: {self.min_interval_minutes} minutes")
-        logger.info(f"Standard Interval: {self.standard_interval_minutes} minutes")
-        logger.info(f"After Hours Interval: {self.after_hours_interval_minutes} minutes")
+        
+        # Check crypto status for logging
+        from config.settings import settings, get_crypto_pairs
+        has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+        
+        if has_crypto:
+            logger.info(f"🚀 CRYPTO ENABLED: Continuous {self.standard_interval_minutes}-minute intervals (24/7)")
+            logger.info(f"Crypto pairs: {', '.join(get_crypto_pairs())}")
+        else:
+            logger.info(f"Standard Interval: {self.standard_interval_minutes} minutes")
+            logger.info(f"After Hours Interval: {self.after_hours_interval_minutes} minutes")
+        
         logger.info(f"Max Consecutive Failures: {self.max_consecutive_failures}")
         
         # Initial system check
@@ -176,7 +188,11 @@ class ContinuousRebalancer:
         try:
             # Check if we should run now
             if not await self._should_run_now():
-                await asyncio.sleep(60)  # Check again in 1 minute
+                # Crypto-aware sleep duration: shorter when crypto enabled for responsiveness
+                from config.settings import settings, get_crypto_pairs
+                has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+                sleep_duration = 30 if has_crypto else 60  # 30s with crypto, 60s without
+                await asyncio.sleep(sleep_duration)
                 return
             
             # Update health metrics
@@ -232,14 +248,25 @@ class ContinuousRebalancer:
             market_open = alpaca_client.is_market_open()
             market_calendar = alpaca_client.get_market_calendar()
             
-            # During market hours OR if trading crypto (24/7): run more frequently
-            if market_open or has_crypto:
+            # With crypto enabled: maintain standard 5-minute intervals continuously (24/7)
+            if has_crypto:
+                if self.last_run_time:
+                    minutes_since_last = (now - self.last_run_time).total_seconds() / 60
+                    return minutes_since_last >= self.standard_interval_minutes
                 return True
             
-            # After hours for stocks only: run less frequently but still monitor
-            if self.last_run_time:
-                hours_since_last = (now - self.last_run_time).total_seconds() / 3600
-                return hours_since_last >= (self.after_hours_interval_minutes / 60)
+            # During stock market hours without crypto: standard intervals
+            elif market_open:
+                if self.last_run_time:
+                    minutes_since_last = (now - self.last_run_time).total_seconds() / 60
+                    return minutes_since_last >= self.standard_interval_minutes
+                return True
+            
+            # After hours without crypto: run less frequently for monitoring only
+            else:
+                if self.last_run_time:
+                    hours_since_last = (now - self.last_run_time).total_seconds() / 3600
+                    return hours_since_last >= (self.after_hours_interval_minutes / 60)
             
             return True
             
@@ -257,8 +284,28 @@ class ContinuousRebalancer:
             state = create_initial_state()
             config = {"thread_id": f"continuous_rebalancer_{int(start_time.timestamp())}"}
             
-            # No hardcoded watchlist - let universe filter discover opportunities dynamically
-            state["watchlist"] = []  # Empty watchlist - universe filter will find stocks
+            # Initialize watchlist with crypto pairs if enabled, let universe filter discover stocks dynamically
+            watchlist_symbols = []
+            
+            # Add crypto pairs to watchlist if crypto trading is enabled
+            if settings.crypto_enabled:
+                crypto_pairs = get_crypto_pairs()
+                if crypto_pairs:
+                    watchlist_symbols.extend(crypto_pairs)
+                    logger.info(f"🪙 Added {len(crypto_pairs)} crypto pairs to watchlist: {', '.join(crypto_pairs)}")
+            
+            state["watchlist"] = watchlist_symbols
+            
+            # Start crypto data streams if crypto symbols are present
+            if watchlist_symbols and any(settings.crypto_enabled for symbol in watchlist_symbols if symbol in get_crypto_pairs()):
+                crypto_symbols = [s for s in watchlist_symbols if s in get_crypto_pairs()]
+                if crypto_symbols:
+                    logger.info(f"🚀 Starting crypto data collection for: {', '.join(crypto_symbols)}")
+                    try:
+                        await crypto_collector.start_real_time_streams(crypto_symbols)
+                        logger.info("✅ Crypto data streams initialized")
+                    except Exception as e:
+                        logger.warning(f"Failed to start crypto streams: {e}")
             
             initial_portfolio_value = 0.0
             signals_generated = 0
@@ -430,9 +477,9 @@ class ContinuousRebalancer:
                         overall_sentiment = getattr(sentiment_data, 'overall_sentiment', 'neutral')
                         confidence = getattr(sentiment_data, 'confidence', 0.5)
                     
-                    # Generate signal based on sentiment score with enhanced SHORT detection
-                    if overall_score > 0.1:  # Positive sentiment threshold
-                        signal_strength = min(0.5, max(0.3, overall_score))  # 0.3 to 0.5 strength
+                    # Generate signal based on sentiment score with enhanced SHORT detection and improved neutral handling
+                    if overall_score >= 0.05:  # Lower positive sentiment threshold
+                        signal_strength = min(0.5, max(0.2, overall_score))  # Adjust strength based on score
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': 'BUY',
@@ -459,14 +506,25 @@ class ContinuousRebalancer:
                             'has_earnings': False,
                             'sentiment_score': overall_score  # Include raw score for further analysis
                         })
-                    elif overall_score <= -0.3:  # Moderate negative sentiment for regular SELL
-                        signal_strength = min(0.6, abs(overall_score))
+                    elif overall_score <= -0.05:  # Lower negative sentiment threshold for SELL signals
+                        signal_strength = min(0.6, max(0.2, abs(overall_score)))  # Adjust strength based on score
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': 'SELL',
                             'strength': signal_strength,
                             'confidence': confidence,
                             'reasoning': f"Negative sentiment ({overall_score:.2f}), Multiple data sources",
+                            'timestamp': datetime.now(),
+                            'has_earnings': False,
+                            'sentiment_score': overall_score
+                        })
+                    elif abs(overall_score) < 0.05:  # Very neutral sentiment - generate weak HOLD signals for RL
+                        sentiment_signals.append({
+                            'symbol': symbol,
+                            'signal': 'HOLD',
+                            'strength': 0.1,  # Very weak signal strength
+                            'confidence': confidence,
+                            'reasoning': f"Neutral sentiment ({overall_score:.2f}), Multiple data sources",
                             'timestamp': datetime.now(),
                             'has_earnings': False,
                             'sentiment_score': overall_score
@@ -525,15 +583,21 @@ class ContinuousRebalancer:
             self.results_history.pop(0)
     
     def _calculate_next_run_delay(self, success: bool) -> int:
-        """Calculate minutes to wait before next run."""
+        """Calculate minutes to wait before next run (crypto-aware)."""
         try:
+            from config.settings import settings, get_crypto_pairs
+            has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
             market_open = alpaca_client.is_market_open()
         except:
+            has_crypto = False
             market_open = True  # Default to market hours timing if can't check
         
         if success:
-            # Normal intervals based on market hours
-            if market_open:
+            # With crypto enabled: maintain standard intervals 24/7
+            if has_crypto:
+                return self.standard_interval_minutes
+            # Without crypto: use market-based intervals
+            elif market_open:
                 return self.standard_interval_minutes
             else:
                 return self.after_hours_interval_minutes
@@ -560,6 +624,15 @@ class ContinuousRebalancer:
             
             if has_crypto:
                 logger.info(f"📈 Market status: Stock {'Open' if market_open else 'Closed'}, Crypto: Always Open")
+                
+                # Initialize crypto data streams
+                crypto_pairs = get_crypto_pairs()
+                logger.info(f"🚀 Starting crypto data streams for: {', '.join(crypto_pairs)}")
+                try:
+                    await crypto_collector.start_real_time_streams(crypto_pairs)
+                    logger.info("✅ Crypto data streams initialized successfully")
+                except Exception as e:
+                    logger.warning(f"⚠️ Crypto data streams initialization failed: {e}")
             else:
                 logger.info(f"📈 Market status: {'Open' if market_open else 'Closed'}")
             
