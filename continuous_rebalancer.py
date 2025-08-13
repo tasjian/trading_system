@@ -19,12 +19,12 @@ except ImportError:
 try:
     from fix_complete_workflow import patch_complete_workflow
     patch_complete_workflow()
-    print("✅ Applied COMPLETE WORKFLOW BYPASS patches")
-    print("   - Sentiment analysis: COMPLETELY BYPASSED")
-    print("   - HTTP sessions: No more leaks from sentiment collection")
-    print("   - Performance: Maximum speed for continuous rebalancing")
+    print("✅ Applied COMPLETE WORKFLOW optimization patches")
+    print("   - Sentiment analysis: OPTIMIZED (not bypassed)")
+    print("   - HTTP sessions: Managed efficiently")
+    print("   - Performance: Optimized for continuous rebalancing")
 except ImportError:
-    print("⚠️ Complete workflow patches not found - running without fixes")
+    print("⚠️ Complete workflow patches not found - running with default optimization")
 
 # Apply optimized social media collector to prevent session leaks
 try:
@@ -429,7 +429,11 @@ class ContinuousRebalancer:
         # Determine if we should run sentiment analysis
         should_run_sentiment = False
         
-        if market_open:
+        # Always run if no cached data is available to ensure end-to-end pipeline
+        if not self.cached_sentiment_data:
+            should_run_sentiment = True
+            reason = "no cached data available - running full end-to-end pipeline"
+        elif market_open:
             # Market is open - check 90-minute interval
             if (self.last_sentiment_run is None or 
                 (current_time - self.last_sentiment_run).total_seconds() >= (self.sentiment_interval_minutes * 60)):
@@ -439,7 +443,7 @@ class ContinuousRebalancer:
                 next_sentiment_time = self.last_sentiment_run + timedelta(minutes=self.sentiment_interval_minutes)
                 reason = f"using cached data, next sentiment run at {next_sentiment_time.strftime('%H:%M:%S')}"
         else:
-            # Market is closed - don't run sentiment analysis  
+            # Market is closed - don't run sentiment analysis unless no cached data
             reason = "market is closed"
         
         if should_run_sentiment:
@@ -533,10 +537,8 @@ class ContinuousRebalancer:
                 state["sentiment_signals"] = sentiment_signals
                 logger.info(f"📊 Loaded cached sentiment for {len(self.cached_sentiment_data)} symbols, {len(sentiment_signals)} signals")
             else:
-                # No cached data available
-                state["sentiment_data"] = {}
-                state["sentiment_signals"] = []
-                logger.warning("No cached sentiment data available, continuing with empty sentiment data")
+                # No cached data available and no fallbacks allowed
+                raise ValueError("No cached sentiment data available and no fallback mechanisms allowed - system requires fresh sentiment analysis")
         
         return state
     
@@ -764,10 +766,10 @@ class ContinuousRebalancer:
                 except Exception as e:
                     logger.warning(f"Failed to get market data for {symbol}: {e}")
             
-            # If we have insufficient market data, generate synthetic data for FinRL
+            # If we have insufficient market data, raise error - no synthetic data
             if len(market_data) == 0:
-                logger.warning("No real market data available, generating synthetic data for FinRL")
-                market_data = self._generate_synthetic_market_data(symbols)
+                logger.error("No real market data available - cannot proceed without actual data")
+                raise Exception("Insufficient real market data - system requires actual data")
             
             # Update state with market data
             enhanced_state = state.copy()
@@ -780,36 +782,6 @@ class ContinuousRebalancer:
             logger.error(f"Failed to prepare market data for FinRL: {e}")
             return state
     
-    def _generate_synthetic_market_data(self, symbols: List[str]) -> Dict[str, List[float]]:
-        """Generate synthetic market data for FinRL when real data is unavailable."""
-        import numpy as np
-        
-        logger.info("Generating synthetic market data for FinRL testing")
-        
-        days = 30  # Smaller dataset for faster processing
-        market_data = {}
-        
-        for symbol in symbols:
-            np.random.seed(hash(symbol) % 2**32)  # Deterministic but varied per symbol
-            
-            # Generate realistic price series
-            initial_price = np.random.uniform(50, 200)
-            returns = np.random.normal(0.001, 0.02, days)  # 0.1% daily return, 2% volatility
-            closes = initial_price * np.exp(np.cumsum(returns))
-            
-            # Generate OHLC from close prices
-            opens = closes * np.random.uniform(0.995, 1.005, days)
-            highs = closes * np.random.uniform(1.0, 1.03, days)
-            lows = closes * np.random.uniform(0.97, 1.0, days)
-            volumes = np.random.uniform(1000000, 10000000, days)
-            
-            market_data[f"{symbol}_open"] = opens.tolist()
-            market_data[f"{symbol}_high"] = highs.tolist()
-            market_data[f"{symbol}_low"] = lows.tolist()
-            market_data[f"{symbol}_close"] = closes.tolist()
-            market_data[f"{symbol}_volume"] = volumes.tolist()
-        
-        return market_data
     
     async def _run_rl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """

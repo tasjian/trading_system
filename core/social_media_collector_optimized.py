@@ -24,6 +24,7 @@ import asyncpraw
 import tweepy
 
 from config.settings import settings
+from utils.connection_pool import connection_pool
 
 logger = logging.getLogger(__name__)
 
@@ -94,31 +95,31 @@ class FastSessionManager:
     """Efficient HTTP session manager with cleanup."""
     
     def __init__(self, timeout: int = 15):
-        self._session: Optional[aiohttp.ClientSession] = None
         self.timeout = aiohttp.ClientTimeout(total=timeout)
+        self._session_name = f"reddit_collector_{id(self)}"
         self._closed = False
     
-    @property
-    def session(self) -> aiohttp.ClientSession:
-        """Get or create session."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=self.timeout)
-            self._closed = False
-        return self._session
+    async def get_session(self) -> aiohttp.ClientSession:
+        """Get session from connection pool."""
+        return await connection_pool.get_async_session(
+            name=self._session_name,
+            timeout=self.timeout
+        )
     
     async def get(self, url: str, **kwargs):
         """Make GET request with automatic cleanup."""
         try:
-            async with self.session.get(url, **kwargs) as response:
+            session = await self.get_session()
+            async with session.get(url, **kwargs) as response:
                 return await response.json() if response.status == 200 else None
         except Exception as e:
             logger.debug(f"Request failed: {e}")
             return None
     
     async def cleanup(self):
-        """Clean up session."""
-        if self._session and not self._session.closed and not self._closed:
-            await self._session.close()
+        """Clean up session via connection pool."""
+        if not self._closed:
+            await connection_pool.close_session(self._session_name)
             self._closed = True
 
 class OptimizedRedditCollector:

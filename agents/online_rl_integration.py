@@ -197,14 +197,24 @@ class OnlineRLAgent:
                                      portfolio_value: float) -> List[TradingSignal]:
         """Generate trading signals using the online RL system."""
         
+        logger.info(f"🔄 RL signal generation started for {len(self.symbols)} symbols")
+        logger.debug(f"📊 Market data keys: {list(market_data.keys())}")
+        logger.debug(f"💰 Portfolio value: {portfolio_value}")
+        logger.debug(f"📈 Portfolio positions: {list(portfolio_data.keys())}")
+        
         if not self.initialized:
+            logger.info("🚀 Initializing RL system...")
             await self.initialize_system()
+            logger.info(f"✅ RL system initialized: {self.initialized}")
         
         try:
             # Convert to RL state
             current_state = self.convert_market_data_to_state(market_data, portfolio_data)
+            logger.debug(f"🔢 RL state vector shape: {current_state.shape}, values: {current_state[:10]}...")
+            
             market_metadata = self.extract_market_metadata(market_data)
             market_metadata['portfolio_value'] = portfolio_value
+            logger.debug(f"📋 Market metadata: {market_metadata}")
             
             # Calculate reward using unified reward calculator
             previous_reward = 0.0
@@ -228,6 +238,7 @@ class OnlineRLAgent:
                 previous_reward = 0.01 if portfolio_value > 0 else 0.0
             
             # Process market step with RL system
+            logger.debug(f"⚡ Processing market step with reward: {previous_reward:.4f}")
             action, action_info = await self.system.process_market_step(
                 market_state=current_state,
                 market_data=market_metadata,
@@ -235,14 +246,21 @@ class OnlineRLAgent:
                 previous_reward=previous_reward,
                 deterministic=False  # Allow exploration in live trading
             )
+            logger.debug(f"🎯 RL action shape: {action.shape if action is not None else 'None'}, action_info: {action_info}")
             
-            # Convert RL actions to trading signals
-            signals = self._convert_actions_to_signals(
-                action, 
-                action_info, 
-                market_data, 
-                portfolio_data
-            )
+            # Convert RL actions to trading signals with safety checks
+            if action is not None and len(action) > 0:
+                logger.debug(f"🔄 Converting {len(action)} actions to signals...")
+                signals = self._convert_actions_to_signals(
+                    action, 
+                    action_info, 
+                    market_data, 
+                    portfolio_data
+                )
+                logger.info(f"📊 Generated {len(signals)} trading signals from RL actions")
+            else:
+                logger.warning("❌ RL system returned empty or None actions, using empty signals")
+                signals = []
             
             # Create trade metrics for next reward calculation
             self.last_trade_metrics = self._create_trade_metrics(
@@ -261,10 +279,14 @@ class OnlineRLAgent:
                        f"uncertainty={action_info['uncertainty']:.3f}, "
                        f"updates={stats['total_updates']}")
             
+            logger.info(f"✅ RL signal generation completed: {len(signals)} signals")
+            for i, signal in enumerate(signals[:3]):  # Log first 3 signals for debug
+                logger.debug(f"📋 Signal {i+1}: {signal.symbol} {signal.action} {signal.quantity:.2f} (conf: {signal.confidence:.2f})")
+            
             return signals
             
         except Exception as e:
-            logger.error(f"❌ RL signal generation failed: {e}")
+            logger.error(f"❌ RL signal generation failed: {e}", exc_info=True)
             return []
     
     def _convert_actions_to_signals(self, 
@@ -274,27 +296,135 @@ class OnlineRLAgent:
                                   portfolio_data: Dict[str, Any]) -> List[TradingSignal]:
         """Convert RL actions to trading signals."""
         
+        logger.debug(f"🔄 Converting actions to signals: shape={actions.shape if actions is not None else 'None'}")
+        
+        # Input validation
+        if actions is None:
+            logger.warning("❌ Actions array is None, returning empty signals")
+            return []
+        
+        # Ensure actions is a numpy array
+        if not isinstance(actions, np.ndarray):
+            try:
+                actions = np.array(actions, dtype=np.float32)
+            except (ValueError, TypeError) as e:
+                logger.error(f"Cannot convert actions to numpy array: {e}")
+                return []
+        
+        # Enhanced action dimension validation and handling
+        expected_dim = len(self.symbols)
+        actual_dim = len(actions)
+        
+        if actual_dim != expected_dim:
+            logger.warning(f"Action dimension mismatch: got {actual_dim}, expected {expected_dim}")
+            
+            if actual_dim < expected_dim:
+                # Pad with zeros if actions array is too short
+                if actual_dim == 1:
+                    # Special case: broadcast single action to all symbols
+                    single_action = actions[0]
+                    actions = np.full(expected_dim, single_action, dtype=np.float32)
+                    logger.info(f"Broadcasting single action {single_action} to {expected_dim} dimensions")
+                else:
+                    # Pad with zeros
+                    padded_actions = np.zeros(expected_dim, dtype=np.float32)
+                    padded_actions[:actual_dim] = actions
+                    actions = padded_actions
+                    logger.info(f"Padded actions array from {actual_dim} to {expected_dim} dimensions")
+            else:
+                # Truncate if too long
+                actions = actions[:expected_dim]
+                logger.info(f"Truncated actions array from {actual_dim} to {expected_dim} dimensions")
+        
+        # Ensure actions is still a numpy array after modifications
+        actions = np.asarray(actions, dtype=np.float32)
+        
         signals = []
-        action_threshold = 0.1  # Minimum action magnitude to generate signal
+        action_threshold = 0.05  # Balanced threshold - sensitive but avoids noise
+        logger.debug(f"🎯 Action threshold: {action_threshold}, processing {len(self.symbols)} symbols")
         
         for i, symbol in enumerate(self.symbols):
             if i >= len(actions):
                 continue
                 
-            action_value = actions[i]
+            # Ensure action_value is a Python scalar (not numpy array element)
+            try:
+                action_element = actions[i]
+                
+                # Enhanced robust numpy scalar extraction with better error handling
+                if isinstance(action_element, np.ndarray):
+                    if action_element.size == 1:
+                        # Single element array - extract with item() or direct indexing
+                        try:
+                            action_value = float(action_element.item())
+                        except (ValueError, AttributeError):
+                            # Fallback to direct indexing if item() fails
+                            action_value = float(action_element.flatten()[0])
+                    elif action_element.size == 0:
+                        # Empty array - use zero
+                        action_value = 0.0
+                        logger.debug(f"Empty array for {symbol}, using 0.0")
+                    else:
+                        # Multi-element array - use first element
+                        action_value = float(action_element.flatten()[0])
+                        logger.debug(f"Multi-element array for {symbol}, using first element: {action_value}")
+                elif hasattr(action_element, 'item') and callable(getattr(action_element, 'item')):
+                    # Numpy scalar with item() method
+                    try:
+                        action_value = float(action_element.item())
+                    except (ValueError, RuntimeError) as item_error:
+                        # Handle "can only convert an array of size 1" error
+                        logger.debug(f"item() failed for {symbol}: {item_error}, trying alternative extraction")
+                        if hasattr(action_element, 'shape') and len(action_element.shape) == 0:
+                            # 0-dimensional array
+                            action_value = float(action_element)
+                        else:
+                            # Try flattening and taking first element
+                            action_value = float(np.asarray(action_element).flatten()[0])
+                elif isinstance(action_element, (int, float, np.integer, np.floating)):
+                    # Regular Python or numpy scalar
+                    action_value = float(action_element)
+                else:
+                    # Enhanced fallback for other types
+                    try:
+                        # Try direct conversion first
+                        action_value = float(action_element)
+                    except (ValueError, TypeError):
+                        try:
+                            # Try numpy conversion
+                            action_value = float(np.asarray(action_element).item())
+                        except (ValueError, TypeError, AttributeError):
+                            logger.warning(f"Cannot convert action element to float for {symbol}: {type(action_element)}, using 0.0")
+                            action_value = 0.0
+                
+                # Validate the action value is finite
+                if not np.isfinite(action_value):
+                    logger.warning(f"Non-finite action value for {symbol}: {action_value}, using 0.0")
+                    action_value = 0.0
+                    
+            except (ValueError, TypeError, AttributeError, IndexError) as e:
+                logger.error(f"Cannot extract action value for {symbol}: {e}, using 0.0")
+                # Use fallback value instead of skipping
+                action_value = 0.0
             
-            # Skip if action is too small
+            # Skip if action is too small (now safe from array ambiguity)
             if abs(action_value) < action_threshold:
+                logger.debug(f"🚫 Skipping {symbol}: action {action_value:.4f} below threshold {action_threshold}")
                 continue
+            
+            logger.debug(f"⚡ Processing {symbol}: action={action_value:.4f}")
             
             # Get current position
             current_position = portfolio_data.get(symbol, {}).get('quantity', 0.0)
             current_price = market_data.get(symbol, {}).get('price', 0.0)
             
+            logger.debug(f"📊 {symbol}: position={current_position:.2f}, price={current_price:.2f}")
+            
             if current_price <= 0:
+                logger.debug(f"❌ Skipping {symbol}: invalid price {current_price}")
                 continue
             
-            # Determine action type and quantity
+            # Determine action type and quantity (action_value is now guaranteed to be a scalar)
             if action_value > 0:  # Buy signal
                 action_type = 'buy'
                 # Calculate position size based on action magnitude and portfolio constraints
@@ -317,7 +447,10 @@ class OnlineRLAgent:
                 
             # Skip if quantity is too small
             if quantity < 0.01:  # Minimum meaningful quantity
+                logger.debug(f"❌ Skipping {symbol}: quantity {quantity:.4f} too small")
                 continue
+            
+            logger.debug(f"✅ Creating signal for {symbol}: {action_type} {quantity:.2f} shares")
             
             # Create signal
             confidence = min(0.95, abs(action_value) + action_info.get('uncertainty', 0.0))
@@ -338,6 +471,7 @@ class OnlineRLAgent:
             
             signals.append(signal)
             
+        logger.info(f"✅ Converted actions to {len(signals)} trading signals")
         return signals
     
     def record_execution_result(self, 

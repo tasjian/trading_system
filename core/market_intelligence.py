@@ -17,7 +17,6 @@ import aiohttp
 import logging
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -30,6 +29,7 @@ warnings.filterwarnings('ignore')
 from config.settings import settings, is_crypto_symbol
 from .llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
 from .earnings_scraper import EarningsCallScraper
+from tools.alpaca_market_data import fetch_stock_prices, fetch_stock_history, get_technical_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -184,31 +184,25 @@ class UnifiedMarketIntelligence:
     async def _get_price_fallback(self, symbol: str) -> Optional[float]:
         """Fallback to Yahoo Finance with multiple methods."""
         try:
-            ticker = yf.Ticker(symbol)
+            # Use utility function for price fetching
+            prices = fetch_stock_prices([symbol])
+            if symbol in prices:
+                return prices[symbol]
             
-            # Try current data first
-            try:
-                current_data = ticker.history(period="1d", interval="1m")
-                if not current_data.empty:
-                    return float(current_data['Close'].iloc[-1])
-            except:
-                pass
+            # If utility function failed, try fallback with historical data
+            hist = fetch_stock_history(symbol, period="1d", interval="1m")
+            if hist is not None and not hist.empty:
+                return float(hist['Close'].iloc[-1])
             
-            # Try daily data
-            try:
-                daily_data = ticker.history(period="2d")
-                if not daily_data.empty:
-                    return float(daily_data['Close'].iloc[-1])
-            except:
-                pass
+            # Try regular daily data
+            hist = fetch_stock_history(symbol, period="2d")
+            if hist is not None and not hist.empty:
+                return float(hist['Close'].iloc[-1])
             
-            # Try info dict
-            try:
-                info = ticker.info
-                if 'currentPrice' in info and info['currentPrice']:
-                    return float(info['currentPrice'])
-            except:
-                pass
+            # Try info
+            info = fetch_stock_info(symbol)
+            if info and 'currentPrice' in info and info['currentPrice']:
+                return float(info['currentPrice'])
                 
         except Exception as e:
             logger.debug(f"Yahoo Finance error for {symbol}: {e}")
@@ -291,11 +285,41 @@ class UnifiedMarketIntelligence:
     async def _analyze_technical(self, symbol: str, current_price: float) -> Optional[float]:
         """Technical analysis component."""
         try:
-            # Get historical data
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="3mo")
+            # Use utility function for technical indicators
+            indicators = get_technical_indicators(symbol, period="3mo")
+            if indicators:
+                score = 0.0
+                factors = 0
+                
+                # Moving averages
+                if indicators.get("above_ma_20") is not None:
+                    factors += 1
+                    if indicators["above_ma_20"]:
+                        score += 0.3
+                    else:
+                        score -= 0.1
+                
+                if indicators.get("above_ma_50") is not None:
+                    factors += 1
+                    if indicators["above_ma_50"]:
+                        score += 0.4
+                    else:
+                        score -= 0.1
+                
+                # RSI
+                if indicators.get("rsi") is not None:
+                    factors += 1
+                    rsi = indicators["rsi"]
+                    if rsi < 30:
+                        score += 0.3  # Oversold
+                    elif rsi > 70:
+                        score -= 0.3  # Overbought
+                
+                return score / factors if factors > 0 else 0.0
             
-            if hist.empty or len(hist) < 20:
+            # Fallback to historical data if indicators failed
+            hist = fetch_stock_history(symbol, period="3mo")
+            if hist is None or hist.empty or len(hist) < 20:
                 return None
             
             score = 0.0
@@ -369,11 +393,10 @@ class UnifiedMarketIntelligence:
                 except Exception as e:
                     logger.debug(f"FMP fundamental error: {e}")
             
-            # Fallback to Yahoo Finance
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            
-            return self._score_fundamentals(info)
+            # Fallback to Yahoo Finance using utility function
+            info = fetch_stock_info(symbol)
+            if info:
+                return self._score_fundamentals(info)
             
         except Exception as e:
             logger.warning(f"Fundamental analysis error for {symbol}: {e}")
@@ -458,10 +481,8 @@ class UnifiedMarketIntelligence:
     def _fallback_sentiment(self, symbol: str) -> float:
         """Fallback sentiment based on price momentum."""
         try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1mo")
-            
-            if hist.empty or len(hist) < 5:
+            hist = fetch_stock_history(symbol, period="1mo")
+            if hist is None or hist.empty or len(hist) < 5:
                 return 0.0
             
             # Simple momentum-based sentiment
@@ -505,10 +526,8 @@ class UnifiedMarketIntelligence:
     async def _analyze_market_structure(self, symbol: str) -> Optional[float]:
         """Market structure and momentum analysis."""
         try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="6mo")
-            
-            if hist.empty or len(hist) < 50:
+            hist = fetch_stock_history(symbol, period="6mo")
+            if hist is None or hist.empty or len(hist) < 50:
                 return None
             
             score = 0.0
@@ -696,14 +715,12 @@ class UnifiedMarketIntelligence:
         """Crypto-specific momentum analysis with 24/7 market patterns."""
         try:
             # Get extended historical data for crypto (24/7 market)
-            import yfinance as yf
             yf_symbol = self._convert_crypto_symbol_for_yf(symbol)
             
             if yf_symbol:
-                ticker = yf.Ticker(yf_symbol)
-                hist = ticker.history(period='7d', interval='1h')  # 7 days of hourly data
+                hist = fetch_stock_history(yf_symbol, period='7d', interval='1h')  # 7 days of hourly data
                 
-                if len(hist) >= 24:  # At least 24 hours of data
+                if hist is not None and len(hist) >= 24:  # At least 24 hours of data
                     prices = hist['Close']
                     volumes = hist['Volume']
                     

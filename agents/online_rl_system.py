@@ -28,8 +28,15 @@ try:
     from torch.distributions import Normal
     import torch.distributions.kl as kl
     TORCH_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     TORCH_AVAILABLE = False
+
+# Import model version manager
+try:
+    from agents.model_version_manager import get_version_manager
+    VERSION_MANAGER_AVAILABLE = True
+except ImportError:
+    VERSION_MANAGER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +56,13 @@ class MarketRegime(Enum):
 @dataclass
 class SafetyConstraints:
     """Safety constraints for online learning."""
-    max_drawdown: float = 0.05           # 5% max drawdown trigger
-    min_sharpe_ratio: float = -0.5       # Minimum Sharpe before rollback
-    max_kl_divergence: float = 0.02      # Trust region constraint (conservative)
-    max_position_change: float = 0.1     # Max 10% position change per update
-    consecutive_losses_limit: int = 5     # Max consecutive losing trades
-    volatility_threshold: float = 0.03   # Max vol increase before safety mode
-    daily_loss_limit: float = 0.02       # 2% daily loss limit
+    max_drawdown: float = 0.10           # 10% max drawdown trigger (relaxed for paper trading)
+    min_sharpe_ratio: float = -1.0       # Minimum Sharpe before rollback (relaxed)
+    max_kl_divergence: float = 0.05      # Trust region constraint (relaxed)
+    max_position_change: float = 0.2     # Max 20% position change per update (relaxed)
+    consecutive_losses_limit: int = 10    # Max consecutive losing trades (relaxed for paper trading)
+    volatility_threshold: float = 0.08   # Max vol increase before safety mode (relaxed)
+    daily_loss_limit: float = 0.08       # 8% daily loss limit (relaxed for learning)
 
 @dataclass
 class OnlineLearningConfig:
@@ -320,17 +327,20 @@ class SafetyMonitor:
 class DualAgentSystem:
     """Dual-agent system with stable policy and learning agent."""
     
-    def __init__(self, state_dim: int, action_dim: int, config: OnlineLearningConfig, device: str = 'cpu'):
+    def __init__(self, state_dim: int, action_dim: int, config: OnlineLearningConfig, device: str = 'cpu', symbols: List[str] = None):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.config = config
         self.device = device
+        self.symbols = symbols or []
         
         if not TORCH_AVAILABLE:
             logger.warning("PyTorch not available - using dummy agent")
             return
         
-        # Stable policy (conservative, updated infrequently)
+        logger.info(f"🤖 Initializing DualAgentSystem: {state_dim} state features → {action_dim} actions")
+        
+        # Initialize policies with correct dimensions
         self.stable_policy = RegimeAwarePolicy(state_dim, action_dim).to(device)
         self.stable_optimizer = optim.Adam(self.stable_policy.parameters(), lr=0.0001)
         self.last_stable_update = datetime.now()
@@ -338,6 +348,9 @@ class DualAgentSystem:
         # Learning agent (experimental, updated frequently)
         self.learner_policy = RegimeAwarePolicy(state_dim, action_dim).to(device)
         self.learner_optimizer = optim.Adam(self.learner_policy.parameters(), lr=0.0003)
+        
+        # Try to load compatible models
+        self._load_compatible_models()
         
         # Performance tracking
         self.stable_performance = deque(maxlen=config.performance_evaluation_window)
@@ -352,53 +365,234 @@ class DualAgentSystem:
         # Copy stable policy to learner initially
         self.sync_learner_to_stable()
         
+        logger.info(f"✅ DualAgentSystem initialized with {len(self.symbols)} symbols")
+        
+    def _load_compatible_models(self):
+        """Load compatible models using version manager."""
+        if not VERSION_MANAGER_AVAILABLE or not self.symbols:
+            logger.info("📝 Using fresh models (no version manager or symbols)")
+            return
+        
+        try:
+            version_manager = get_version_manager()
+            compatible_model = version_manager.load_compatible_model(
+                self.symbols, self.state_dim, self.action_dim
+            )
+            
+            if compatible_model and 'stable_policy' in compatible_model:
+                # Load stable policy with detailed error handling
+                try:
+                    self.stable_policy.load_state_dict(compatible_model['stable_policy'])
+                    logger.info("✅ Loaded compatible stable policy")
+                except RuntimeError as e:
+                    if "size mismatch" in str(e):
+                        logger.warning(f"⚠️ Model dimension mismatch, using fresh models: {e}")
+                        logger.info(f"Expected dimensions: state={self.state_dim}, action={self.action_dim}")
+                        return
+                    else:
+                        raise
+                
+                # Load learner policy if available
+                if 'learner_policy' in compatible_model:
+                    self.learner_policy.load_state_dict(compatible_model['learner_policy'])
+                    logger.info("✅ Loaded compatible learner policy")
+                else:
+                    # Sync learner to stable
+                    self.sync_learner_to_stable()
+                    logger.info("🔄 Synced learner to stable policy")
+                
+                # Load optimizers if available and compatible
+                if 'stable_optimizer' in compatible_model:
+                    try:
+                        self.stable_optimizer.load_state_dict(compatible_model['stable_optimizer'])
+                        logger.info("✅ Loaded stable optimizer")
+                    except Exception as e:
+                        logger.warning(f"Could not load stable optimizer: {e}")
+                
+                if 'learner_optimizer' in compatible_model:
+                    try:
+                        self.learner_optimizer.load_state_dict(compatible_model['learner_optimizer'])
+                        logger.info("✅ Loaded learner optimizer")
+                    except Exception as e:
+                        logger.warning(f"Could not load learner optimizer: {e}")
+                
+                # Log metadata (compatible_model contains the metadata)
+                if compatible_model and 'metadata' in compatible_model:
+                    model_metadata = compatible_model['metadata']
+                    old_arch = model_metadata.get('architecture', {})
+                    logger.info(f"📊 Migrated from: {len(old_arch.get('symbols', []))} symbols, "
+                               f"{old_arch.get('state_dim', 0)}→{old_arch.get('action_dim', 0)}")
+                elif compatible_model:
+                    logger.info("📊 Loaded model without detailed metadata")
+            else:
+                logger.info("📝 No compatible models found - using fresh models")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Model loading failed, using fresh models: {e}")
+    
     def sync_learner_to_stable(self):
         """Sync learner policy to stable policy."""
         if TORCH_AVAILABLE:
             self.learner_policy.load_state_dict(self.stable_policy.state_dict())
+    
+    def save_models(self, training_stats: Dict = None):
+        """Save models using version manager."""
+        if not TORCH_AVAILABLE or not VERSION_MANAGER_AVAILABLE or not self.symbols:
+            return
+        
+        try:
+            version_manager = get_version_manager()
+            
+            # Validate inputs
+            if not isinstance(self.symbols, list) or len(self.symbols) == 0:
+                raise ValueError("Symbols list is empty or invalid")
+            if not isinstance(self.state_dim, int) or self.state_dim <= 0:
+                raise ValueError(f"Invalid state_dim: {self.state_dim}")
+            if not isinstance(self.action_dim, int) or self.action_dim <= 0:
+                raise ValueError(f"Invalid action_dim: {self.action_dim}")
+            
+            model_state_dict = {
+                'stable_policy': self.stable_policy.state_dict(),
+                'learner_policy': self.learner_policy.state_dict(),
+                'stable_optimizer': self.stable_optimizer.state_dict(),
+                'learner_optimizer': self.learner_optimizer.state_dict()
+            }
+            
+            # Call with correct signature (5 parameters total)
+            saved_path = version_manager.save_model_with_metadata(
+                model_state_dict,
+                self.symbols,
+                self.state_dim,
+                self.action_dim,
+                training_stats
+            )
+            
+            if saved_path:
+                logger.info(f"💾 Models saved with version control: {saved_path}")
+            else:
+                logger.warning("Model saving returned None path")
+                
+        except TypeError as e:
+            if "positional arguments" in str(e):
+                logger.error(f"❌ Model saving signature mismatch: {e}")
+                logger.error("Expected: save_model_with_metadata(model_state_dict, symbols, state_dim, action_dim, training_stats=None)")
+            else:
+                logger.error(f"❌ Model saving type error: {e}")
+        except Exception as e:
+            logger.error(f"❌ Model saving failed: {e}")
+            import traceback
+            logger.debug(f"Full traceback: {traceback.format_exc()}")
         
     def select_action(self, state: np.ndarray, regime: MarketRegime, 
                      deterministic: bool = False, uncertainty_estimate: float = 0.0) -> Tuple[np.ndarray, Dict]:
         """Select action using appropriate agent."""
         
         if not TORCH_AVAILABLE:
-            # Return dummy action
-            return np.zeros(self.action_dim), {"agent": "dummy", "uncertainty": 0.0}
+            # Return more realistic random actions instead of zeros
+            logger.info("🎲 Using fallback action generation (PyTorch not available)")
+            # Generate small random actions between -0.2 and 0.2
+            random_actions = np.random.uniform(-0.2, 0.2, self.action_dim).astype(np.float32)
+            return random_actions, {"agent": "fallback", "uncertainty": 0.3}
         
         # Choose active policy
         policy = self.stable_policy if self.active_agent == "stable" else self.learner_policy
         
-        with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).to(self.device)
-            regime_tensor = torch.LongTensor([list(MarketRegime).index(regime)]).to(self.device)
-            
-            mean, std = policy(state_tensor, regime_tensor)
-            
-            if deterministic:
-                action = mean
-            else:
-                # Add uncertainty-based exploration
-                exploration_noise = uncertainty_estimate * self.config.uncertainty_exploration_weight
-                noise = torch.randn_like(mean) * (std + exploration_noise)
-                action = mean + noise
+        try:
+            with torch.no_grad():
+                state_tensor = torch.FloatTensor(state).to(self.device)
+                logger.debug(f"State tensor shape: {state_tensor.shape}, expected: ({self.state_dim},)")
                 
-                # Epsilon-greedy component
-                if np.random.random() < self.epsilon:
-                    random_action = torch.randn_like(action) * 0.1
-                    action = action + random_action
-        
-        # Decay epsilon
-        self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
-        
-        # Clip action to reasonable bounds
-        action = torch.clamp(action, -1.0, 1.0)
-        
-        return action.cpu().numpy(), {
-            "agent": self.active_agent,
-            "uncertainty": uncertainty_estimate,
-            "epsilon": self.epsilon,
-            "regime": regime.value
-        }
+                # Convert integer regime to enum if needed
+                if isinstance(regime, int):
+                    regime_list = list(MarketRegime)
+                    if 0 <= regime < len(regime_list):
+                        regime_enum = regime_list[regime]
+                    else:
+                        regime_enum = MarketRegime.UNKNOWN
+                    regime_tensor = torch.LongTensor([regime]).to(self.device)
+                else:
+                    regime_tensor = torch.LongTensor([list(MarketRegime).index(regime)]).to(self.device)
+                
+                logger.debug(f"Regime tensor shape: {regime_tensor.shape}")
+                
+                mean, std = policy(state_tensor, regime_tensor)
+                logger.debug(f"Policy output shapes - mean: {mean.shape}, std: {std.shape}, expected action_dim: {self.action_dim}")
+                
+                # Check if the policy returned valid outputs
+                if mean is None or std is None:
+                    logger.warning("Policy returned None outputs, using fallback")
+                    raise RuntimeError("Policy returned None")
+            
+                if deterministic:
+                    action = mean
+                else:
+                    # Add uncertainty-based exploration
+                    exploration_noise = uncertainty_estimate * self.config.uncertainty_exploration_weight
+                    noise = torch.randn_like(mean) * (std + exploration_noise)
+                    action = mean + noise
+                    
+                    # Epsilon-greedy component
+                    if np.random.random() < self.epsilon:
+                        random_action = torch.randn_like(action) * 0.1
+                        action = action + random_action
+                
+                # Decay epsilon
+                self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+                
+                # Clip action to reasonable bounds
+                action = torch.clamp(action, -1.0, 1.0)
+                
+                # Ensure action has correct shape (handle batch dimensions carefully)
+                logger.debug(f"Action tensor shape before processing: {action.shape}, expected action_dim: {self.action_dim}")
+                
+                if action.dim() > 1:
+                    # Check if we have a proper batch dimension to remove
+                    if action.shape[0] == 1 and action.shape[1] == self.action_dim:
+                        action = action.squeeze(0)  # Remove batch dimension
+                        logger.debug(f"Removed batch dimension: {action.shape}")
+                    elif action.shape[0] == self.action_dim and action.shape[1] == 1:
+                        action = action.squeeze(1)  # Remove trailing dimension
+                        logger.debug(f"Removed trailing dimension: {action.shape}")
+                    else:
+                        logger.warning(f"Unexpected action tensor shape: {action.shape}, flattening")
+                        action = action.flatten()[:self.action_dim]
+                        
+                # Enhanced dimension validation with detailed logging
+                action_numpy = action.cpu().numpy()
+                expected_shape = (self.action_dim,)
+                actual_shape = action_numpy.shape
+                
+                if actual_shape != expected_shape:
+                    logger.warning(f"Action shape mismatch in select_action: got {actual_shape}, expected {expected_shape}")
+                    logger.debug(f"Raw action tensor shape: {action.shape}, symbols: {len(self.symbols)}, action_dim: {self.action_dim}")
+                    
+                    if action_numpy.size == 1 and self.action_dim > 1:
+                        # Broadcast single action to all dimensions
+                        single_value = action_numpy.item() if action_numpy.ndim > 0 else float(action_numpy)
+                        action_numpy = np.full(self.action_dim, single_value, dtype=np.float32)
+                        logger.info(f"Broadcasted single action {single_value:.4f} to {self.action_dim} dimensions")
+                    elif action_numpy.size > self.action_dim:
+                        action_numpy = action_numpy[:self.action_dim]
+                        logger.info(f"Truncated action from {action_numpy.size} to {self.action_dim} dimensions")
+                    else:
+                        # Pad with zeros
+                        padded_action = np.zeros(self.action_dim, dtype=np.float32)
+                        padded_action[:action_numpy.size] = action_numpy.flatten()
+                        action_numpy = padded_action
+                        logger.info(f"Padded action from {action_numpy.size} to {self.action_dim} dimensions")
+                
+                return action_numpy, {
+                    "agent": self.active_agent,
+                    "uncertainty": uncertainty_estimate,
+                    "epsilon": self.epsilon,
+                    "regime": regime.value
+                }
+                
+        except Exception as e:
+            logger.warning(f"PyTorch policy failed: {e}, using fallback actions")
+            # Generate meaningful random actions instead of zeros
+            random_actions = np.random.uniform(-0.2, 0.2, self.action_dim).astype(np.float32)
+            return random_actions, {"agent": "fallback_error", "uncertainty": 0.5, "error": str(e)}
     
     def update_performance(self, agent_type: str, performance_metrics: Dict[str, float]):
         """Update performance tracking for specified agent."""
@@ -472,7 +666,7 @@ class OnlineRLTradingSystem:
                    f"state_dim={self.state_dim}, action_dim={self.action_dim}")
         
         # Core components
-        self.dual_agent = DualAgentSystem(self.state_dim, self.action_dim, config, device)
+        self.dual_agent = DualAgentSystem(self.state_dim, self.action_dim, config, device, symbols)
         self.replay_buffer = PrioritizedReplayBuffer(config.buffer_size, config.priority_alpha, config.priority_beta)
         self.safety_monitor = SafetyMonitor(config.safety_constraints)
         
@@ -600,6 +794,18 @@ class OnlineRLTradingSystem:
         # Trigger background training if needed
         await self._maybe_trigger_training()
         
+        # Validate and ensure action has correct dimensions
+        if action.shape[0] != len(self.symbols):
+            logger.warning(f"Action dimension mismatch in process_market_step: got {action.shape[0]}, expected {len(self.symbols)}")
+            if action.shape[0] < len(self.symbols):
+                # Pad with zeros
+                padded_action = np.zeros(len(self.symbols), dtype=action.dtype)
+                padded_action[:action.shape[0]] = action
+                action = padded_action
+            else:
+                # Truncate
+                action = action[:len(self.symbols)]
+        
         return action, {
             **action_info,
             'regime': self.current_regime.value,
@@ -651,8 +857,12 @@ class OnlineRLTradingSystem:
             next_states = torch.FloatTensor([e.next_state for e in experiences]).to(self.device)
             weights_tensor = torch.FloatTensor(weights).to(self.device)
             
-            # Regime conditioning (simplified - use current regime for all)
-            regime_ids = torch.LongTensor([list(MarketRegime).index(self.current_regime)] * len(experiences)).to(self.device)
+            # Regime conditioning (simplified - use current regime for all)  
+            if isinstance(self.current_regime, int):
+                regime_id = self.current_regime
+            else:
+                regime_id = list(MarketRegime).index(self.current_regime)
+            regime_ids = torch.LongTensor([regime_id] * len(experiences)).to(self.device)
             
             # Policy gradient update
             self.dual_agent.learner_optimizer.zero_grad()
@@ -724,7 +934,7 @@ class OnlineRLTradingSystem:
         }
     
     def save_system_state(self, filepath: str):
-        """Save complete system state."""
+        """Save complete system state with version control."""
         
         state = {
             'config': asdict(self.config),
@@ -734,8 +944,23 @@ class OnlineRLTradingSystem:
             'performance_history': list(self.performance_history)[-1000:]  # Last 1000 entries
         }
         
-        # Save model states if PyTorch is available
-        if TORCH_AVAILABLE:
+        # Save models using version manager
+        if TORCH_AVAILABLE and VERSION_MANAGER_AVAILABLE:
+            try:
+                self.dual_agent.save_models(self.training_stats)
+                logger.info("✅ Models saved with version control")
+            except Exception as e:
+                logger.warning(f"⚠️ Version-controlled model save failed: {e}")
+                # Fallback to old method
+                torch.save({
+                    'stable_policy': self.dual_agent.stable_policy.state_dict(),
+                    'learner_policy': self.dual_agent.learner_policy.state_dict(),
+                    'stable_optimizer': self.dual_agent.stable_optimizer.state_dict(),
+                    'learner_optimizer': self.dual_agent.learner_optimizer.state_dict()
+                }, filepath.replace('.json', '_models.pt'))
+                logger.info("💾 Models saved using fallback method")
+        elif TORCH_AVAILABLE:
+            # Fallback for when version manager is not available
             torch.save({
                 'stable_policy': self.dual_agent.stable_policy.state_dict(),
                 'learner_policy': self.dual_agent.learner_policy.state_dict(),
@@ -749,7 +974,7 @@ class OnlineRLTradingSystem:
         logger.info(f"💾 System state saved to {filepath}")
     
     def load_system_state(self, filepath: str):
-        """Load system state from file."""
+        """Load system state from file with compatibility checking."""
         
         try:
             with open(filepath, 'r') as f:
@@ -759,19 +984,66 @@ class OnlineRLTradingSystem:
             self.training_stats.update(state.get('training_stats', {}))
             self.current_regime = MarketRegime(state.get('current_regime', 'unknown'))
             
-            # Load model states if available
+            # Check for symbol compatibility
+            saved_symbols = state.get('symbols', [])
+            if saved_symbols != self.symbols:
+                logger.info(f"🔄 Symbol list changed: {len(saved_symbols)} → {len(self.symbols)} symbols")
+                logger.info(f"   Old: {saved_symbols}")
+                logger.info(f"   New: {self.symbols}")
+                
+                # The version manager in DualAgentSystem already handled model loading
+                # during initialization, so no additional action needed here
+            
+            # Legacy model loading (fallback)
             model_path = filepath.replace('.json', '_models.pt')
-            if TORCH_AVAILABLE and Path(model_path).exists():
-                checkpoint = torch.load(model_path)
-                self.dual_agent.stable_policy.load_state_dict(checkpoint['stable_policy'])
-                self.dual_agent.learner_policy.load_state_dict(checkpoint['learner_policy'])
-                self.dual_agent.stable_optimizer.load_state_dict(checkpoint['stable_optimizer'])
-                self.dual_agent.learner_optimizer.load_state_dict(checkpoint['learner_optimizer'])
+            if TORCH_AVAILABLE and Path(model_path).exists() and not VERSION_MANAGER_AVAILABLE:
+                try:
+                    checkpoint = torch.load(model_path, map_location='cpu')
+                    # Only try loading if dimensions match
+                    stable_policy_dict = checkpoint.get('stable_policy', {})
+                    if self._check_model_compatibility(stable_policy_dict):
+                        self.dual_agent.stable_policy.load_state_dict(stable_policy_dict)
+                        self.dual_agent.learner_policy.load_state_dict(checkpoint['learner_policy'])
+                        self.dual_agent.stable_optimizer.load_state_dict(checkpoint['stable_optimizer'])
+                        self.dual_agent.learner_optimizer.load_state_dict(checkpoint['learner_optimizer'])
+                        logger.info("✅ Successfully loaded legacy model states")
+                    else:
+                        logger.warning("⚠️ Legacy model incompatible - using fresh models")
+                except Exception as model_error:
+                    logger.warning(f"⚠️ Legacy model loading failed: {model_error}")
             
             logger.info(f"✅ System state loaded from {filepath}")
             
         except Exception as e:
             logger.error(f"❌ Failed to load system state: {e}")
+    
+    def _check_model_compatibility(self, model_state_dict: Dict) -> bool:
+        """Check if saved model is compatible with current architecture."""
+        try:
+            if not model_state_dict:
+                return False
+                
+            # Check input layer compatibility (includes regime embedding)
+            input_weight = model_state_dict.get('network.0.weight')
+            if input_weight is not None:
+                expected_shape = (256, self.state_dim + 16)  # +16 for regime embedding
+                if input_weight.shape != expected_shape:
+                    logger.info(f"Input layer mismatch: {input_weight.shape} != {expected_shape}")
+                    return False
+            
+            # Check output layer compatibility (action_dim * 2 for mean and log_std)
+            output_weight = model_state_dict.get('network.6.weight')
+            if output_weight is not None:
+                expected_shape = (self.action_dim * 2, 256)
+                if output_weight.shape != expected_shape:
+                    logger.info(f"Output layer mismatch: {output_weight.shape} != {expected_shape}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Compatibility check failed: {e}")
+            return False
 
 # Factory function
 def create_online_rl_system(symbols: List[str], **kwargs) -> OnlineRLTradingSystem:

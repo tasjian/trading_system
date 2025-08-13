@@ -23,6 +23,7 @@ from pathlib import Path
 import sqlite3
 
 from config.settings import settings
+from utils.connection_pool import connection_pool
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ class ProductionTwitterCollector:
     """Production-ready Twitter collector with fallback capabilities."""
     
     def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
+        self._session_name = f"twitter_collector_{id(self)}"
         self.sentiment_analyzer = FinancialSentimentAnalyzer()
         self.rapidapi_available = False
         self._test_rapidapi_availability()
@@ -177,11 +178,12 @@ class ProductionTwitterCollector:
         except Exception as e:
             logger.debug(f"RapidAPI test failed: {e} - using fallback data")
     
-    async def _ensure_session(self):
-        """Ensure aiohttp session exists."""
-        if not self.session or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=10)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+    async def get_session(self):
+        """Get session from connection pool."""
+        return await connection_pool.get_async_session(
+            name=self._session_name,
+            timeout=aiohttp.ClientTimeout(total=10)
+        )
     
     def _extract_tickers(self, text: str) -> Set[str]:
         """Extract ticker symbols with financial context."""
@@ -213,13 +215,13 @@ class ProductionTwitterCollector:
         posts = []
         queries = [f"${symbol}", f"${symbol} stock", f"{symbol} earnings"]
         
-        await self._ensure_session()
+        session = await self.get_session()
         
         for query in queries[:2]:  # Limit queries to avoid rate limits
             try:
                 params = {"query": query, "count": str(min(limit // 2, 10))}
                 
-                async with self.session.get(
+                async with session.get(
                     self.rapidapi_config["url"],
                     headers=self.rapidapi_config["headers"],
                     params=params
@@ -453,10 +455,9 @@ class ProductionTwitterCollector:
         return results
     
     async def cleanup(self):
-        """Clean up resources."""
-        if self.session and not self.session.closed:
-            await self.session.close()
-            logger.debug("Production Twitter collector session closed")
+        """Clean up resources via connection pool."""
+        await connection_pool.close_session(self._session_name)
+        logger.debug("Production Twitter collector session closed")
 
 # Global instance for easy import
 production_twitter_collector = ProductionTwitterCollector()

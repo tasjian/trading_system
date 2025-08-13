@@ -30,7 +30,7 @@ pydantic-settings>=2.0.0,<3.0.0
 python-dotenv==1.0.0
 
 # Async and Utilities
-aiohttp==3.8.2
+aiohttp>=3.8.2
 uvloop==0.19.0
 
 # Monitoring and System Info
@@ -69,6 +69,6 @@ beautifulsoup4==4.12.2  # HTML parsing for earnings transcripts
 lxml==4.9.3  # XML/HTML parsing backend
 
 # Crypto Data Sources
-websockets==12.0  # Binance WebSocket API
+websockets>=9.0,<11.0  # Binance WebSocket API
 aiofiles==23.2.0  # Async file operations
 cryptography==41.0.7  # Crypto utilities

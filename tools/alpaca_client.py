@@ -205,26 +205,10 @@ class AlpacaClient:
             except Exception as quote_error:
                 logger.warning(f"Alpaca quote failed for {symbol}: {quote_error}")
                 
-                # Fallback to yfinance for stocks
-                try:
-                    import yfinance as yf
-                    ticker = yf.Ticker(symbol)
-                    hist = ticker.history(period='1d', interval='1m')
-                    
-                    if not hist.empty:
-                        # Convert yfinance format to our expected format
-                        df = hist.reset_index()
-                        df.columns = [col.lower() for col in df.columns]
-                        df['timestamp'] = df['datetime'] if 'datetime' in df.columns else df.index
-                        
-                        logger.info(f"Got yfinance data for {symbol}: ${df.iloc[-1]['close']:.2f}")
-                        return df
-                    else:
-                        raise Exception("No yfinance data available")
-                        
-                except Exception as yf_error:
-                    logger.warning(f"YFinance fallback failed for {symbol}: {yf_error}")
-                    raise Exception(f"All market data sources failed for {symbol}")
+                # NO FALLBACKS - fail fast with clear error
+                error_msg = f"❌ CRITICAL: Alpaca data access failed for {symbol}: {quote_error}. Paper trading subscription may not support this data."
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
             
         except Exception as e:
             logger.error(f"Failed to get market data for {symbol}: {e}")
@@ -653,73 +637,11 @@ class AlpacaClient:
     
     def _get_crypto_fallback_data(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         """Get crypto data from alternative sources when Alpaca fails."""
-        import pandas as pd
-        
-        try:
-            # Try yfinance with crypto suffix conversion
-            yf_symbol = self._convert_to_yfinance_crypto_symbol(symbol)
-            if yf_symbol:
-                import yfinance as yf
-                ticker = yf.Ticker(yf_symbol)
-                
-                # Get appropriate period for crypto (24/7 data)
-                period = '1d' if limit <= 100 else '5d'
-                interval = '1m' if timeframe == '1Min' else '1h'
-                
-                hist = ticker.history(period=period, interval=interval)
-                
-                if not hist.empty:
-                    df = hist.reset_index()
-                    df.columns = [col.lower() for col in df.columns]
-                    df['timestamp'] = df['datetime'] if 'datetime' in df.columns else df.index
-                    
-                    logger.info(f"Got yfinance crypto data for {symbol} ({yf_symbol}): ${df.iloc[-1]['close']:.2f}")
-                    return df.tail(limit)
-            
-            # If yfinance fails, create synthetic data (for testing purposes)
-            logger.warning(f"Creating synthetic data for crypto {symbol}")
-            base_price = 50000 if 'BTC' in symbol else 3000 if 'ETH' in symbol else 1.0
-            
-            timestamps = pd.date_range(end=datetime.now(), periods=limit, freq='1min')
-            
-            # Add some realistic crypto volatility
-            import numpy as np
-            np.random.seed(42)  # For reproducible results
-            price_changes = np.random.normal(0, base_price * 0.001, limit)  # 0.1% volatility
-            prices = base_price + np.cumsum(price_changes)
-            volumes = np.random.uniform(1000, 10000, limit)
-            
-            df = pd.DataFrame({
-                'timestamp': timestamps,
-                'open': prices,
-                'high': prices * 1.002,
-                'low': prices * 0.998,
-                'close': prices,
-                'volume': volumes
-            })
-            
-            logger.info(f"Created synthetic crypto data for {symbol}: ${prices[-1]:.2f}")
-            return df
-            
-        except Exception as e:
-            logger.error(f"Crypto fallback data failed for {symbol}: {e}")
-            raise
+        # NO FALLBACKS - fail fast with clear error
+        error_msg = f"❌ CRITICAL: Alpaca crypto data access failed for {symbol}. Paper trading subscription may not support crypto data."
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
     
-    def _convert_to_yfinance_crypto_symbol(self, symbol: str) -> Optional[str]:
-        """Convert Alpaca crypto symbol to yfinance format."""
-        # Map common crypto pairs to yfinance format
-        crypto_mapping = {
-            'BTCUSD': 'BTC-USD',
-            'ETHUSD': 'ETH-USD', 
-            'DOGEUSD': 'DOGE-USD',
-            'LTCUSD': 'LTC-USD',
-            'BCHUSD': 'BCH-USD',
-            'LINKUSD': 'LINK-USD',
-            'UNIUSD': 'UNI-USD',
-            'AAVEUSD': 'AAVE-USD'
-        }
-        
-        return crypto_mapping.get(symbol.upper())
     
     def _is_crypto_symbol(self, symbol: str) -> bool:
         """Check if a symbol represents a cryptocurrency pair."""

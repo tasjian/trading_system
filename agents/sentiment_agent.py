@@ -22,6 +22,7 @@ from core.earnings_scraper import EarningsCallScraper, EarningsTranscript
 from core.sec_edgar_client import SECEdgarClient, SECFiling
 from core.crypto_sentiment_analyzer import crypto_sentiment_analyzer, CryptoSentimentResult
 from config.settings import settings, is_crypto_symbol
+from tools.alpaca_market_data import fetch_stock_history
 
 logger = logging.getLogger(__name__)
 
@@ -344,16 +345,13 @@ class SentimentAgent:
     async def _analyze_market_sentiment(self, symbol: str) -> Optional[SentimentAnalysis]:
         """Analyze market-based sentiment from price action and volume."""
         try:
-            import yfinance as yf
-            
-            # Add timeout for yfinance data fetch
-            ticker = yf.Ticker(symbol)
+            # Use utility function for market data fetch with timeout
             hist = await asyncio.wait_for(
-                asyncio.to_thread(ticker.history, period="1mo"),
+                asyncio.to_thread(fetch_stock_history, symbol, "1mo"),
                 timeout=5.0
             )
             
-            if hist.empty or len(hist) < 5:
+            if hist is None or hist.empty or len(hist) < 5:
                 logger.debug(f"Insufficient market data for {symbol}")
                 return None
             

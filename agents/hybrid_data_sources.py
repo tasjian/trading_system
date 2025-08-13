@@ -11,7 +11,6 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 import json
-import yfinance as yf
 from pathlib import Path
 import random
 
@@ -22,6 +21,8 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
+from tools.alpaca_market_data import fetch_stock_history
 
 logger = logging.getLogger(__name__)
 
@@ -287,11 +288,10 @@ class HistoricalDataEnhancer:
                     df = pd.read_parquet(cache_file)
                     logger.debug(f"Loaded {symbol} from cache")
                 else:
-                    # Fetch fresh data
-                    ticker = yf.Ticker(symbol)
-                    df = ticker.history(period=period, interval=interval)
+                    # Fetch fresh data using utility function
+                    df = fetch_stock_history(symbol, period=period, interval=interval)
                     
-                    if len(df) == 0:
+                    if df is None or len(df) == 0:
                         logger.warning(f"No data retrieved for {symbol}")
                         continue
                     

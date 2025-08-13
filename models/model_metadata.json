@@ -1,0 +1,71 @@
+{
+  "7c63f97dd483": {
+    "version_id": "7c63f97dd483",
+    "timestamp": "2025-08-12 07:31:28.069281",
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "GOOGL"
+    ],
+    "state_dim": 36,
+    "action_dim": 3,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "test": "value"
+    },
+    "file_path": "models/model_7c63f97dd483.pt"
+  },
+  "a049175b2be9": {
+    "version_id": "a049175b2be9",
+    "timestamp": "2025-08-12 12:35:29.891397",
+    "symbols": [
+      "XLK",
+      "IWM",
+      "SPY",
+      "XLF",
+      "QQQ"
+    ],
+    "state_dim": 60,
+    "action_dim": 5,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 0,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 0,
+      "average_return": 0.001678941195737267,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0
+    },
+    "file_path": "models/model_a049175b2be9.pt"
+  },
+  "da6eed7054fb": {
+    "version_id": "da6eed7054fb",
+    "timestamp": "2025-08-12 12:40:54.916831",
+    "symbols": [
+      "XLF",
+      "BTCUSD",
+      "IWM",
+      "QQQ",
+      "SPY",
+      "ETHUSD",
+      "XLK"
+    ],
+    "state_dim": 84,
+    "action_dim": 7,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 0,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 0,
+      "average_return": 0.0,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0
+    },
+    "file_path": "models/model_da6eed7054fb.pt"
+  }
+}

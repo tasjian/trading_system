@@ -10,10 +10,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Set, Optional, Tuple, Any
 from dataclasses import dataclass
-import yfinance as yf
 import pandas as pd
 
 from tools.alpaca_client import alpaca_client
+from tools.resilient_signal_orchestrator import get_resilient_price_signals_sync
 # SocialMediaCollector no longer directly used - using cached data instead
 from config.settings import settings, get_crypto_pairs, is_crypto_symbol
 
@@ -126,6 +126,10 @@ class StockUniverseFilter:
                     filtered_symbols.append(symbol)
                     added_count += 1
             logger.info(f"Added {added_count} watchlist symbols (dynamic discovery enabled)")
+        
+        # Step 6: No fallbacks allowed - system must find symbols through normal filtering
+        if len(filtered_symbols) == 0:
+            raise ValueError("No symbols found through normal filtering and no fallback mechanisms allowed - system requires valid price signals and market data")
         
         # Calculate summary
         filter_summary = self._calculate_filter_summary(signals)
@@ -250,99 +254,56 @@ class StockUniverseFilter:
         return signals
     
     async def _collect_price_move_signals(self, symbols: List[str]) -> List[StockSignal]:
-        """Collect signals from significant price movements."""
+        """Collect signals from significant price movements using resilient multi-source approach."""
         
         signals = []
-        logger.info(f"🔍 Checking price movements for {len(symbols)} symbols...")
-        
-        # Circuit breaker for yfinance issues
-        consecutive_errors = 0
-        max_consecutive_errors = 5
+        logger.info(f"🔍 Collecting resilient price signals for {len(symbols)} symbols...")
         
         try:
-            # Get current and previous close data with improved error handling
-            batch_size = 20  # Reduced batch size to avoid rate limits
-            for i in range(0, len(symbols), batch_size):
-                batch = symbols[i:i + batch_size]
-                
-                try:
-                    # Add delay between batches to avoid rate limiting
-                    if i > 0:
-                        await asyncio.sleep(1.0)  # 1 second delay between batches
-                    
-                    # Get recent price data with retry mechanism
-                    max_retries = 2
-                    tickers = None
-                    
-                    for retry in range(max_retries):
-                        try:
-                            tickers = yf.Tickers(' '.join(batch))
-                            break  # Success, exit retry loop
-                        except Exception as retry_error:
-                            if retry == max_retries - 1:  # Last retry
-                                logger.warning(f"Failed to fetch batch after {max_retries} retries: {retry_error}")
-                                raise retry_error
-                            else:
-                                logger.debug(f"Retry {retry + 1} for batch: {retry_error}")
-                                await asyncio.sleep(2.0)  # Wait before retry
-                    
-                    if not tickers:
-                        continue
-                    
-                    for symbol in batch:
-                        try:
-                            ticker = tickers.tickers[symbol]
-                            
-                            # Add timeout for individual ticker data
-                            hist = ticker.history(period='2d')
-                            
-                            if len(hist) >= 2:
-                                prev_close = hist['Close'].iloc[-2]
-                                curr_price = hist['Close'].iloc[-1]
-                                
-                                # Validate price data
-                                if pd.isna(prev_close) or pd.isna(curr_price) or prev_close <= 0 or curr_price <= 0:
-                                    continue
-                                
-                                price_change = (curr_price - prev_close) / prev_close
-                                
-                                if abs(price_change) >= self.price_move_threshold:
-                                    strength = min(1.0, abs(price_change) / 0.1)  # Scale to 0-1
-                                    direction = "up" if price_change > 0 else "down"
-                                    
-                                    signals.append(StockSignal(
-                                        symbol=symbol,
-                                        signal_type="price_move",
-                                        strength=strength,
-                                        description=f"{direction} {price_change:.1%}",
-                                        timestamp=datetime.now()
-                                    ))
-                        
-                        except Exception as e:
-                            logger.debug(f"Price check failed for {symbol}: {e}")
-                            continue
-                
-                except Exception as e:
-                    consecutive_errors += 1
-                    logger.warning(f"Price batch failed: {e} ({consecutive_errors}/{max_consecutive_errors})")
-                    
-                    # Circuit breaker - stop processing if too many consecutive errors
-                    if consecutive_errors >= max_consecutive_errors:
-                        logger.error(f"Circuit breaker triggered: {consecutive_errors} consecutive yfinance errors. Skipping remaining price analysis.")
-                        break
-                    continue
-                else:
-                    # Reset error counter on successful batch
-                    consecutive_errors = 0
-                
-                # Brief pause between batches
-                await asyncio.sleep(0.2)
-        
+            # Use the resilient signal orchestrator (handles multiple data sources automatically)
+            # Limit to first 50 symbols for performance
+            limited_symbols = symbols[:50]
+            
+            # Get price change signals using resilient orchestration
+            # This will automatically try Alpha Vantage, Finnhub, FMP, News API, and fallback strategies
+            price_signals = await asyncio.to_thread(
+                get_resilient_price_signals_sync, 
+                limited_symbols, 
+                self.price_move_threshold,
+                2  # Minimum 2 signals required
+            )
+            
+            # Convert to StockSignal format
+            for signal_data in price_signals:
+                signals.append(StockSignal(
+                    symbol=signal_data["symbol"],
+                    signal_type=signal_data.get("signal_type", "price_move"),
+                    strength=signal_data["strength"],
+                    description=signal_data["description"],
+                    timestamp=datetime.now()
+                ))
+            
+            logger.info(f"✅ Found {len(signals)} resilient signals using multi-source orchestration")
+            logger.info(f"Sources used: {set(s.get('data_source', 'unknown') for s in price_signals)}")
+            
         except Exception as e:
-            logger.error(f"Price move signal collection failed: {e}")
+            # The resilient orchestrator should handle all fallbacks internally
+            # If it fails here, it means all data sources are unavailable
+            error_msg = f"❌ CRITICAL: Resilient signal orchestration failed: {e} - all data sources unavailable"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
-        logger.info(f"Found {len(signals)} price movement signals")
+        # The resilient orchestrator guarantees minimum signals, but double-check
+        if len(signals) < 2:
+            error_msg = f"❌ CRITICAL: Resilient orchestrator returned insufficient signals ({len(signals)} found, minimum 2 required)"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
         return signals
+    
+    async def _generate_fallback_price_signals(self) -> List[StockSignal]:
+        """REMOVED: Fallback price signals disabled - system must use real market data only."""
+        raise RuntimeError("❌ CRITICAL: Fallback price signals disabled - system requires valid yfinance market data")
     
     async def _collect_earnings_signals(self, symbols: List[str]) -> List[StockSignal]:
         """Collect signals from recent earnings announcements."""

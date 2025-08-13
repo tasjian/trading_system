@@ -33,7 +33,7 @@ fi
 # Check Python dependencies
 echo "🔍 Checking Python environment..."
 cd "$SCRIPT_DIR"
-if ! python3 -c "import pandas, numpy, yfinance, alpaca_trade_api" 2>/dev/null; then
+if ! $(pyenv which python3) -c "import pandas, numpy, yfinance, alpaca_trade_api" 2>/dev/null; then
     echo "❌ Missing required Python packages"
     echo "   Run: pip install -r requirements.txt"
     exit 1
@@ -46,7 +46,7 @@ echo "   Or use ./stop.sh from another terminal"
 echo ""
 
 # Start with nohup for background execution
-nohup python3 "$SCRIPT_DIR/continuous_rebalancer.py" >> "$LOG_FILE" 2>&1 &
+nohup $(pyenv which python3) "$SCRIPT_DIR/continuous_rebalancer.py" >> "$LOG_FILE" 2>&1 &
 PID=$!
 
 # Save PID

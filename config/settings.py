@@ -54,18 +54,25 @@ class TradingSettings(BaseSettings):
     # Symbol Configuration
     # Use dynamic universe filtering instead of hardcoded symbols
     use_dynamic_universe: bool = Field(default=True, env="USE_DYNAMIC_UNIVERSE")
-    focus_etfs: str = Field(default="SPY,QQQ,IWM,VXX", env="FOCUS_ETFS")  # Comma-separated ETFs for testing/fallback
+    # ALGO AGENT ENHANCED: Expanded to 12 assets across asset classes for diversification
+    focus_etfs: str = Field(default="SPY,QQQ,IWM,XLF,XLK,EFA,EEM,TLT,HYG,GLD,VNQ,DBC", env="FOCUS_ETFS")  # Diversified across equities, bonds, commodities, REITs, international
     excluded_symbols: str = Field(default="", env="EXCLUDED_SYMBOLS")  # Comma-separated symbols to exclude
     
+    # Fallback watchlist for when universe filter fails to find symbols - dynamically populated
+    fallback_watchlist: str = Field(default="", env="FALLBACK_WATCHLIST")  # Will be populated by universe filter
+    enable_fallback_watchlist: bool = Field(default=False, env="ENABLE_FALLBACK_WATCHLIST")  # Disabled by default to use dynamic discovery
+    
     # Crypto Trading Configuration
-    crypto_enabled: bool = Field(default=True, env="CRYPTO_ENABLED")  # Enable crypto for 24/7 trading
-    crypto_pairs: str = Field(default="BTCUSD,ETHUSD,DOGEUSD,LTCUSD,BCHUSD,LINKUSD,UNIUSD,AAVEUSD", env="CRYPTO_PAIRS")  # All supported Alpaca crypto pairs
+    # ALGO AGENT RECOMMENDATION: Enable crypto with 5% allocation
+    crypto_enabled: bool = Field(default=True, env="CRYPTO_ENABLED")  # ENABLED for algo agent implementation
+    crypto_pairs: str = Field(default="BTCUSD,ETHUSD", env="CRYPTO_PAIRS")  # Start with BTC and ETH as recommended
     crypto_base_currencies: str = Field(default="USD,USDT,USDC", env="CRYPTO_BASE_CURRENCIES")
     crypto_max_position_size: float = Field(default=0.20, env="CRYPTO_MAX_POSITION_SIZE")  # Higher limit for crypto volatility
     crypto_stop_loss_percent: float = Field(default=0.15, env="CRYPTO_STOP_LOSS_PERCENT")  # Wider stops for crypto
     crypto_min_trade_amount: float = Field(default=10.0, env="CRYPTO_MIN_TRADE_AMOUNT")  # Minimum $10 crypto trades
-    crypto_portfolio_allocation: float = Field(default=0.15, env="CRYPTO_PORTFOLIO_ALLOCATION")  # Max 15% of total portfolio in crypto
-    crypto_max_single_position: float = Field(default=0.05, env="CRYPTO_MAX_SINGLE_POSITION")  # Max 5% per crypto asset
+    # ALGO AGENT RECOMMENDATION: Start with 5% total crypto allocation
+    crypto_portfolio_allocation: float = Field(default=0.05, env="CRYPTO_PORTFOLIO_ALLOCATION")  # Max 5% of total portfolio in crypto (algo agent rec)
+    crypto_max_single_position: float = Field(default=0.025, env="CRYPTO_MAX_SINGLE_POSITION")  # Max 2.5% per crypto asset (half of total)
     
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
@@ -160,6 +167,21 @@ def get_crypto_pairs():
     """Get enabled crypto trading pairs."""
     if settings.crypto_enabled and settings.crypto_pairs:
         return [pair.strip() for pair in settings.crypto_pairs.split(',')]
+    return []
+
+def get_fallback_watchlist():
+    """Get fallback watchlist when universe filter fails."""
+    # First try the explicit fallback watchlist
+    if settings.enable_fallback_watchlist:
+        watchlist = settings.fallback_watchlist.strip()
+        if watchlist:
+            return [symbol.strip() for symbol in watchlist.split(',') if symbol.strip()]
+    
+    # If no fallback watchlist, use focus_etfs for portfolio bootstrapping
+    focus_etfs = settings.focus_etfs.strip()
+    if focus_etfs:
+        return [symbol.strip() for symbol in focus_etfs.split(',') if symbol.strip()]
+    
     return []
 
 def get_crypto_base_currencies():
