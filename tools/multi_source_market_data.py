@@ -23,6 +23,7 @@ import time
 import json
 
 from config.settings import settings
+from tools.yfinance_utils import yfinance_market_data
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +113,12 @@ class MultiSourceMarketData:
         """
         Get price change signals using multiple data sources with intelligent fallback.
         
-        Fallback strategy:
-        1. Alpha Vantage (best historical data)
-        2. Finnhub (good real-time quotes)
-        3. Financial Modeling Prep (backup historical)
-        4. Enhanced news-based signals (sentiment)
+        NEW PRIORITY ORDER (addressing Alpaca historical data limitations):
+        1. YFinance (primary - free, reliable, no API key needed)
+        2. Alpha Vantage (secondary - premium but rate limited)
+        3. Finnhub (tertiary - good real-time quotes)
+        4. Financial Modeling Prep (quaternary - backup historical)
+        5. Enhanced news-based signals (sentiment)
         
         Args:
             symbols: List of symbols to analyze
@@ -126,21 +128,39 @@ class MultiSourceMarketData:
             List of signal dictionaries (minimum 2 guaranteed)
         """
         logger.info(f"🎯 Generating price signals for {len(symbols)} symbols using multi-source strategy")
+        logger.info(f"Priority order: YFinance → Alpha Vantage → Finnhub → FMP → News")
         
         signals = []
-        failed_symbols = []
+        failed_symbols = list(symbols)  # Start with all symbols
+        successful_sources = []
         
-        # Strategy 1: Alpha Vantage (primary)
+        # Strategy 1: YFinance (NEW PRIMARY - no API key, reliable)
         try:
-            av_signals = await self._get_alpha_vantage_signals(symbols, threshold)
-            signals.extend(av_signals)
-            logger.info(f"📈 Alpha Vantage: {len(av_signals)} signals")
+            yf_signals = await self._get_yfinance_signals(symbols, threshold)
+            signals.extend(yf_signals)
+            successful_sources.append('yfinance')
+            # Remove successfully processed symbols
+            successful_symbols = {s["symbol"] for s in yf_signals}
+            failed_symbols = [s for s in failed_symbols if s not in successful_symbols]
+            logger.info(f"🚀 YFinance (PRIMARY): {len(yf_signals)} signals")
         except Exception as e:
-            logger.warning(f"Alpha Vantage failed: {e}")
-            failed_symbols.extend(symbols)
+            logger.warning(f"YFinance failed: {e}")
         
-        # Strategy 2: Finnhub fallback for failed symbols
-        if failed_symbols:
+        # Strategy 2: Alpha Vantage (secondary - only if still need signals)
+        if len(signals) < 2 and failed_symbols:
+            try:
+                av_signals = await self._get_alpha_vantage_signals(failed_symbols, threshold)
+                signals.extend(av_signals)
+                successful_sources.append('alpha_vantage')
+                # Remove successfully processed symbols  
+                successful_symbols = {s["symbol"] for s in av_signals}
+                failed_symbols = [s for s in failed_symbols if s not in successful_symbols]
+                logger.info(f"📈 Alpha Vantage (SECONDARY): {len(av_signals)} signals")
+            except Exception as e:
+                logger.warning(f"Alpha Vantage failed: {e}")
+        
+        # Strategy 3: Finnhub (tertiary - only if still insufficient)
+        if len(signals) < 2 and failed_symbols:
             try:
                 finnhub_signals = await self._get_finnhub_signals(failed_symbols, threshold)
                 signals.extend(finnhub_signals)
@@ -151,8 +171,8 @@ class MultiSourceMarketData:
             except Exception as e:
                 logger.warning(f"Finnhub failed: {e}")
         
-        # Strategy 3: FMP fallback for remaining symbols
-        if failed_symbols:
+        # Strategy 4: FMP (quaternary - final data source fallback)
+        if len(signals) < 2 and failed_symbols:
             try:
                 fmp_signals = await self._get_fmp_signals(failed_symbols, threshold)
                 signals.extend(fmp_signals)
@@ -162,35 +182,72 @@ class MultiSourceMarketData:
             except Exception as e:
                 logger.warning(f"FMP failed: {e}")
         
-        # Strategy 4: Enhanced news-based signals (always run)
-        try:
-            news_signals = await self._get_news_based_signals(symbols)
-            signals.extend(news_signals)
-            logger.info(f"📰 News API: {len(news_signals)} signals")
-        except Exception as e:
-            logger.warning(f"News signals failed: {e}")
-        
-        # Strategy 5: Momentum-based signals from cached data
-        try:
-            momentum_signals = await self._get_momentum_signals(symbols, threshold)
-            signals.extend(momentum_signals)
-            logger.info(f"🚀 Momentum: {len(momentum_signals)} signals")
-        except Exception as e:
-            logger.warning(f"Momentum signals failed: {e}")
-        
-        # Ensure minimum signal count
+        # Strategy 5: Enhanced news-based signals (always run if still need signals)
         if len(signals) < 2:
-            logger.warning(f"⚠️ Only {len(signals)} signals found, generating emergency signals")
-            emergency_signals = await self._generate_emergency_signals(symbols)
-            signals.extend(emergency_signals)
+            try:
+                news_signals = await self._get_news_based_signals(symbols)
+                signals.extend(news_signals)
+                successful_sources.append('news_api')
+                logger.info(f"📰 News API (ENHANCEMENT): {len(news_signals)} signals")
+            except Exception as e:
+                logger.warning(f"News signals failed: {e}")
         
-        # Final validation
+        # Final validation - with YFinance as primary, this should always succeed
         if len(signals) < 2:
-            raise RuntimeError(f"❌ CRITICAL: Unable to generate minimum 2 signals ({len(signals)} found). "
-                             f"All data sources failed. Check API keys and network connectivity.")
+            # Emergency diagnostic
+            logger.error(f"❌ CRITICAL: Insufficient signals after all sources tried")
+            logger.error(f"Signals found: {len(signals)}")
+            logger.error(f"Sources attempted: {successful_sources}")
+            logger.error(f"Failed symbols remaining: {len(failed_symbols)}")
+            
+            # This should not happen with YFinance as primary since it's very reliable
+            raise RuntimeError(
+                f"❌ CRITICAL: Unable to generate minimum 2 signals ({len(signals)} found). "
+                f"Sources attempted: {successful_sources}. "
+                f"This indicates a systemic failure - even YFinance primary source failed. "
+                f"Check network connectivity and symbol validity."
+            )
         
         logger.info(f"✅ Successfully generated {len(signals)} total price signals")
+        logger.info(f"Successful sources: {successful_sources}")
+        logger.info(f"YFinance PRIMARY integration working: {'yfinance' in successful_sources}")
         return [signal.to_dict() if hasattr(signal, 'to_dict') else signal for signal in signals]
+    
+    async def _get_yfinance_signals(self, symbols: List[str], 
+                                  threshold: float) -> List[Dict]:
+        """
+        Get price signals using YFinance API (NEW PRIMARY SOURCE).
+        
+        This addresses the Alpaca paper trading historical data limitation
+        by using free, reliable yfinance data without API keys.
+        """
+        try:
+            # Use the working yfinance implementation
+            signals_raw = await yfinance_market_data.get_price_change_signals_async(symbols, threshold)
+            
+            # Convert to standard format if needed
+            signals = []
+            for signal in signals_raw:
+                # YFinance signals are already in the correct format
+                if isinstance(signal, dict):
+                    # Ensure consistent data_source labeling
+                    signal['data_source'] = 'yfinance_primary'
+                    signal['confidence'] = 0.95  # High confidence for yfinance data
+                    signals.append(signal)
+                else:
+                    # Handle PriceSignal objects
+                    signal_dict = signal.to_dict() if hasattr(signal, 'to_dict') else signal
+                    signal_dict['data_source'] = 'yfinance_primary'
+                    signal_dict['confidence'] = 0.95
+                    signals.append(signal_dict)
+            
+            logger.info(f"🎯 YFinance primary source generated {len(signals)} signals")
+            return signals
+            
+        except Exception as e:
+            logger.warning(f"YFinance primary source failed: {e}")
+            # Don't re-raise - let the orchestrator try other sources
+            return []
     
     async def _get_alpha_vantage_signals(self, symbols: List[str], 
                                        threshold: float) -> List[PriceSignal]:

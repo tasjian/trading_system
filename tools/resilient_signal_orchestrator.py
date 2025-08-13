@@ -48,13 +48,15 @@ class ResilientSignalOrchestrator:
         self.initialization_time = datetime.now()
         
         # Signal source priority order (highest to lowest reliability)
+        # Updated to prioritize YFinance as primary (addresses Alpaca historical data limitation)
         self.source_priorities = [
-            'alpha_vantage',
-            'finnhub', 
-            'fmp',
-            'enhanced_news',
-            'market_patterns',
-            'emergency_fallback'
+            'yfinance_primary',    # NEW: Free, reliable, no API key needed
+            'alpha_vantage',       # Secondary: Premium but rate limited
+            'finnhub',             # Tertiary: Good real-time quotes  
+            'fmp',                 # Quaternary: Backup historical
+            'enhanced_news',       # News-based sentiment signals
+            'market_patterns',     # Technical pattern analysis
+            'emergency_fallback'   # REMOVED in new implementation
         ]
         
         # Minimum requirements
@@ -344,15 +346,17 @@ class ResilientSignalOrchestrator:
     def _get_source_priority(self, source: str) -> float:
         """Get priority score for a data source (0.0 to 1.0)."""
         priority_scores = {
-            'alpha_vantage': 1.0,
-            'finnhub': 0.9,
-            'fmp': 0.8,
-            'enhanced_news': 0.7,
-            'multi_source_market_data': 0.95,
-            'volume_analysis': 0.6,
-            'volatility_analysis': 0.6,
-            'pattern_analysis': 0.5,
-            'emergency_fallback': 0.3
+            'yfinance_primary': 1.0,          # NEW: Highest priority - free, reliable
+            'yfinance_fallback': 0.98,        # YFinance in fallback mode
+            'multi_source_market_data': 0.95, # Multi-source coordinator
+            'alpha_vantage': 0.92,            # Secondary: Premium but rate limited
+            'finnhub': 0.85,                  # Tertiary: Good real-time quotes
+            'fmp': 0.8,                       # Quaternary: Backup historical
+            'enhanced_news': 0.7,             # News-based sentiment
+            'volume_analysis': 0.6,           # Technical volume analysis
+            'volatility_analysis': 0.6,       # Technical volatility analysis
+            'pattern_analysis': 0.5,          # Pattern-based signals
+            'emergency_fallback': 0.0         # DISABLED - no synthetic signals
         }
         
         return priority_scores.get(source, 0.4)
@@ -363,8 +367,13 @@ class ResilientSignalOrchestrator:
         if not sources_used or signal_count == 0:
             return 0.0
         
-        # Base score from primary source success
-        base_score = 0.8 if 'multi_source_market_data' in sources_used else 0.4
+        # Base score from primary source success (prioritize YFinance)
+        if 'yfinance_primary' in sources_used:
+            base_score = 0.95  # Highest score for YFinance primary
+        elif 'multi_source_market_data' in sources_used:
+            base_score = 0.8   # Good score for multi-source
+        else:
+            base_score = 0.4   # Lower score for other sources
         
         # Bonus for multiple sources
         source_diversity_bonus = min(0.2, len(sources_used) * 0.05)
