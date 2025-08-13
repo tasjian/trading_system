@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-Crypto Data Collector
+Crypto Data Collector - DISABLED FOR LATER IMPLEMENTATION
 Integrates Binance WebSocket API and CryptoCompare for real-time crypto data,
 sentiment analysis, and news collection.
+
+CRYPTO TRADING DISABLED - All code commented out for later implementation
 """
+
+# CRYPTO TRADING DISABLED - Comment out entire file for later implementation
+# Uncomment the code below when crypto trading is re-enabled
+
+'''
 
 import asyncio
 import json
@@ -462,4 +469,4 @@ class CryptoDataCollector:
         logger.info("🧹 Crypto data collector cleanup completed")
 
 # Global instance
-crypto_collector = CryptoDataCollector()
+crypto_collector = CryptoDataCollector()'''

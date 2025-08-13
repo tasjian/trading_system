@@ -63,16 +63,17 @@ class TradingSettings(BaseSettings):
     enable_fallback_watchlist: bool = Field(default=False, env="ENABLE_FALLBACK_WATCHLIST")  # Disabled by default to use dynamic discovery
     
     # Crypto Trading Configuration
-    # ALGO AGENT RECOMMENDATION: Enable crypto with 5% allocation
-    crypto_enabled: bool = Field(default=True, env="CRYPTO_ENABLED")  # ENABLED for algo agent implementation
-    crypto_pairs: str = Field(default="BTCUSD,ETHUSD", env="CRYPTO_PAIRS")  # Start with BTC and ETH as recommended
-    crypto_base_currencies: str = Field(default="USD,USDT,USDC", env="CRYPTO_BASE_CURRENCIES")
-    crypto_max_position_size: float = Field(default=0.20, env="CRYPTO_MAX_POSITION_SIZE")  # Higher limit for crypto volatility
-    crypto_stop_loss_percent: float = Field(default=0.15, env="CRYPTO_STOP_LOSS_PERCENT")  # Wider stops for crypto
-    crypto_min_trade_amount: float = Field(default=10.0, env="CRYPTO_MIN_TRADE_AMOUNT")  # Minimum $10 crypto trades
-    # ALGO AGENT RECOMMENDATION: Start with 5% total crypto allocation
-    crypto_portfolio_allocation: float = Field(default=0.05, env="CRYPTO_PORTFOLIO_ALLOCATION")  # Max 5% of total portfolio in crypto (algo agent rec)
-    crypto_max_single_position: float = Field(default=0.025, env="CRYPTO_MAX_SINGLE_POSITION")  # Max 2.5% per crypto asset (half of total)
+    # CRYPTO TRADING DISABLED - Comment out for later implementation
+    # # ALGO AGENT RECOMMENDATION: Enable crypto with 5% allocation
+    crypto_enabled: bool = Field(default=False, env="CRYPTO_ENABLED")  # DISABLED - commented out for later implementation
+    # crypto_pairs: str = Field(default="BTCUSD,ETHUSD", env="CRYPTO_PAIRS")  # Start with BTC and ETH as recommended
+    # crypto_base_currencies: str = Field(default="USD,USDT,USDC", env="CRYPTO_BASE_CURRENCIES")
+    # crypto_max_position_size: float = Field(default=0.20, env="CRYPTO_MAX_POSITION_SIZE")  # Higher limit for crypto volatility
+    # crypto_stop_loss_percent: float = Field(default=0.15, env="CRYPTO_STOP_LOSS_PERCENT")  # Wider stops for crypto
+    # crypto_min_trade_amount: float = Field(default=10.0, env="CRYPTO_MIN_TRADE_AMOUNT")  # Minimum $10 crypto trades
+    # # ALGO AGENT RECOMMENDATION: Start with 5% total crypto allocation
+    # crypto_portfolio_allocation: float = Field(default=0.05, env="CRYPTO_PORTFOLIO_ALLOCATION")  # Max 5% of total portfolio in crypto (algo agent rec)
+    # crypto_max_single_position: float = Field(default=0.025, env="CRYPTO_MAX_SINGLE_POSITION")  # Max 2.5% per crypto asset (half of total)
     
     # Risk Management
     max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
@@ -163,11 +164,12 @@ def get_excluded_symbols():
         return settings.excluded_symbols.split(',')
     return []
 
+# CRYPTO TRADING DISABLED - Comment out for later implementation
 def get_crypto_pairs():
-    """Get enabled crypto trading pairs."""
-    if settings.crypto_enabled and settings.crypto_pairs:
-        return [pair.strip() for pair in settings.crypto_pairs.split(',')]
-    return []
+    """Get enabled crypto trading pairs - DISABLED."""
+    # if settings.crypto_enabled and settings.crypto_pairs:
+    #     return [pair.strip() for pair in settings.crypto_pairs.split(',')]
+    return []  # Always return empty list when crypto is disabled
 
 def get_fallback_watchlist():
     """Get fallback watchlist when universe filter fails."""
@@ -184,15 +186,17 @@ def get_fallback_watchlist():
     
     return []
 
+# CRYPTO TRADING DISABLED - Comment out for later implementation
 def get_crypto_base_currencies():
-    """Get supported crypto base currencies."""
-    if settings.crypto_base_currencies:
-        return [curr.strip() for curr in settings.crypto_base_currencies.split(',')]
-    return ['USD']
+    """Get supported crypto base currencies - DISABLED."""
+    # if settings.crypto_base_currencies:
+    #     return [curr.strip() for curr in settings.crypto_base_currencies.split(',')]
+    return ['USD']  # Return default when crypto disabled
 
 def is_crypto_symbol(symbol: str) -> bool:
-    """Check if a symbol is a cryptocurrency pair."""
-    return symbol.upper() in [pair.upper() for pair in get_crypto_pairs()]
+    """Check if a symbol is a cryptocurrency pair - DISABLED."""
+    # return symbol.upper() in [pair.upper() for pair in get_crypto_pairs()]
+    return False  # Always return False when crypto is disabled
 
 # Validation
 def validate_settings():

@@ -107,30 +107,33 @@ class TradingWorkflow:
                 pos["symbol"]: pos for pos in positions
             }
             
-            # Update watchlist data (stocks and crypto)
+            # Update watchlist data (stocks only - CRYPTO TRADING DISABLED)
             from config.settings import is_crypto_symbol
-            from core.crypto_data_collector import crypto_collector
+            # from core.crypto_data_collector import crypto_collector  # CRYPTO DISABLED
             
             for symbol in state["watchlist"]:
                 try:
-                    if is_crypto_symbol(symbol):
-                        # Get crypto data from crypto collector
-                        ticker = crypto_collector.alpaca_collector.get_latest_ticker(symbol)
-                        if ticker:
-                            state["market_data"]["symbols"] = state["market_data"].get("symbols", {})
-                            state["market_data"]["symbols"][symbol] = {
-                                "price": float(ticker.price),
-                                "volume": float(ticker.volume_24h),
-                                "timestamp": ticker.timestamp,
-                                "change_24h": float(ticker.change_24h),
-                                "bid": float(ticker.bid),
-                                "ask": float(ticker.ask),
-                                "asset_type": "crypto"
-                            }
-                            logger.debug(f"📈 {symbol}: ${ticker.price:.2f} ({ticker.change_24h:+.2f}%)")
-                        else:
-                            logger.warning(f"No crypto data available for {symbol}")
-                    else:
+                    # CRYPTO TRADING DISABLED - Comment out crypto data collection
+                    # if is_crypto_symbol(symbol):
+                    #     # Get crypto data from crypto collector
+                    #     ticker = crypto_collector.alpaca_collector.get_latest_ticker(symbol)
+                    #     if ticker:
+                    #         state["market_data"]["symbols"] = state["market_data"].get("symbols", {})
+                    #         state["market_data"]["symbols"][symbol] = {
+                    #             "price": float(ticker.price),
+                    #             "volume": float(ticker.volume_24h),
+                    #             "timestamp": ticker.timestamp,
+                    #             "change_24h": float(ticker.change_24h),
+                    #             "bid": float(ticker.bid),
+                    #             "ask": float(ticker.ask),
+                    #             "asset_type": "crypto"
+                    #         }
+                    #         logger.debug(f"📈 {symbol}: ${ticker.price:.2f} ({ticker.change_24h:+.2f}%)")
+                    #     else:
+                    #         logger.warning(f"No crypto data available for {symbol}")
+                    # else:
+                    # Skip crypto symbols entirely when crypto is disabled
+                    if not is_crypto_symbol(symbol):
                         # Get stock data from Alpaca
                         market_data = alpaca_client.get_market_data(symbol, limit=50)
                         if not market_data.empty:

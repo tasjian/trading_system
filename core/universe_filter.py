@@ -15,7 +15,8 @@ import pandas as pd
 from tools.alpaca_client import alpaca_client
 from tools.resilient_signal_orchestrator import get_resilient_price_signals_sync
 # SocialMediaCollector no longer directly used - using cached data instead
-from config.settings import settings, get_crypto_pairs, is_crypto_symbol
+from config.settings import settings, is_crypto_symbol
+# from config.settings import get_crypto_pairs  # CRYPTO DISABLED
 
 logger = logging.getLogger(__name__)
 

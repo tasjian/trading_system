@@ -51,8 +51,9 @@ import traceback
 from agents.workflow import TradingWorkflow
 from agents.state import create_initial_state
 from tools.alpaca_client import alpaca_client
-from config.settings import settings, get_crypto_pairs
-from core.crypto_data_collector import crypto_collector
+from config.settings import settings  # , get_crypto_pairs
+# CRYPTO TRADING DISABLED - Comment out for later implementation
+# from core.crypto_data_collector import crypto_collector
 
 # Configure logging with rotation
 logging.basicConfig(
@@ -103,7 +104,8 @@ class ContinuousRebalancer:
         self.min_interval_minutes = 2       # Minimum time between runs (safety buffer)
         self.standard_interval_minutes = 5   # Standard interval during market hours (RL trading)
         self.after_hours_interval_minutes = 30  # Reduced interval after hours (stocks only)
-        self.crypto_only_interval_minutes = 10   # Crypto trading interval when stock market closed
+        # CRYPTO TRADING DISABLED - Comment out for later implementation
+        # self.crypto_only_interval_minutes = 10   # Crypto trading interval when stock market closed
         self.last_run_time = None
         
         # Error handling
@@ -155,16 +157,17 @@ class ContinuousRebalancer:
         logger.info(f"Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Min Interval: {self.min_interval_minutes} minutes")
         
-        # Check crypto status for logging
-        from config.settings import settings, get_crypto_pairs
-        has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
-        
-        if has_crypto:
-            logger.info(f"🚀 CRYPTO ENABLED: Continuous {self.standard_interval_minutes}-minute intervals (24/7)")
-            logger.info(f"Crypto pairs: {', '.join(get_crypto_pairs())}")
-        else:
-            logger.info(f"Standard Interval: {self.standard_interval_minutes} minutes")
-            logger.info(f"After Hours Interval: {self.after_hours_interval_minutes} minutes")
+        # CRYPTO TRADING DISABLED - Comment out for later implementation
+        # # Check crypto status for logging
+        # from config.settings import settings, get_crypto_pairs
+        # has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+        # 
+        # if has_crypto:
+        #     logger.info(f"🚀 CRYPTO ENABLED: Continuous {self.standard_interval_minutes}-minute intervals (24/7)")
+        #     logger.info(f"Crypto pairs: {', '.join(get_crypto_pairs())}")
+        # else:
+        logger.info(f"Standard Interval: {self.standard_interval_minutes} minutes")
+        logger.info(f"After Hours Interval: {self.after_hours_interval_minutes} minutes")
         
         logger.info(f"Max Consecutive Failures: {self.max_consecutive_failures}")
         
@@ -188,10 +191,12 @@ class ContinuousRebalancer:
         try:
             # Check if we should run now
             if not await self._should_run_now():
-                # Crypto-aware sleep duration: shorter when crypto enabled for responsiveness
-                from config.settings import settings, get_crypto_pairs
-                has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
-                sleep_duration = 30 if has_crypto else 60  # 30s with crypto, 60s without
+                # CRYPTO TRADING DISABLED - Comment out for later implementation
+                # # Crypto-aware sleep duration: shorter when crypto enabled for responsiveness
+                # from config.settings import settings, get_crypto_pairs
+                # has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+                # sleep_duration = 30 if has_crypto else 60  # 30s with crypto, 60s without
+                sleep_duration = 60  # Standard sleep duration without crypto
                 await asyncio.sleep(sleep_duration)
                 return
             
@@ -239,24 +244,25 @@ class ContinuousRebalancer:
             logger.warning(f"Too many consecutive failures ({self.health.consecutive_failures}), pausing operations")
             return False
         
-        # Check market hours for optimal timing (crypto-aware)
+        # CRYPTO TRADING DISABLED - Comment out for later implementation
+        # Check market hours for optimal timing (stocks only)
         try:
-            # Check if we have any crypto positions or symbols
-            from config.settings import settings, get_crypto_pairs
-            has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+            # # Check if we have any crypto positions or symbols
+            # from config.settings import settings, get_crypto_pairs
+            # has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
             
             market_open = alpaca_client.is_market_open()
             market_calendar = alpaca_client.get_market_calendar()
             
-            # With crypto enabled: maintain standard 5-minute intervals continuously (24/7)
-            if has_crypto:
-                if self.last_run_time:
-                    minutes_since_last = (now - self.last_run_time).total_seconds() / 60
-                    return minutes_since_last >= self.standard_interval_minutes
-                return True
+            # # With crypto enabled: maintain standard 5-minute intervals continuously (24/7)
+            # if has_crypto:
+            #     if self.last_run_time:
+            #         minutes_since_last = (now - self.last_run_time).total_seconds() / 60
+            #         return minutes_since_last >= self.standard_interval_minutes
+            #     return True
             
-            # During stock market hours without crypto: standard intervals
-            elif market_open:
+            # During stock market hours: standard intervals
+            if market_open:
                 if self.last_run_time:
                     minutes_since_last = (now - self.last_run_time).total_seconds() / 60
                     return minutes_since_last >= self.standard_interval_minutes
@@ -284,28 +290,29 @@ class ContinuousRebalancer:
             state = create_initial_state()
             config = {"thread_id": f"continuous_rebalancer_{int(start_time.timestamp())}"}
             
-            # Initialize watchlist with crypto pairs if enabled, let universe filter discover stocks dynamically
+            # CRYPTO TRADING DISABLED - Comment out for later implementation
+            # Initialize watchlist - let universe filter discover stocks dynamically
             watchlist_symbols = []
             
-            # Add crypto pairs to watchlist if crypto trading is enabled
-            if settings.crypto_enabled:
-                crypto_pairs = get_crypto_pairs()
-                if crypto_pairs:
-                    watchlist_symbols.extend(crypto_pairs)
-                    logger.info(f"🪙 Added {len(crypto_pairs)} crypto pairs to watchlist: {', '.join(crypto_pairs)}")
+            # # Add crypto pairs to watchlist if crypto trading is enabled
+            # if settings.crypto_enabled:
+            #     crypto_pairs = get_crypto_pairs()
+            #     if crypto_pairs:
+            #         watchlist_symbols.extend(crypto_pairs)
+            #         logger.info(f"🪙 Added {len(crypto_pairs)} crypto pairs to watchlist: {', '.join(crypto_pairs)}")
             
             state["watchlist"] = watchlist_symbols
             
-            # Start crypto data streams if crypto symbols are present
-            if watchlist_symbols and any(settings.crypto_enabled for symbol in watchlist_symbols if symbol in get_crypto_pairs()):
-                crypto_symbols = [s for s in watchlist_symbols if s in get_crypto_pairs()]
-                if crypto_symbols:
-                    logger.info(f"🚀 Starting crypto data collection for: {', '.join(crypto_symbols)}")
-                    try:
-                        await crypto_collector.start_real_time_streams(crypto_symbols)
-                        logger.info("✅ Crypto data streams initialized")
-                    except Exception as e:
-                        logger.warning(f"Failed to start crypto streams: {e}")
+            # # Start crypto data streams if crypto symbols are present
+            # if watchlist_symbols and any(settings.crypto_enabled for symbol in watchlist_symbols if symbol in get_crypto_pairs()):
+            #     crypto_symbols = [s for s in watchlist_symbols if s in get_crypto_pairs()]
+            #     if crypto_symbols:
+            #         logger.info(f"🚀 Starting crypto data collection for: {', '.join(crypto_symbols)}")
+            #         try:
+            #             await crypto_collector.start_real_time_streams(crypto_symbols)
+            #             logger.info("✅ Crypto data streams initialized")
+            #         except Exception as e:
+            #             logger.warning(f"Failed to start crypto streams: {e}")
             
             initial_portfolio_value = 0.0
             signals_generated = 0
@@ -617,26 +624,29 @@ class ContinuousRebalancer:
             account = alpaca_client.get_account_info()
             logger.info(f"✅ Alpaca connected: {account['id']}")
             
-            # Check market status (crypto-aware)
-            from config.settings import settings, get_crypto_pairs
-            has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
+            # CRYPTO TRADING DISABLED - Comment out for later implementation
+            # # Check market status (crypto-aware)
+            # from config.settings import settings, get_crypto_pairs
+            # has_crypto = settings.crypto_enabled and len(get_crypto_pairs()) > 0
             
             market_open = alpaca_client.is_market_open()
-            effective_market_open = market_open or has_crypto
+            # effective_market_open = market_open or has_crypto
             
-            if has_crypto:
-                logger.info(f"📈 Market status: Stock {'Open' if market_open else 'Closed'}, Crypto: Always Open")
-                
-                # Initialize crypto data streams
-                crypto_pairs = get_crypto_pairs()
-                logger.info(f"🚀 Starting crypto data streams for: {', '.join(crypto_pairs)}")
-                try:
-                    await crypto_collector.start_real_time_streams(crypto_pairs)
-                    logger.info("✅ Crypto data streams initialized successfully")
-                except Exception as e:
-                    logger.warning(f"⚠️ Crypto data streams initialization failed: {e}")
-            else:
-                logger.info(f"📈 Market status: {'Open' if market_open else 'Closed'}")
+            # if has_crypto:
+            #     logger.info(f"📈 Market status: Stock {'Open' if market_open else 'Closed'}, Crypto: Always Open")
+            #     
+            #     # Initialize crypto data streams
+            #     crypto_pairs = get_crypto_pairs()
+            #     logger.info(f"🚀 Starting crypto data streams for: {', '.join(crypto_pairs)}")
+            #     try:
+            #         await crypto_collector.start_real_time_streams(crypto_pairs)
+            #         logger.info("✅ Crypto data streams initialized successfully")
+            #     except Exception as e:
+            #         logger.warning(f"⚠️ Crypto data streams initialization failed: {e}")
+            
+            logger.info(f"📈 Market status: {'Open' if market_open else 'Closed'}")
+            # else:
+            #     logger.info(f"📈 Market status: {'Open' if market_open else 'Closed'}")
             
             # Check available cash
             cash = account.get('cash', 0)

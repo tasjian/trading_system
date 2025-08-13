@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+CRYPTO TRADING DISABLED - All code commented out for later implementation
+Uncomment when crypto trading is re-enabled
+"""
+
+# CRYPTO TRADING DISABLED - Comment out entire file for later implementation
+'''
+"""
 Alpaca Crypto Data Collector
 Real-time crypto data using Alpaca API endpoints instead of Binance WebSocket
 """
@@ -196,4 +203,4 @@ class AlpacaCryptoCollector:
         return symbol.upper() in self.supported_symbols
 
 # Singleton instance
-alpaca_crypto_collector = AlpacaCryptoCollector()
+alpaca_crypto_collector = AlpacaCryptoCollector()'''

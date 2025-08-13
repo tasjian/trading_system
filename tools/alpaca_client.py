@@ -146,40 +146,41 @@ class AlpacaClient:
     
     def get_market_data(self, symbol: str, timeframe: str = "1Day", 
                        limit: int = 100) -> pd.DataFrame:
-        """Get market data for a symbol with crypto-optimized data sources."""
+        """Get market data for a symbol - CRYPTO TRADING DISABLED."""
         try:
-            is_crypto = self._is_crypto_symbol(symbol)
+            # CRYPTO TRADING DISABLED - Comment out crypto-specific logic
+            # is_crypto = self._is_crypto_symbol(symbol)
             
-            # For crypto assets, try Alpaca crypto API first
-            if is_crypto:
-                try:
-                    # Alpaca crypto data
-                    quote = self.api.get_latest_trade(symbol)
-                    price = float(quote.price)
-                    volume = float(quote.size)
-                    
-                    # Create dataframe with current crypto data
-                    import pandas as pd
-                    df = pd.DataFrame({
-                        'timestamp': [datetime.now()],
-                        'open': [price],
-                        'high': [price],
-                        'low': [price], 
-                        'close': [price],
-                        'volume': [volume]
-                    })
-                    
-                    logger.info(f"Got Alpaca crypto data for {symbol}: ${price:.2f}")
-                    return df
-                    
-                except Exception as crypto_error:
-                    logger.warning(f"Alpaca crypto data failed for {symbol}: {crypto_error}")
-                    
-                    # Fallback to crypto-specific data sources
-                    try:
-                        return self._get_crypto_fallback_data(symbol, timeframe, limit)
-                    except Exception as fallback_error:
-                        logger.warning(f"Crypto fallback failed for {symbol}: {fallback_error}")
+            # # For crypto assets, try Alpaca crypto API first
+            # if is_crypto:
+            #     try:
+            #         # Alpaca crypto data
+            #         quote = self.api.get_latest_trade(symbol)
+            #         price = float(quote.price)
+            #         volume = float(quote.size)
+            #         
+            #         # Create dataframe with current crypto data
+            #         import pandas as pd
+            #         df = pd.DataFrame({
+            #             'timestamp': [datetime.now()],
+            #             'open': [price],
+            #             'high': [price],
+            #             'low': [price], 
+            #             'close': [price],
+            #             'volume': [volume]
+            #         })
+            #         
+            #         logger.info(f"Got Alpaca crypto data for {symbol}: ${price:.2f}")
+            #         return df
+            #         
+            #     except Exception as crypto_error:
+            #         logger.warning(f"Alpaca crypto data failed for {symbol}: {crypto_error}")
+            #         
+            #         # Fallback to crypto-specific data sources
+            #         try:
+            #             return self._get_crypto_fallback_data(symbol, timeframe, limit)
+            #         except Exception as fallback_error:
+            #             logger.warning(f"Crypto fallback failed for {symbol}: {fallback_error}")
             
             # For stocks or when crypto fails, use traditional approach
             try:
@@ -240,8 +241,9 @@ class AlpacaClient:
             # Handle sell_short by converting to sell with proper side
             alpaca_side = "sell" if side.lower() == "sell_short" else side.lower()
             
-            # Check if this is a crypto symbol
-            is_crypto = self._is_crypto_symbol(symbol)
+            # CRYPTO TRADING DISABLED - Comment out crypto detection
+            # is_crypto = self._is_crypto_symbol(symbol)
+            is_crypto = False  # Always false when crypto is disabled
             
             order_params = {
                 "symbol": symbol,
@@ -250,12 +252,13 @@ class AlpacaClient:
                 "time_in_force": time_in_force.lower()
             }
             
-            # Handle quantity vs notional for crypto fractional orders
-            if notional is not None and is_crypto:
-                order_params["notional"] = str(notional)
-                logger.info(f"Using notional amount ${notional} for crypto order")
-            else:
-                order_params["qty"] = abs(qty)  # Ensure positive quantity
+            # CRYPTO TRADING DISABLED - Comment out crypto notional handling
+            # # Handle quantity vs notional for crypto fractional orders
+            # if notional is not None and is_crypto:
+            #     order_params["notional"] = str(notional)
+            #     logger.info(f"Using notional amount ${notional} for crypto order")
+            # else:
+            order_params["qty"] = abs(qty)  # Always use quantity for non-crypto
             
             # Check if this is a fractional stock order (non-crypto)
             is_fractional_stock_order = not is_crypto and float(qty) != int(float(qty))
@@ -264,14 +267,16 @@ class AlpacaClient:
             if is_fractional_stock_order and time_in_force.lower() != "day":
                 logger.info(f"Fractional stock order detected for {symbol} (qty: {qty}), forcing time_in_force to 'day'")
                 order_params["time_in_force"] = "day"
-            elif is_crypto and time_in_force.lower() not in ["gtc", "ioc"]:
-                logger.warning(f"Invalid time_in_force '{time_in_force}' for crypto. Using 'gtc'")
-                order_params["time_in_force"] = "gtc"
+            # CRYPTO TRADING DISABLED - Comment out crypto time_in_force handling
+            # elif is_crypto and time_in_force.lower() not in ["gtc", "ioc"]:
+            #     logger.warning(f"Invalid time_in_force '{time_in_force}' for crypto. Using 'gtc'")
+            #     order_params["time_in_force"] = "gtc"
             
             # Add position intent for short selling (if supported by broker) with balanced risk management
             if side.lower() == "sell_short":
-                if is_crypto:
-                    logger.warning(f"Short selling may not be supported for crypto {symbol}")
+                # CRYPTO TRADING DISABLED - Comment out crypto short selling check
+                # if is_crypto:
+                #     logger.warning(f"Short selling may not be supported for crypto {symbol}")
                 logger.info(f"Placing short sell order for {symbol}")
                 
                 # Additional short selling checks for balanced trading
@@ -465,9 +470,10 @@ class AlpacaClient:
                     
                     position_percent = position_value / portfolio_value
                     
-                    # Use crypto-specific position limits if available, but make them more reasonable
-                    is_crypto = self._is_crypto_symbol(symbol)
-                    base_max_position = getattr(settings, 'crypto_max_position_size', getattr(settings, 'max_position_size', 0.05)) if is_crypto else getattr(settings, 'max_position_size', 0.05)
+                    # CRYPTO TRADING DISABLED - Comment out crypto-specific position limits
+                    # is_crypto = self._is_crypto_symbol(symbol)
+                    # base_max_position = getattr(settings, 'crypto_max_position_size', getattr(settings, 'max_position_size', 0.05)) if is_crypto else getattr(settings, 'max_position_size', 0.05)
+                    base_max_position = getattr(settings, 'max_position_size', 0.05)  # Use standard limits only
                     max_position = max(base_max_position, 0.15)  # Minimum 15% position limit for balanced trading
                     
                     if position_percent > max_position:
@@ -489,12 +495,12 @@ class AlpacaClient:
         try:
             asset = self.api.get_asset(symbol)
             
-            # Enhanced info for crypto assets
+            # CRYPTO TRADING DISABLED - Remove crypto asset class detection
             asset_info = {
                 "symbol": asset.symbol,
                 "name": getattr(asset, 'name', asset.symbol),
                 "exchange": getattr(asset, 'exchange', 'Unknown'),
-                "asset_class": getattr(asset, 'asset_class', 'crypto' if self._is_crypto_symbol(asset.symbol) else 'us_equity'),
+                "asset_class": getattr(asset, 'asset_class', 'us_equity'),  # Always default to us_equity
                 "status": getattr(asset, 'status', 'active'),
                 "tradable": getattr(asset, 'tradable', True),
                 "marginable": getattr(asset, 'marginable', False),
@@ -503,39 +509,41 @@ class AlpacaClient:
                 "fractionable": getattr(asset, 'fractionable', True)
             }
             
-            # Add crypto-specific info
-            if self._is_crypto_symbol(symbol):
-                asset_info.update({
-                    "is_crypto": True,
-                    "trading_hours": "24/7",
-                    "supported_order_types": ["market", "limit", "stop_limit"],
-                    "supported_time_in_force": ["gtc", "ioc"],
-                    "fractional_supported": True
-                })
-            else:
-                asset_info.update({
-                    "is_crypto": False,
-                    "trading_hours": "9:30 AM - 4:00 PM ET",
-                    "supported_order_types": ["market", "limit", "stop", "stop_limit"],
-                    "supported_time_in_force": ["gtc", "day", "ioc", "fok"]
-                })
+            # CRYPTO TRADING DISABLED - Comment out crypto-specific info
+            # # Add crypto-specific info
+            # if self._is_crypto_symbol(symbol):
+            #     asset_info.update({
+            #         "is_crypto": True,
+            #         "trading_hours": "24/7",
+            #         "supported_order_types": ["market", "limit", "stop_limit"],
+            #         "supported_time_in_force": ["gtc", "ioc"],
+            #         "fractional_supported": True
+            #     })
+            # else:
+            # Always use stock-specific info since crypto is disabled
+            asset_info.update({
+                "is_crypto": False,
+                "trading_hours": "9:30 AM - 4:00 PM ET",
+                "supported_order_types": ["market", "limit", "stop", "stop_limit"],
+                "supported_time_in_force": ["gtc", "day", "ioc", "fok"]
+            })
             
             return asset_info
             
         except Exception as e:
             logger.error(f"Failed to get asset info for {symbol}: {e}")
             
-            # Return safe defaults with crypto detection
-            is_crypto = self._is_crypto_symbol(symbol)
+            # CRYPTO TRADING DISABLED - Return stock defaults only
+            # is_crypto = self._is_crypto_symbol(symbol)
             return {
                 "symbol": symbol,
                 "name": symbol,
                 "tradable": True,
-                "fractionable": is_crypto,  # Crypto supports fractional by default
-                "is_crypto": is_crypto,
-                "trading_hours": "24/7" if is_crypto else "9:30 AM - 4:00 PM ET",
-                "supported_order_types": ["market", "limit", "stop_limit"] if is_crypto else ["market", "limit", "stop", "stop_limit"],
-                "supported_time_in_force": ["gtc", "ioc"] if is_crypto else ["gtc", "day", "ioc", "fok"]
+                "fractionable": False,  # Default to non-fractionable for stocks
+                "is_crypto": False,  # Always false when crypto disabled
+                "trading_hours": "9:30 AM - 4:00 PM ET",
+                "supported_order_types": ["market", "limit", "stop", "stop_limit"],
+                "supported_time_in_force": ["gtc", "day", "ioc", "fok"]
             }
     
     def get_current_price(self, symbol: str) -> float:
@@ -555,19 +563,21 @@ class AlpacaClient:
             raise ValueError(f"Could not get price for {symbol}")
     
     def is_market_open(self, symbol: Optional[str] = None) -> bool:
-        """Check if the market is currently open. Crypto markets are always open."""
+        """Check if the market is currently open - CRYPTO TRADING DISABLED."""
         try:
-            # Crypto markets are open 24/7
-            if symbol and self._is_crypto_symbol(symbol):
-                return True
+            # CRYPTO TRADING DISABLED - Comment out crypto market check
+            # # Crypto markets are open 24/7
+            # if symbol and self._is_crypto_symbol(symbol):
+            #     return True
                 
             # For stocks, check market hours
             clock = self.api.get_clock()
             return clock.is_open
         except Exception as e:
             logger.error(f"Failed to check market status: {e}")
-            # Default to open for crypto, closed for stocks
-            return symbol and self._is_crypto_symbol(symbol) if symbol else False
+            # CRYPTO TRADING DISABLED - Always return false for non-market hours
+            # return symbol and self._is_crypto_symbol(symbol) if symbol else False
+            return False
     
     def get_market_calendar(self, start_date: Optional[str] = None, 
                            end_date: Optional[str] = None) -> List[Dict]:
@@ -635,29 +645,32 @@ class AlpacaClient:
         except Exception as e:
             logger.error(f"Failed to add transaction to batch queue: {e}")
     
-    def _get_crypto_fallback_data(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-        """Get crypto data from alternative sources when Alpaca fails."""
-        # NO FALLBACKS - fail fast with clear error
-        error_msg = f"❌ CRITICAL: Alpaca crypto data access failed for {symbol}. Paper trading subscription may not support crypto data."
-        logger.error(error_msg)
-        raise RuntimeError(error_msg)
+    # CRYPTO TRADING DISABLED - Comment out crypto fallback method
+    # def _get_crypto_fallback_data(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    #     """Get crypto data from alternative sources when Alpaca fails."""
+    #     # NO FALLBACKS - fail fast with clear error
+    #     error_msg = f"❌ CRITICAL: Alpaca crypto data access failed for {symbol}. Paper trading subscription may not support crypto data."
+    #     logger.error(error_msg)
+    #     raise RuntimeError(error_msg)
     
     
+    # CRYPTO TRADING DISABLED - Always return False for crypto detection
     def _is_crypto_symbol(self, symbol: str) -> bool:
-        """Check if a symbol represents a cryptocurrency pair."""
-        # Common crypto symbols end with USD, USDT, USDC or are known crypto pairs
-        crypto_suffixes = ['USD', 'USDT', 'USDC', 'BTC']
-        crypto_prefixes = ['BTC', 'ETH', 'DOGE', 'LTC', 'BCH', 'AAVE', 'UNI', 'LINK', 'MKR']
-        
-        # Check if symbol matches crypto patterns
-        for prefix in crypto_prefixes:
-            for suffix in crypto_suffixes:
-                if symbol.upper() == f"{prefix}{suffix}":
-                    return True
-        
-        # Additional known crypto patterns
-        known_crypto_symbols = ['BTCUSD', 'ETHUSD', 'DOGEUSD', 'LTCUSD', 'BCHUSD']
-        return symbol.upper() in known_crypto_symbols
+        """Check if a symbol represents a cryptocurrency pair - DISABLED."""
+        # # Common crypto symbols end with USD, USDT, USDC or are known crypto pairs
+        # crypto_suffixes = ['USD', 'USDT', 'USDC', 'BTC']
+        # crypto_prefixes = ['BTC', 'ETH', 'DOGE', 'LTC', 'BCH', 'AAVE', 'UNI', 'LINK', 'MKR']
+        # 
+        # # Check if symbol matches crypto patterns
+        # for prefix in crypto_prefixes:
+        #     for suffix in crypto_suffixes:
+        #         if symbol.upper() == f"{prefix}{suffix}":
+        #             return True
+        # 
+        # # Additional known crypto patterns
+        # known_crypto_symbols = ['BTCUSD', 'ETHUSD', 'DOGEUSD', 'LTCUSD', 'BCHUSD']
+        # return symbol.upper() in known_crypto_symbols
+        return False  # Always return False when crypto is disabled
 
 # Global client instance
 alpaca_client = AlpacaClient()

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 """
+CRYPTO TRADING DISABLED - All code commented out for later implementation
+Uncomment when crypto trading is re-enabled
+"""
+
+# CRYPTO TRADING DISABLED - Comment out entire file for later implementation
+'''
+"""
 Crypto Sentiment Analyzer
 Specialized sentiment analysis for cryptocurrency using CryptoCompare, 
 social media, and crypto-specific news sources.
@@ -413,4 +420,4 @@ class CryptoSentimentAnalyzer:
             self.session = None
 
 # Global instance
-crypto_sentiment_analyzer = CryptoSentimentAnalyzer()
+crypto_sentiment_analyzer = CryptoSentimentAnalyzer()'''
