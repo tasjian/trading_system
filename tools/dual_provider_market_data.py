@@ -185,8 +185,8 @@ class FinnhubProvider:
         params["token"] = self.api_key
         
         try:
-            # Use asyncio.timeout context manager for proper timeout handling
-            async with asyncio.timeout(10):
+            # Use asyncio.wait_for for better compatibility
+            async def _make_request():
                 async with session.get(url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -200,6 +200,8 @@ class FinnhubProvider:
                     else:
                         logger.warning(f"Finnhub API error {response.status}: {await response.text()}")
                         return None
+            
+            return await asyncio.wait_for(_make_request(), timeout=10.0)
         except asyncio.TimeoutError:
             logger.warning(f"Finnhub request timed out for {endpoint}")
             return None
@@ -281,8 +283,8 @@ class AlphaVantageProvider:
         params["apikey"] = self.api_key
         
         try:
-            # Use asyncio.timeout context manager for proper timeout handling
-            async with asyncio.timeout(30):
+            # Use asyncio.wait_for for better compatibility
+            async def _make_request():
                 async with session.get(self.base_url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -302,6 +304,8 @@ class AlphaVantageProvider:
                     else:
                         logger.warning(f"Alpha Vantage HTTP error {response.status}")
                         return None
+            
+            return await asyncio.wait_for(_make_request(), timeout=30.0)
         except asyncio.TimeoutError:
             logger.warning(f"Alpha Vantage request timed out")
             return None
@@ -387,8 +391,8 @@ class SECEdgarProvider:
         url = urljoin(self.base_url, endpoint)
         
         try:
-            # Use asyncio.timeout context manager for proper timeout handling
-            async with asyncio.timeout(15):
+            # Use asyncio.wait_for for better compatibility
+            async def _make_request():
                 async with session.get(url) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -398,6 +402,8 @@ class SECEdgarProvider:
                     else:
                         logger.warning(f"SEC EDGAR error {response.status} for {endpoint}")
                         return None
+            
+            return await asyncio.wait_for(_make_request(), timeout=15.0)
         except asyncio.TimeoutError:
             logger.warning(f"SEC EDGAR request timed out for {endpoint}")
             return None
