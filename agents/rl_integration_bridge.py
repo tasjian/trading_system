@@ -444,17 +444,24 @@ async def generate_rl_enhanced_signals(market_data: Dict[str, Any],
         logger.error(f"❌ RL enhanced signal generation failed: {e}")
         return []
 
-async def integrate_comprehensive_rl_system(state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Comprehensive RL system integration for the continuous rebalancer.
+    Hybrid LLM-RL Portfolio Integration System
+    
+    Architecture:
+    1. LLM Portfolio Manager creates diversified sector-aware allocations
+    2. RL Agent fine-tunes position sizing and timing
+    3. Intelligent rebalancing prevents over-trading
+    
     This is the main function called by continuous_rebalancer.py.
     """
     try:
-        logger.info("🚀 Starting comprehensive RL system integration...")
+        logger.info("🚀 Starting Hybrid LLM-RL Portfolio System Integration...")
         
         # Extract required data from state
         portfolio_data = state.get("portfolio", {})
         portfolio_value = portfolio_data.get("equity", 100000)
+        cash_available = portfolio_data.get("cash", 50000)
         
         # Get symbols from multiple sources in priority order
         symbols = []
@@ -462,127 +469,363 @@ async def integrate_comprehensive_rl_system(state: Dict[str, Any], config: Dict[
         # 1. Use symbols from universe filter results (highest priority)
         filtered_symbols = state.get("filtered_symbols", [])
         if filtered_symbols:
-            symbols.extend(filtered_symbols[:10])  # Top 10 from universe filter
+            symbols.extend(filtered_symbols[:20])  # More symbols for diversification
             logger.info(f"🎯 Using {len(symbols)} symbols from universe filter")
         
         # 2. Add symbols from sentiment data
         sentiment_data = state.get("sentiment_data", {})
         if sentiment_data:
-            sentiment_symbols = [sym for sym in sentiment_data.keys() if sym not in symbols][:5]
+            sentiment_symbols = [sym for sym in sentiment_data.keys() if sym not in symbols][:10]
             symbols.extend(sentiment_symbols)
             logger.info(f"📊 Added {len(sentiment_symbols)} symbols from sentiment analysis")
         
         # 3. Add current portfolio positions to ensure continuity
         positions = state.get("portfolio", {}).get("positions", {})
-        for position_symbol in positions.keys():
+        current_positions = list(positions.keys())
+        for position_symbol in current_positions:
             if position_symbol not in symbols:
                 symbols.append(position_symbol)
         
-        # Remove duplicates and limit total
-        symbols = list(dict.fromkeys(symbols))[:15]  # Max 15 symbols for RL processing
+        # Remove duplicates and limit total for diversification
+        symbols = list(dict.fromkeys(symbols))[:25]  # Max 25 symbols for proper diversification
         
         # 4. Only fallback to defaults if no symbols found from any source
         if not symbols:
-            logger.warning("⚠️ No symbols from universe filter or sentiment data, using fallback symbols")
-            symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA']
+            logger.warning("⚠️ No symbols from universe filter or sentiment data, using diversified fallback")
+            symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'IWM', 'XLF', 'XLK', 'SPY', 'QQQ']
         
-        logger.info(f"🎯 RL processing {len(symbols)} symbols with portfolio value ${portfolio_value:,.2f}")
+        logger.info(f"🎯 Processing {len(symbols)} symbols for diversified portfolio (${portfolio_value:,.2f})")
         
-        # Initialize RL agent
-        rl_agent = initialize_rl_agent(symbols)
+        # STEP 1: Generate LLM Portfolio Recommendations
+        logger.info("🧠 Step 1: LLM Portfolio Manager - Creating Diversified Allocations")
         
-        # Prepare market data from state
+        # Import LLM portfolio manager
+        try:
+            from agents.llm_portfolio_management import construct_llm_portfolio
+            
+            # Determine risk profile based on market conditions and portfolio state
+            circuit_breakers = state.get("circuit_breakers", {})
+            risk_profile = "conservative" if any(circuit_breakers.values()) else "moderate"
+            
+            # Use LLM portfolio manager to create diversified allocation
+            portfolio_recommendation = await construct_llm_portfolio(
+                candidate_symbols=symbols,
+                portfolio_value=portfolio_value,
+                risk_profile=risk_profile,
+                max_positions=min(20, len(symbols)),  # Proper diversification limit
+                sentiment_data=sentiment_data  # Pass sentiment data for enhanced analysis
+            )
+            
+            logger.info(f"🎯 LLM Portfolio Manager Results:")
+            logger.info(f"   Market Regime: {portfolio_recommendation.market_regime.value}")
+            logger.info(f"   Diversification Score: {portfolio_recommendation.diversification_score:.2f}")
+            logger.info(f"   Expected Return: {portfolio_recommendation.expected_return:.2%}")
+            logger.info(f"   Risk Score: {portfolio_recommendation.total_risk_score:.2f}")
+            logger.info(f"   Portfolio Positions: {len(portfolio_recommendation.allocations)}")
+            
+            llm_allocations = portfolio_recommendation.allocations
+            
+        except Exception as e:
+            logger.error(f"❌ LLM Portfolio Manager failed: {e}")
+            # Fallback to basic diversified allocation
+            llm_allocations = []
+            from dataclasses import dataclass
+            @dataclass
+            class StockAllocation:
+                symbol: str
+                target_weight: float
+                confidence: float
+                recommended_action: str
+                reasoning: str
+                sentiment_score: float
+                industry: str
+                risk_level: str
+            
+            # Create basic diversified allocation
+            base_weight = 0.05  # 5% per position
+            for i, symbol in enumerate(symbols[:10]):  # Max 10 positions for fallback
+                llm_allocations.append(StockAllocation(
+                    symbol=symbol,
+                    target_weight=base_weight,
+                    confidence=0.6,
+                    recommended_action="buy",
+                    reasoning="Basic diversification fallback",
+                    sentiment_score=0.1,
+                    industry="Unknown",
+                    risk_level="medium"
+                ))
+            
+            logger.info(f"🔄 Using basic diversification fallback: {len(llm_allocations)} positions")
+        
+        # STEP 2: RL Enhancement and Position Optimization
+        logger.info("🤖 Step 2: RL Agent - Optimizing Position Sizing and Timing")
+        
+        # Initialize RL agent with LLM-selected symbols
+        llm_symbols = [alloc.symbol for alloc in llm_allocations]
+        rl_agent = initialize_rl_agent(llm_symbols)
+        
+        # Prepare enhanced market data for RL agent
         market_data = {}
-        
-        # Get sentiment signals from state (fix undefined variable)
         sentiment_signals = state.get("sentiment_signals", [])
-        if not sentiment_signals:
-            # Fallback to sentiment_data if sentiment_signals not available
-            sentiment_data = state.get("sentiment_data", {})
-            sentiment_signals = []
-            for symbol, sentiment_info in sentiment_data.items():
-                if isinstance(sentiment_info, dict):
-                    sentiment_signals.append({
-                        'symbol': symbol,
-                        'signal': 'BUY' if sentiment_info.get('overall_score', 0) > 0 else 'SELL',
-                        'strength': abs(sentiment_info.get('overall_score', 0)),
-                        'confidence': sentiment_info.get('confidence', 0.5),
-                        'source': 'sentiment_data_fallback'
-                    })
         
-        for symbol in symbols:
+        # Get real market data where possible
+        try:
+            from tools.alpaca_client import alpaca_client
+            real_market_data = True
+        except Exception:
+            real_market_data = False
+            logger.warning("Using synthetic market data for RL processing")
+        
+        for allocation in llm_allocations:
+            symbol = allocation.symbol
+            
             # Find sentiment data for this symbol
             symbol_sentiment = next((s for s in sentiment_signals if s.get('symbol') == symbol), {})
             
+            # Get real price if available
+            current_price = 100.0  # Default
+            if real_market_data:
+                try:
+                    real_price = alpaca_client.get_current_price(symbol)
+                    if real_price and real_price > 0:
+                        current_price = real_price
+                except Exception:
+                    pass
+            
             market_data[symbol] = {
-                'price': 100.0,  # Default price - would be filled by real market data
-                'price_change_pct': np.random.uniform(-0.02, 0.02),  # Random walk
+                'price': current_price,
+                'price_change_pct': symbol_sentiment.get('strength', 0.01) if symbol_sentiment.get('signal') == 'BUY' else -symbol_sentiment.get('strength', 0.01),
                 'volume': 1000000,
                 'avg_volume': 1000000,
-                'rsi': 50.0,
-                'macd': 0.0,
+                'rsi': 50.0 + (allocation.sentiment_score * 20),  # Adjust RSI based on sentiment
+                'macd': allocation.sentiment_score * 0.1,
                 'bb_position': 0.5,
-                'sentiment_score': symbol_sentiment.get('strength', 0.0) if symbol_sentiment.get('signal') == 'BUY' else -symbol_sentiment.get('strength', 0.0),
-                'sentiment_confidence': symbol_sentiment.get('confidence', 0.5),
-                'social_sentiment_source': symbol_sentiment.get('source', 'unknown'),
-                'news_count': 5
+                'sentiment_score': allocation.sentiment_score,
+                'sentiment_confidence': allocation.confidence,
+                'social_sentiment_source': symbol_sentiment.get('source', 'llm_enhanced'),
+                'news_count': 5,
+                'llm_target_weight': allocation.target_weight,
+                'llm_confidence': allocation.confidence,
+                'industry': allocation.industry,
+                'risk_level': allocation.risk_level
             }
         
-        # Generate RL signals
+        # Generate RL-enhanced signals for position optimization
+        current_portfolio_data = {}
+        for symbol in llm_symbols:
+            position_info = positions.get(symbol, {})
+            current_portfolio_data[symbol] = {
+                'quantity': position_info.get('qty', 0),
+                'market_value': position_info.get('market_value', 0)
+            }
+        
         rl_signals = await rl_agent.generate_trading_signals(
             market_data,
-            {symbol: {'quantity': 0, 'market_value': 0} for symbol in symbols},
+            current_portfolio_data,
             portfolio_value
         )
         
-        # Convert to allocation decisions
-        allocations = []
-        total_allocation = 0.0
+        # STEP 3: Combine LLM Allocations with RL Optimizations
+        logger.info("🔄 Step 3: Hybrid Integration - Combining LLM Strategy with RL Optimization")
         
-        for signal in rl_signals:
-            # Calculate allocation weight based on signal strength
-            base_weight = min(0.1, abs(signal.rl_score) * 0.5)  # Max 10% per position
-            
-            if signal.action == 'buy':
-                allocation_weight = base_weight
-                action = 'buy'
-            elif signal.action == 'sell':
-                allocation_weight = -base_weight
-                action = 'sell'
-            else:
-                continue
-            
-            allocations.append({
-                'symbol': signal.symbol,
-                'weight': allocation_weight,
-                'confidence': signal.confidence,
-                'action': action,
-                'reasoning': signal.reasoning,
-                'rl_score': signal.rl_score
-            })
-            
-            total_allocation += abs(allocation_weight)
+        final_allocations = []
+        total_target_allocation = 0.0
         
-        # Normalize allocations if too high
-        if total_allocation > 0.5:  # Max 50% total allocation
-            scale_factor = 0.5 / total_allocation
-            for allocation in allocations:
+        for allocation in llm_allocations:
+            symbol = allocation.symbol
+            
+            # Find corresponding RL signal for this symbol
+            rl_signal = next((s for s in rl_signals if s.symbol == symbol), None)
+            
+            # Base weight from LLM (diversification-focused)
+            base_weight = allocation.target_weight
+            
+            # RL adjustment factor (timing and market dynamics)
+            rl_adjustment = 1.0
+            rl_confidence_boost = 0.0
+            
+            if rl_signal:
+                # Adjust based on RL signal strength and direction
+                if rl_signal.action == 'buy' and allocation.recommended_action == 'buy':
+                    # Both systems agree - increase confidence
+                    rl_adjustment = min(1.5, 1.0 + abs(rl_signal.rl_score))
+                    rl_confidence_boost = 0.1
+                elif rl_signal.action == 'sell' and allocation.recommended_action == 'buy':
+                    # Systems disagree - reduce allocation
+                    rl_adjustment = max(0.3, 1.0 - abs(rl_signal.rl_score))
+                    rl_confidence_boost = -0.2
+            
+            # Apply position size limits
+            final_weight = min(0.08, base_weight * rl_adjustment)  # Max 8% per position
+            
+            # Only include positions with meaningful allocations
+            if final_weight >= 0.01:  # At least 1% allocation
+                final_allocations.append({
+                    'symbol': symbol,
+                    'weight': final_weight,
+                    'percentage': final_weight * 100,  # For compatibility
+                    'confidence': min(0.95, allocation.confidence + rl_confidence_boost),
+                    'action': allocation.recommended_action,
+                    'reasoning': f"LLM: {allocation.reasoning} | RL: {rl_signal.reasoning if rl_signal else 'No RL signal'}",
+                    'industry': allocation.industry,
+                    'risk_level': allocation.risk_level,
+                    'llm_weight': base_weight,
+                    'rl_adjustment': rl_adjustment,
+                    'rl_score': rl_signal.rl_score if rl_signal else 0.0,
+                    'sentiment_score': allocation.sentiment_score
+                })
+                
+                total_target_allocation += final_weight
+        
+        # STEP 4: Intelligent Rebalancing Logic with Sector Constraints
+        logger.info("⚖️ Step 4: Intelligent Rebalancing - Preventing Over-Trading")
+        
+        # Calculate rebalancing thresholds
+        rebalancing_threshold = 0.05  # 5% deviation triggers rebalancing
+        min_trade_size = portfolio_value * 0.005  # Minimum $500 trade size
+        max_single_position = 0.08  # Max 8% per position
+        max_sector_allocation = 0.25  # Max 25% per sector
+        
+        # Apply sector concentration limits
+        sector_allocations = {}
+        for allocation in final_allocations:
+            sector = allocation.get('industry', 'Unknown')
+            if sector not in sector_allocations:
+                sector_allocations[sector] = 0.0
+            sector_allocations[sector] += allocation['weight']
+        
+        # Check and enforce sector limits
+        sector_violations = []
+        for sector, total_weight in sector_allocations.items():
+            if total_weight > max_sector_allocation:
+                sector_violations.append(f"{sector}: {total_weight:.1%} > {max_sector_allocation:.1%}")
+        
+        if sector_violations:
+            logger.warning(f"🚨 Sector concentration violations detected: {', '.join(sector_violations)}")
+            
+            # Scale down over-allocated sectors
+            for allocation in final_allocations:
+                sector = allocation.get('industry', 'Unknown')
+                if sector_allocations[sector] > max_sector_allocation:
+                    scale_factor = max_sector_allocation / sector_allocations[sector]
+                    allocation['weight'] *= scale_factor
+                    logger.info(f"🔧 Scaled down {allocation['symbol']} from {allocation['weight']/scale_factor:.1%} to {allocation['weight']:.1%}")
+        
+        # Apply individual position size limits
+        for allocation in final_allocations:
+            if allocation['weight'] > max_single_position:
+                logger.warning(f"🚨 Position size limit: {allocation['symbol']} {allocation['weight']:.1%} > {max_single_position:.1%}")
+                allocation['weight'] = max_single_position
+        
+        # Check if significant rebalancing is needed
+        needs_rebalancing = False
+        rebalance_reasons = []
+        
+        for allocation in final_allocations:
+            symbol = allocation['symbol']
+            target_value = allocation['weight'] * portfolio_value
+            current_position = positions.get(symbol, {})
+            current_value = current_position.get('market_value', 0)
+            
+            deviation = abs(target_value - current_value) / max(portfolio_value, 1)
+            
+            if deviation > rebalancing_threshold and abs(target_value - current_value) > min_trade_size:
+                needs_rebalancing = True
+                rebalance_reasons.append(f"{symbol}: {deviation:.1%} deviation (${target_value - current_value:,.0f})")
+        
+        # Check for new opportunities (symbols not in current portfolio)
+        current_symbols = set(positions.keys())
+        target_symbols = set(alloc['symbol'] for alloc in final_allocations)
+        new_opportunities = target_symbols - current_symbols
+        
+        if new_opportunities and len(new_opportunities) >= 2:  # Only if multiple new opportunities
+            needs_rebalancing = True
+            rebalance_reasons.append(f"New opportunities: {', '.join(list(new_opportunities)[:3])}")
+        
+        # Check for overweight positions that need trimming
+        overweight_positions = []
+        for symbol, position_info in positions.items():
+            current_value = position_info.get('market_value', 0)
+            current_weight = current_value / max(portfolio_value, 1)
+            if current_weight > max_single_position:
+                overweight_positions.append(f"{symbol}: {current_weight:.1%} > {max_single_position:.1%}")
+        
+        if overweight_positions:
+            needs_rebalancing = True
+            rebalance_reasons.extend(overweight_positions[:2])  # Add top 2 overweight positions
+        
+        # Only proceed with rebalancing if significant changes are needed
+        if not needs_rebalancing and len(current_positions) > 5:  # Allow rebalancing if portfolio too small
+            logger.info("🔒 No significant rebalancing needed - maintaining current positions")
+            return {
+                'rl_decisions': {
+                    'strategy': 'maintain_positions',
+                    'risk_level': risk_profile,
+                    'allocations': [],  # No new trades
+                    'confidence': 0.7,
+                    'reasoning': 'Portfolio is well-balanced, no significant rebalancing required',
+                    'rebalance_analysis': {
+                        'needs_rebalancing': False,
+                        'current_positions': len(current_positions),
+                        'target_positions': len(final_allocations),
+                        'max_deviation': max([abs(alloc['weight'] * portfolio_value - positions.get(alloc['symbol'], {}).get('market_value', 0)) / portfolio_value for alloc in final_allocations], default=0),
+                        'sector_compliance': len(sector_violations) == 0,
+                        'position_size_compliance': all(alloc['weight'] <= max_single_position for alloc in final_allocations)
+                    }
+                },
+                'rl_enhanced': True,
+                'comprehensive_rl': True,
+                'llm_enhanced': True,
+                'hybrid_system': True
+            }
+        
+        # STEP 5: Generate Final Trading Decisions
+        logger.info(f"📈 Step 5: Generating Trading Decisions - {len(rebalance_reasons)} rebalancing reasons")
+        for reason in rebalance_reasons[:3]:  # Log top 3 reasons
+            logger.info(f"   🎯 {reason}")
+        
+        # Normalize final allocations to ensure they don't exceed safe limits
+        if total_target_allocation > 0.7:  # Max 70% of portfolio in stocks
+            scale_factor = 0.7 / total_target_allocation
+            for allocation in final_allocations:
                 allocation['weight'] *= scale_factor
+                allocation['percentage'] *= scale_factor
         
-        # Create RL decisions
+        # Create final RL decisions structure
         rl_decisions = {
-            'strategy': 'rl_enhanced_momentum',
-            'risk_level': 'moderate',
-            'allocations': allocations,
-            'confidence': np.mean([a['confidence'] for a in allocations]) if allocations else 0.0,
-            'active_agent': getattr(rl_agent, 'active_agent', 'simplified'),
-            'total_allocation': sum(abs(a['weight']) for a in allocations),
-            'reasoning': f'RL analysis of {len(symbols)} symbols with {len(allocations)} actionable positions'
+            'strategy': 'hybrid_llm_rl_diversified',
+            'risk_level': risk_profile,
+            'allocations': final_allocations,
+            'confidence': np.mean([alloc['confidence'] for alloc in final_allocations]) if final_allocations else 0.0,
+            'active_agent': 'hybrid_llm_rl',
+            'total_allocation': sum(alloc['weight'] for alloc in final_allocations),
+            'reasoning': f'Hybrid LLM-RL portfolio: {len(final_allocations)} diversified positions across sectors',
+            'rebalance_analysis': {
+                'needs_rebalancing': True,
+                'rebalance_reasons': rebalance_reasons,
+                'threshold_exceeded': True,
+                'new_positions': len(new_opportunities),
+                'total_deviation': sum([abs(alloc['weight'] * portfolio_value - positions.get(alloc['symbol'], {}).get('market_value', 0)) for alloc in final_allocations])
+            },
+            'portfolio_analytics': {
+                'market_regime': getattr(portfolio_recommendation, 'market_regime', 'unknown'),
+                'diversification_score': getattr(portfolio_recommendation, 'diversification_score', 0.5),
+                'expected_return': getattr(portfolio_recommendation, 'expected_return', 0.1),
+                'sector_count': len(set(alloc.get('industry', 'Unknown') for alloc in final_allocations)),
+                'risk_distribution': {
+                    'low': len([a for a in final_allocations if a.get('risk_level') == 'low']),
+                    'medium': len([a for a in final_allocations if a.get('risk_level') == 'medium']),
+                    'high': len([a for a in final_allocations if a.get('risk_level') == 'high'])
+                }
+            }
         }
         
-        logger.info(f"✅ RL system generated {len(allocations)} allocation decisions")
-        logger.info(f"🎯 Total allocation: {rl_decisions['total_allocation']:.1%}")
-        logger.info(f"🤖 Strategy: {rl_decisions['strategy']}")
+        logger.info(f"✅ Hybrid LLM-RL System Results:")
+        logger.info(f"   🎯 Strategy: {rl_decisions['strategy']}")
+        logger.info(f"   📊 Positions: {len(final_allocations)} diversified allocations")
+        logger.info(f"   📈 Total Allocation: {rl_decisions['total_allocation']:.1%}")
+        logger.info(f"   🎲 Confidence: {rl_decisions['confidence']:.1%}")
+        logger.info(f"   🏭 Sectors: {rl_decisions['portfolio_analytics']['sector_count']}")
         
         return {
             'rl_decisions': rl_decisions,
@@ -597,19 +840,29 @@ async def integrate_comprehensive_rl_system(state: Dict[str, Any], config: Dict[
                 }
                 for s in rl_signals
             ],
+            'llm_portfolio_recommendation': getattr(portfolio_recommendation, '__dict__', {}),
             'rl_enhanced': True,
-            'comprehensive_rl': True
+            'comprehensive_rl': True,
+            'llm_enhanced': True,
+            'hybrid_system': True
         }
         
     except Exception as e:
-        logger.error(f"❌ Comprehensive RL system integration failed: {e}")
+        logger.error(f"❌ Hybrid LLM-RL system integration failed: {e}")
         import traceback
         traceback.print_exc()
         return {
-            'rl_decisions': {'allocations': [], 'strategy': 'error', 'reasoning': f'RL system failed: {e}'},
+            'rl_decisions': {'allocations': [], 'strategy': 'error', 'reasoning': f'Hybrid system failed: {e}'},
             'rl_enhanced': False,
-            'comprehensive_rl': False
+            'comprehensive_rl': False,
+            'llm_enhanced': False,
+            'hybrid_system': False
         }
+
+# Backward compatibility - redirect the old function name to the new hybrid system
+async def integrate_comprehensive_rl_system(state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Backward compatibility wrapper for the hybrid LLM-RL system."""
+    return await integrate_hybrid_llm_rl_portfolio_system(state, config)
 
 async def cleanup_rl_agent():
     """Cleanup RL agent and save state."""

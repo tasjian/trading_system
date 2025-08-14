@@ -207,7 +207,18 @@ class AlpacaClient:
                 logger.warning(f"Alpaca quote failed for {symbol}: {quote_error}")
                 
                 # NO FALLBACKS - fail fast with clear error
-                error_msg = f"❌ CRITICAL: Alpaca data access failed for {symbol}: {quote_error}. Paper trading subscription may not support this data."
+                error_msg = (
+                    f"❌ CRITICAL SYSTEM FAILURE: Alpaca market data unavailable\n"
+                    f"Symbol: {symbol}\n"
+                    f"Error: {quote_error}\n"
+                    f"Possible causes:\n"
+                    f"- Paper trading subscription may not support real-time data for this symbol\n"
+                    f"- Market is closed and no recent data available\n"
+                    f"- Network connectivity issues\n"
+                    f"- API rate limits exceeded\n\n"
+                    f"SYSTEM REQUIRES VALID MARKET DATA TO OPERATE SAFELY\n"
+                    f"No hardcoded fallback mechanisms are permitted per system design"
+                )
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
             

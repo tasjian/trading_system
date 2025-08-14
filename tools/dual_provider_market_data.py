@@ -475,6 +475,8 @@ class DualProviderMarketData:
         logger.info(f"🎯 Fetching market data for {len(symbols)} symbols")
         
         results = {}
+        finnhub_success = False
+        alpha_vantage_success = False
         
         # Strategy: Use Finnhub for real-time quotes, Alpha Vantage for historical context
         # SEC EDGAR for fundamentals (if needed)
@@ -504,7 +506,12 @@ class DualProviderMarketData:
                                 data_source="finnhub"
                             )
                 
-                logger.info(f"✅ Finnhub provided data for {len(results)} symbols")
+                if len(results) > 0:
+                    finnhub_success = True
+                    logger.info(f"✅ Finnhub provided data for {len(results)} symbols")
+                else:
+                    logger.warning("⚠️ Finnhub returned no valid market data")
+                    
             except Exception as e:
                 logger.error(f"❌ Finnhub batch failed: {e}")
                 self._provider_health['finnhub'] = False
@@ -514,6 +521,7 @@ class DualProviderMarketData:
         if missing_symbols and self._provider_health['alpha_vantage']:
             try:
                 logger.debug(f"📈 Filling {len(missing_symbols)} gaps with Alpha Vantage...")
+                initial_results_count = len(results)
                 
                 # Process smaller batches for Alpha Vantage due to rate limits
                 for symbol in missing_symbols[:5]:  # Limit to 5 to stay under rate limits
@@ -542,12 +550,33 @@ class DualProviderMarketData:
                         logger.debug(f"Alpha Vantage failed for {symbol}: {e}")
                         continue
                 
-                logger.info(f"✅ Alpha Vantage provided additional data")
+                if len(results) > initial_results_count:
+                    alpha_vantage_success = True
+                    logger.info(f"✅ Alpha Vantage provided additional data")
+                else:
+                    logger.warning("⚠️ Alpha Vantage returned no valid market data")
+                    
             except Exception as e:
                 logger.error(f"❌ Alpha Vantage failed: {e}")
                 self._provider_health['alpha_vantage'] = False
         
+        # CRITICAL: If no data sources provided any results, fail fast with clear error
+        if len(results) == 0:
+            error_message = (
+                f"❌ CRITICAL SYSTEM FAILURE: All external data sources unavailable\n"
+                f"Finnhub Status: {'❌ FAILED' if not finnhub_success else '✅ SUCCESS'}\n"
+                f"Alpha Vantage Status: {'❌ FAILED' if not alpha_vantage_success else '✅ SUCCESS'}\n"
+                f"Symbols Requested: {symbols}\n"
+                f"Results Retrieved: 0\n"
+                f"SYSTEM REQUIRES VALID MARKET DATA TO OPERATE SAFELY"
+            )
+            logger.error(error_message)
+            raise RuntimeError(error_message)
+        
+        # Log provider health status
         logger.info(f"🎯 Total market data retrieved: {len(results)} symbols")
+        logger.info(f"Provider Status - Finnhub: {'✅' if finnhub_success else '❌'}, Alpha Vantage: {'✅' if alpha_vantage_success else '❌'}")
+        
         return results
     
     async def get_price_signals(self, symbols: List[str], threshold: float = 0.02) -> List[PriceSignal]:

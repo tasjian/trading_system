@@ -20,7 +20,8 @@ from core.llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
 from core.social_media_collector_optimized import SocialMediaCollector, SocialMediaPost
 from core.earnings_scraper import EarningsCallScraper, EarningsTranscript
 from core.sec_edgar_client import SECEdgarClient, SECFiling
-from core.crypto_sentiment_analyzer import crypto_sentiment_analyzer, CryptoSentimentResult
+# CRYPTO TRADING DISABLED - Comment out crypto sentiment analyzer
+# from core.crypto_sentiment_analyzer import crypto_sentiment_analyzer, CryptoSentimentResult
 from config.settings import settings, is_crypto_symbol
 from tools.alpaca_market_data import fetch_stock_history
 
@@ -296,7 +297,7 @@ class SentimentAgent:
                     try:
                         sentiment = await asyncio.wait_for(
                             self.llm_analyzer.analyze_text(combined_text, "social_media"),
-                            timeout=15.0  # Increased timeout for Ollama performance
+                            timeout=45.0  # Increased timeout for Ollama to fully process
                         )
                         if sentiment:
                             sentiment_results[platform] = sentiment
@@ -372,7 +373,7 @@ class SentimentAgent:
             # Add timeout for LLM analysis (increased for Ollama)
             return await asyncio.wait_for(
                 self.llm_analyzer.analyze_text(market_text, "financial_news"),
-                timeout=12.0
+                timeout=30.0  # Increased timeout for Ollama to fully process
             )
             
         except asyncio.TimeoutError:
@@ -758,7 +759,9 @@ class SentimentAgent:
         
         try:
             # Use crypto sentiment analyzer
-            crypto_result = await crypto_sentiment_analyzer.analyze_crypto_sentiment(symbol)
+            # CRYPTO TRADING DISABLED - Skip crypto sentiment analysis
+            # crypto_result = await crypto_sentiment_analyzer.analyze_crypto_sentiment(symbol)
+            crypto_result = None
             
             # Convert to standard ComprehensiveSentiment format
             sentiment_result = ComprehensiveSentiment(
@@ -855,7 +858,9 @@ class SentimentAgent:
             logger.debug(f"SEC client cleanup error: {e}")
         
         try:
-            await crypto_sentiment_analyzer.close()
+            # CRYPTO TRADING DISABLED - Skip crypto sentiment analyzer cleanup
+            # await crypto_sentiment_analyzer.close()
+            pass
         except Exception as e:
             logger.debug(f"Crypto sentiment analyzer close error: {e}")
 

@@ -16,6 +16,7 @@ from tools.alpaca_client import alpaca_client
 from tools.resilient_signal_orchestrator import get_resilient_price_signals_sync
 # SocialMediaCollector no longer directly used - using cached data instead
 from config.settings import settings, is_crypto_symbol
+# CRYPTO TRADING DISABLED - Comment out crypto functions
 # from config.settings import get_crypto_pairs  # CRYPTO DISABLED
 
 logger = logging.getLogger(__name__)
@@ -86,22 +87,24 @@ class StockUniverseFilter:
             all_symbols = await self._get_tradeable_symbols()
             logger.info(f"Retrieved tradeable universe: {len(all_symbols)} symbols")
         
-        # Add crypto pairs if enabled and check market status for prioritization
-        crypto_pairs = []
-        market_closed = False
-        if settings.crypto_enabled:
-            crypto_pairs = get_crypto_pairs()
-            all_symbols.extend(crypto_pairs)
-            logger.info(f"Added {len(crypto_pairs)} crypto pairs to universe")
-            
-            # Check if stock market is closed to prioritize crypto
-            try:
-                from tools.alpaca_client import alpaca_client
-                market_closed = not alpaca_client.is_market_open()
-                if market_closed:
-                    logger.info("🌙 Stock market is closed - prioritizing crypto assets for 24/7 trading")
-            except Exception:
-                pass
+        # CRYPTO TRADING DISABLED - Comment out crypto pairs and market prioritization
+        # crypto_pairs = []
+        # market_closed = False
+        # if settings.crypto_enabled:
+        #     crypto_pairs = get_crypto_pairs()
+        #     all_symbols.extend(crypto_pairs)
+        #     logger.info(f"Added {len(crypto_pairs)} crypto pairs to universe")
+        #     
+        #     # Check if stock market is closed to prioritize crypto
+        #     try:
+        #         from tools.alpaca_client import alpaca_client
+        #         market_closed = not alpaca_client.is_market_open()
+        #         if market_closed:
+        #             logger.info("🌙 Stock market is closed - prioritizing crypto assets for 24/7 trading")
+        #     except Exception:
+        #         pass
+        crypto_pairs = []  # Always empty when crypto disabled
+        market_closed = False  # Not relevant when crypto disabled
         
         # Step 2: Apply basic filters (price, volume, market cap)
         logger.info("📊 Applying basic filters (price, volume, market cap)...")
@@ -128,9 +131,19 @@ class StockUniverseFilter:
                     added_count += 1
             logger.info(f"Added {added_count} watchlist symbols (dynamic discovery enabled)")
         
-        # Step 6: No fallbacks allowed - system must find symbols through normal filtering
+        # Step 6: Fail fast if insufficient symbols found - no fallbacks allowed
         if len(filtered_symbols) == 0:
-            raise ValueError("No symbols found through normal filtering and no fallback mechanisms allowed - system requires valid price signals and market data")
+            error_msg = (
+                f"❌ CRITICAL SYSTEM FAILURE: Universe filtering failed\n"
+                f"Total symbols processed: {len(all_symbols)}\n"
+                f"Symbols after basic filters: {len(basic_filtered)}\n"
+                f"Trading signals collected: {len(signals)}\n"
+                f"Final candidates selected: {len(filtered_symbols)}\n"
+                f"SYSTEM REQUIRES VALID TRADING SIGNALS TO OPERATE SAFELY\n"
+                f"All external data sources must be functional for signal generation"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         # Calculate summary
         filter_summary = self._calculate_filter_summary(signals)
@@ -193,9 +206,10 @@ class StockUniverseFilter:
         # Apply filtering to all symbols (stocks and crypto)
         for symbol in symbols:
             if is_crypto_symbol(symbol):
-                # Crypto-specific filtering
+                # CRYPTO TRADING DISABLED - Skip all crypto symbols
                 # All configured crypto pairs pass basic filtering
-                filtered_symbols.append(symbol)
+                # filtered_symbols.append(symbol)
+                pass  # Skip crypto symbols when disabled
             else:
                 # Stock-specific filtering
                 # Quick heuristics for potentially interesting stocks
@@ -205,16 +219,27 @@ class StockUniverseFilter:
                     symbol not in ['ETF', 'FUND', 'INDEX']):  # Exclude obvious ETFs
                     filtered_symbols.append(symbol)
         
-        # Count crypto vs stocks
-        crypto_count = sum(1 for s in filtered_symbols if is_crypto_symbol(s))
-        stock_count = len(filtered_symbols) - crypto_count
+        # CRYPTO TRADING DISABLED - Comment out crypto vs stock counting and prioritization
+        # crypto_count = sum(1 for s in filtered_symbols if is_crypto_symbol(s))
+        # stock_count = len(filtered_symbols) - crypto_count
+        # 
+        # # Limit to manageable size for processing (but preserve all crypto)
+        # # Keep all crypto pairs and limit stocks
+        # crypto_symbols = [s for s in filtered_symbols if is_crypto_symbol(s)]
+        # stock_symbols = [s for s in filtered_symbols if not is_crypto_symbol(s)][:300 - len(crypto_symbols)]
+        # 
+        # filtered_symbols = crypto_symbols + stock_symbols
         
-        # Limit to manageable size for processing (but preserve all crypto)
-        # Keep all crypto pairs and limit stocks
-        crypto_symbols = [s for s in filtered_symbols if is_crypto_symbol(s)]
-        stock_symbols = [s for s in filtered_symbols if not is_crypto_symbol(s)][:300 - len(crypto_symbols)]
+        # Only process stocks when crypto is disabled
+        crypto_count = 0
+        stock_count = len(filtered_symbols)
+        stock_symbols = [s for s in filtered_symbols if not is_crypto_symbol(s)]
         
-        filtered_symbols = crypto_symbols + stock_symbols
+        # Shuffle to avoid alphabetical bias before taking top 300
+        import random
+        random.shuffle(stock_symbols)
+        stock_symbols = stock_symbols[:300]
+        filtered_symbols = stock_symbols
         
         logger.info(f"Dynamic filtering applied to {len(symbols)} symbols")
         logger.info(f"Selected {len(filtered_symbols)} candidates ({crypto_count} crypto, {stock_count} stocks)")
@@ -226,8 +251,10 @@ class StockUniverseFilter:
         
         signals = []
         
-        # Separate crypto and stock symbols for appropriate signal collection
-        crypto_symbols = [s for s in symbols if is_crypto_symbol(s)]
+        # CRYPTO TRADING DISABLED - Comment out crypto separation
+        # crypto_symbols = [s for s in symbols if is_crypto_symbol(s)]
+        # stock_symbols = [s for s in symbols if not is_crypto_symbol(s)]
+        crypto_symbols = []  # Always empty when crypto disabled
         stock_symbols = [s for s in symbols if not is_crypto_symbol(s)]
         
         # Create tasks for different signal types
@@ -236,7 +263,7 @@ class StockUniverseFilter:
             self._collect_earnings_signals(stock_symbols),  # Only for stocks
             self._collect_social_signals(symbols[:100], cached_social_data),  # Works for both
             self._collect_news_signals(symbols[:200]),     # Works for both
-            self._collect_crypto_momentum_signals(crypto_symbols) if crypto_symbols else None  # Crypto-specific
+            # self._collect_crypto_momentum_signals(crypto_symbols) if crypto_symbols else None  # CRYPTO DISABLED
         ]
         
         # Filter out None tasks
@@ -304,7 +331,14 @@ class StockUniverseFilter:
     
     async def _generate_fallback_price_signals(self) -> List[StockSignal]:
         """REMOVED: Fallback price signals disabled - system must use real market data only."""
-        raise RuntimeError("❌ CRITICAL: Fallback price signals disabled - system requires valid yfinance market data")
+        error_msg = (
+            "❌ CRITICAL SYSTEM FAILURE: Fallback price signals disabled\n"
+            "System requires valid market data from external providers (Finnhub/Alpha Vantage)\n"
+            "No hardcoded fallback mechanisms are permitted per system design\n"
+            "Please check external API connectivity and rate limits"
+        )
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
     
     async def _collect_earnings_signals(self, symbols: List[str]) -> List[StockSignal]:
         """Collect signals from recent earnings announcements."""
@@ -462,11 +496,12 @@ class StockUniverseFilter:
             # Bonus for multiple signals of same type (conviction)
             volume_bonus = min(0.2, (data['signal_count'] - 1) * 0.05)
             
-            # Crypto priority bonus when stock market is closed
-            crypto_bonus = 0.0
-            if market_closed and crypto_pairs and symbol in crypto_pairs:
-                crypto_bonus = 0.3  # Significant boost for crypto when markets closed
-                logger.debug(f"🌙 Crypto priority bonus applied to {symbol}")
+            # CRYPTO TRADING DISABLED - Comment out crypto priority bonus
+            # crypto_bonus = 0.0
+            # if market_closed and crypto_pairs and symbol in crypto_pairs:
+            #     crypto_bonus = 0.3  # Significant boost for crypto when markets closed
+            #     logger.debug(f"🌙 Crypto priority bonus applied to {symbol}")
+            crypto_bonus = 0.0  # Always zero when crypto disabled
             
             final_score = avg_score + type_bonus + volume_bonus + crypto_bonus
             final_scores.append((symbol, final_score))
@@ -492,43 +527,44 @@ class StockUniverseFilter:
         
         return summary
     
-    async def _collect_crypto_momentum_signals(self, symbols: List[str]) -> List[StockSignal]:
-        """Collect crypto-specific momentum signals."""
-        
-        signals = []
-        logger.info(f"🚀 Checking crypto momentum for {len(symbols)} pairs...")
-        
-        for symbol in symbols:
-            try:
-                # Get recent crypto market data
-                market_data = alpaca_client.get_market_data(symbol, limit=20)
-                
-                if len(market_data) >= 10:
-                    prices = market_data["close"]
-                    volumes = market_data["volume"]
-                    
-                    # Calculate crypto-specific momentum indicators
-                    recent_return = (prices.iloc[-1] / prices.iloc[-5] - 1) if len(prices) >= 5 else 0
-                    volume_spike = volumes.iloc[-1] / volumes.mean() if volumes.mean() > 0 else 1
-                    
-                    # Crypto momentum signal (higher volatility tolerance)
-                    if abs(recent_return) > 0.05 and volume_spike > 1.5:  # 5% move with volume
-                        signal = StockSignal(
-                            symbol=symbol,
-                            signal_type="crypto_momentum",
-                            strength=min(1.0, abs(recent_return) * 5 + (volume_spike - 1) * 0.2),
-                            description=f"Crypto momentum: {recent_return:.2%} move with {volume_spike:.1f}x volume",
-                            timestamp=datetime.now(),
-                            asset_type="crypto"
-                        )
-                        signals.append(signal)
-                        
-            except Exception as e:
-                logger.warning(f"Error checking crypto momentum for {symbol}: {e}")
-                continue
-        
-        logger.info(f"Found {len(signals)} crypto momentum signals")
-        return signals
+    # CRYPTO TRADING DISABLED - Comment out entire crypto momentum collection method
+    # async def _collect_crypto_momentum_signals(self, symbols: List[str]) -> List[StockSignal]:
+    #     """Collect crypto-specific momentum signals."""
+    #     
+    #     signals = []
+    #     logger.info(f"🚀 Checking crypto momentum for {len(symbols)} pairs...")
+    #     
+    #     for symbol in symbols:
+    #         try:
+    #             # Get recent crypto market data
+    #             market_data = alpaca_client.get_market_data(symbol, limit=20)
+    #             
+    #             if len(market_data) >= 10:
+    #                 prices = market_data["close"]
+    #                 volumes = market_data["volume"]
+    #                 
+    #                 # Calculate crypto-specific momentum indicators
+    #                 recent_return = (prices.iloc[-1] / prices.iloc[-5] - 1) if len(prices) >= 5 else 0
+    #                 volume_spike = volumes.iloc[-1] / volumes.mean() if volumes.mean() > 0 else 1
+    #                 
+    #                 # Crypto momentum signal (higher volatility tolerance)
+    #                 if abs(recent_return) > 0.05 and volume_spike > 1.5:  # 5% move with volume
+    #                     signal = StockSignal(
+    #                         symbol=symbol,
+    #                         signal_type="crypto_momentum",
+    #                         strength=min(1.0, abs(recent_return) * 5 + (volume_spike - 1) * 0.2),
+    #                         description=f"Crypto momentum: {recent_return:.2%} move with {volume_spike:.1f}x volume",
+    #                         timestamp=datetime.now(),
+    #                         asset_type="crypto"
+    #                     )
+    #                     signals.append(signal)
+    #                     
+    #         except Exception as e:
+    #             logger.warning(f"Error checking crypto momentum for {symbol}: {e}")
+    #             continue
+    #     
+    #     logger.info(f"Found {len(signals)} crypto momentum signals")
+    #     return signals
 
 # Global instance
 universe_filter = StockUniverseFilter()

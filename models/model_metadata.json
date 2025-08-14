@@ -67,5 +67,79 @@
       "consecutive_losses": 0
     },
     "file_path": "models/model_da6eed7054fb.pt"
+  },
+  "bb5afffa040e": {
+    "version_id": "bb5afffa040e",
+    "timestamp": "2025-08-13 10:49:55.576288",
+    "symbols": [
+      "IWM",
+      "XLK",
+      "UAL",
+      "UNH",
+      "UBOT",
+      "UBSI",
+      "XLF"
+    ],
+    "state_dim": 84,
+    "action_dim": 7,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 0,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 0,
+      "average_return": -0.00684300960000003,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0
+    },
+    "file_path": "models/model_bb5afffa040e.pt"
+  },
+  "a01d54ed0e16": {
+    "version_id": "a01d54ed0e16",
+    "timestamp": "2025-08-14 11:22:00.680647",
+    "symbols": [
+      "IWM",
+      "XLF",
+      "XLK",
+      "CDLR",
+      "CDIO"
+    ],
+    "state_dim": 60,
+    "action_dim": 5,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 0,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 0,
+      "average_return": 0.0,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0
+    },
+    "file_path": "models/model_a01d54ed0e16.pt"
+  },
+  "e8e28e1210a0": {
+    "version_id": "e8e28e1210a0",
+    "timestamp": "2025-08-14 11:26:05.694472",
+    "symbols": [
+      "AAPL",
+      "MSFT"
+    ],
+    "state_dim": 24,
+    "action_dim": 2,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 0,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 0,
+      "average_return": 0.0,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0
+    },
+    "file_path": "models/model_e8e28e1210a0.pt"
   }
 }

@@ -351,18 +351,107 @@ class ContinuousRebalancer:
                 logger.warning(f"Circuit breakers active: {active_breakers}")
                 # Continue but with reduced position sizing
             
-            # Step 4.5: RL Decision Layer (Policy Learning & Portfolio Allocation)
-            pipeline_stage = "rl_decision_layer"
-            logger.info("🤖 RL Decision Layer (Policy Learning & Portfolio Allocation)...")
-            state = await self._run_rl_decision_layer(state, config)
+            # Step 4.5: Hybrid LLM-RL Portfolio Decision Layer
+            pipeline_stage = "hybrid_portfolio_decision"
+            logger.info("🚀 Hybrid LLM-RL Portfolio Decision Layer (Diversified Portfolio Management)...")
+            state = await self._run_hybrid_portfolio_decision_layer(state, config)
             
-            # Step 5: Signal Generation (Enhanced by RL)
+            # Step 5: Signal Generation (Convert Hybrid Portfolio Decisions to Trading Signals)
             pipeline_stage = "signal_generation"
-            logger.info("🧠 LLM Signal Generation (RL-Enhanced)...")
+            logger.info("🎯 Converting Hybrid Portfolio Decisions to Trading Signals...")
             pre_signals = len(state.get("signals", []))
-            state = await self.workflow.signal_generation_agent(state, config)
-            post_signals = len(state.get("signals", []))
-            signals_generated = post_signals - pre_signals
+            
+            # Check if hybrid system generated allocations
+            rl_decisions = state.get("rl_decisions", {})
+            rl_allocations = rl_decisions.get("allocations", [])
+            rebalance_analysis = rl_decisions.get("rebalance_analysis", {})
+            
+            # Check if rebalancing is needed based on intelligent analysis
+            needs_rebalancing = rebalance_analysis.get("needs_rebalancing", True)
+            
+            if not needs_rebalancing:
+                logger.info("🔒 No rebalancing needed - portfolio is well-balanced")
+                signals_generated = 0
+            elif rl_allocations:
+                logger.info(f"📊 Converting {len(rl_allocations)} hybrid portfolio allocations to trading signals")
+                
+                signals = []
+                from agents.state import TradingSignal, add_signal_to_state
+                from tools.alpaca_client import alpaca_client
+                
+                # Get current portfolio data for enhanced calculation
+                current_portfolio = state.get("portfolio", {})
+                available_cash = float(current_portfolio.get("cash", 50000))
+                portfolio_value = float(current_portfolio.get("equity", 100000))
+                
+                for allocation in rl_allocations:
+                    symbol = allocation.get("symbol", "")
+                    target_weight = float(allocation.get("weight", 0.0))  # Weight as decimal (0.05 = 5%)
+                    action = allocation.get("action", "buy")
+                    
+                    if not symbol or target_weight <= 0:
+                        continue
+                    
+                    try:
+                        # Calculate target dollar amount based on portfolio value
+                        target_dollar_amount = target_weight * portfolio_value
+                        
+                        # Get current price for quantity calculation
+                        current_price = alpaca_client.get_current_price(symbol)
+                        if current_price and current_price > 0:
+                            # Calculate shares needed
+                            quantity = int(target_dollar_amount / current_price)
+                            
+                            # Only proceed with meaningful position sizes
+                            if quantity > 0 and target_dollar_amount >= 100:  # Min $100 position
+                                logger.info(f"💰 {symbol}: {target_weight:.1%} weight = ${target_dollar_amount:.2f} = {quantity} shares @ ${current_price:.2f}")
+                                
+                                # Create properly structured trading signal
+                                signal = TradingSignal(
+                                    symbol=symbol,
+                                    action=action,
+                                    confidence=float(allocation.get("confidence", 0.8)),
+                                    quantity=float(quantity),
+                                    reasoning=f"Hybrid LLM-RL Portfolio: {allocation.get('reasoning', 'Diversified sector allocation with RL optimization')}"
+                                )
+                                signals.append(signal)
+                            else:
+                                logger.debug(f"⚠️ Skipping {symbol}: position too small (${target_dollar_amount:.2f})")
+                        else:
+                            logger.warning(f"⚠️ Could not get price for {symbol}, skipping")
+                            
+                    except Exception as e:
+                        logger.warning(f"⚠️ Signal generation failed for {symbol}: {e}")
+                        continue
+                
+                # Add signals to state using proper state management
+                for signal in signals:
+                    state = add_signal_to_state(state, signal)
+                signals_generated = len(signals)
+                
+                # Enhanced logging for hybrid system
+                strategy = rl_decisions.get("strategy", "unknown")
+                total_allocation = rl_decisions.get("total_allocation", 0.0)
+                portfolio_analytics = rl_decisions.get("portfolio_analytics", {})
+                sector_count = portfolio_analytics.get("sector_count", 0)
+                
+                logger.info(f"✅ Generated {signals_generated} signals from hybrid LLM-RL system")
+                logger.info(f"📈 Strategy: {strategy}")
+                logger.info(f"🎯 Total Portfolio Allocation: {total_allocation:.1%}")
+                logger.info(f"🏭 Sector Diversification: {sector_count} sectors")
+                
+                # Log rebalancing reasons
+                rebalance_reasons = rebalance_analysis.get("rebalance_reasons", [])
+                if rebalance_reasons:
+                    logger.info(f"⚖️ Rebalancing triggered by:")
+                    for reason in rebalance_reasons[:3]:
+                        logger.info(f"   • {reason}")
+            else:
+                # Fallback to traditional signal generation
+                logger.warning("🔄 No hybrid allocations found, falling back to LLM signal generation")
+                state = await self.workflow.signal_generation_agent(state, config)
+                post_signals = len(state.get("signals", []))
+                signals_generated = post_signals - pre_signals
             
             # Step 6: Strategy Optimization
             pipeline_stage = "strategy_optimization"
@@ -477,72 +566,145 @@ class ContinuousRebalancer:
                 # Reconstruct sentiment_signals from cached sentiment_data for RL integration
                 sentiment_signals = []
                 for symbol, sentiment_data in self.cached_sentiment_data.items():
-                    # Convert sentiment data back to signal format
+                    # Convert sentiment data back to signal format (enhanced with social media data)
                     if isinstance(sentiment_data, dict):
                         overall_score = sentiment_data.get('overall_score', 0.0)
                         overall_sentiment = sentiment_data.get('overall_sentiment', 'neutral')
                         confidence = sentiment_data.get('confidence', 0.5)
+                        # Extract social media sentiment information
+                        social_sentiment = sentiment_data.get('social_sentiment', {})
+                        social_posts_count = sentiment_data.get('social_posts_count', 0)
+                        has_social_data = len(social_sentiment) > 0 or social_posts_count > 0
                     else:
-                        # Handle object format
+                        # Handle ComprehensiveSentiment object format
                         overall_score = getattr(sentiment_data, 'overall_score', 0.0)
                         overall_sentiment = getattr(sentiment_data, 'overall_sentiment', 'neutral')
                         confidence = getattr(sentiment_data, 'confidence', 0.5)
+                        # Extract social media sentiment information from object
+                        social_sentiment = getattr(sentiment_data, 'social_sentiment', {})
+                        social_posts_count = getattr(sentiment_data, 'social_posts_count', 0)
+                        has_social_data = len(social_sentiment) > 0 or social_posts_count > 0
                     
                     # Generate signal based on sentiment score with enhanced SHORT detection and improved neutral handling
                     if overall_score >= 0.05:  # Lower positive sentiment threshold
                         signal_strength = min(0.5, max(0.2, overall_score))  # Adjust strength based on score
+                        # Enhanced signal with social media integration
+                        reasoning_parts = [f"{overall_sentiment.title()} overall sentiment"]
+                        if has_social_data:
+                            reasoning_parts.append(f"Social media activity: {len(social_sentiment)} platforms")
+                            if social_posts_count > 0:
+                                reasoning_parts.append(f"{social_posts_count} social posts")
+                        reasoning_parts.append("Multiple data sources")
+                        
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': 'BUY',
                             'strength': signal_strength,
                             'confidence': confidence,
-                            'reasoning': f"{overall_sentiment.title()} overall sentiment, Multiple data sources",
+                            'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
-                            'has_earnings': False  # Cached data doesn't track earnings
+                            'has_earnings': False,  # Cached data doesn't track earnings
+                            'has_social_data': has_social_data,
+                            'social_platforms': len(social_sentiment),
+                            'social_posts_count': social_posts_count,
+                            'source': 'comprehensive_sentiment_with_social'
                         })
                     elif overall_score <= -0.5:  # Extreme negative sentiment for SHORT signals
                         signal_strength = min(0.8, abs(overall_score))  # Higher strength for shorts
                         signal_type = 'SHORT' if overall_score <= -0.7 else 'SELL'  # SHORT for extremely negative
-                        reasoning = f"EXTREME negative sentiment ({overall_score:.2f}), Multiple data sources"
+                        
+                        # Enhanced reasoning with social media integration
+                        reasoning_parts = []
                         if overall_score <= -0.7:
-                            reasoning = f"CRISIS-LEVEL negative sentiment ({overall_score:.2f}) - SHORT opportunity"
+                            reasoning_parts.append(f"CRISIS-LEVEL negative sentiment ({overall_score:.2f})")
+                        else:
+                            reasoning_parts.append(f"EXTREME negative sentiment ({overall_score:.2f})")
+                        
+                        if has_social_data:
+                            reasoning_parts.append(f"Social media negativity: {len(social_sentiment)} platforms")
+                            if social_posts_count > 0:
+                                reasoning_parts.append(f"{social_posts_count} negative posts")
+                        reasoning_parts.append("Multiple data sources")
+                        
+                        # Boost strength if social media confirms negative sentiment
+                        if has_social_data and len(social_sentiment) >= 2:
+                            signal_strength = min(0.9, signal_strength * 1.1)  # 10% boost for multi-platform negativity
                         
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': signal_type,
                             'strength': signal_strength,
                             'confidence': min(0.95, confidence * 1.2),  # Boost confidence for extreme negatives
-                            'reasoning': reasoning,
+                            'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
                             'has_earnings': False,
-                            'sentiment_score': overall_score  # Include raw score for further analysis
+                            'sentiment_score': overall_score,  # Include raw score for further analysis
+                            'has_social_data': has_social_data,
+                            'social_platforms': len(social_sentiment),
+                            'social_posts_count': social_posts_count,
+                            'source': 'comprehensive_sentiment_with_social'
                         })
                     elif overall_score <= -0.05:  # Lower negative sentiment threshold for SELL signals
                         signal_strength = min(0.6, max(0.2, abs(overall_score)))  # Adjust strength based on score
+                        
+                        # Enhanced reasoning for moderate negative sentiment
+                        reasoning_parts = [f"Negative sentiment ({overall_score:.2f})"]
+                        if has_social_data:
+                            reasoning_parts.append(f"Social sentiment: {len(social_sentiment)} platforms")
+                        reasoning_parts.append("Multiple data sources")
+                        
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': 'SELL',
                             'strength': signal_strength,
                             'confidence': confidence,
-                            'reasoning': f"Negative sentiment ({overall_score:.2f}), Multiple data sources",
+                            'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
                             'has_earnings': False,
-                            'sentiment_score': overall_score
+                            'sentiment_score': overall_score,
+                            'has_social_data': has_social_data,
+                            'social_platforms': len(social_sentiment),
+                            'social_posts_count': social_posts_count,
+                            'source': 'comprehensive_sentiment_with_social'
                         })
                     elif abs(overall_score) < 0.05:  # Very neutral sentiment - generate weak HOLD signals for RL
+                        # Enhanced reasoning for neutral sentiment
+                        reasoning_parts = [f"Neutral sentiment ({overall_score:.2f})"]
+                        if has_social_data:
+                            reasoning_parts.append(f"Mixed social signals: {len(social_sentiment)} platforms")
+                        reasoning_parts.append("Multiple data sources")
+                        
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': 'HOLD',
                             'strength': 0.1,  # Very weak signal strength
                             'confidence': confidence,
-                            'reasoning': f"Neutral sentiment ({overall_score:.2f}), Multiple data sources",
+                            'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
                             'has_earnings': False,
-                            'sentiment_score': overall_score
+                            'sentiment_score': overall_score,
+                            'has_social_data': has_social_data,
+                            'social_platforms': len(social_sentiment),
+                            'social_posts_count': social_posts_count,
+                            'source': 'comprehensive_sentiment_with_social'
                         })
                 
                 state["sentiment_signals"] = sentiment_signals
+                
+                # Enhanced logging for social media integration
+                social_signals = [s for s in sentiment_signals if s.get('has_social_data', False)]
+                total_social_platforms = sum(s.get('social_platforms', 0) for s in social_signals)
+                total_social_posts = sum(s.get('social_posts_count', 0) for s in social_signals)
+                
                 logger.info(f"📊 Loaded cached sentiment for {len(self.cached_sentiment_data)} symbols, {len(sentiment_signals)} signals")
+                logger.info(f"🌐 Social media integration: {len(social_signals)} signals with social data")
+                if social_signals:
+                    logger.info(f"📱 Social media coverage: {total_social_platforms} platform connections, {total_social_posts} total posts")
+                    # Log sample social media enhanced signals
+                    for signal in social_signals[:3]:
+                        logger.info(f"   🎯 {signal['symbol']}: {signal['signal']} (social: {signal['social_platforms']} platforms, {signal['social_posts_count']} posts)")
+                else:
+                    logger.info(f"📱 No cached social media data available in sentiment signals")
             else:
                 # No cached data available and no fallbacks allowed
                 raise ValueError("No cached sentiment data available and no fallback mechanisms allowed - system requires fresh sentiment analysis")
@@ -616,10 +778,26 @@ class ContinuousRebalancer:
             return self.failure_backoff_minutes * backoff_multiplier
     
     async def _perform_system_check(self):
-        """Perform initial system health check."""
-        logger.info("🔧 Performing system check...")
+        """Perform comprehensive system health check including service dependencies."""
+        logger.info("🔧 Performing comprehensive system check...")
         
         try:
+            # First, ensure all required services are running
+            from tools.service_manager import ensure_services_running, get_service_summary
+            
+            logger.info("🔍 Checking and starting required services...")
+            services_ok = await ensure_services_running()
+            
+            # Log service status
+            service_summary = get_service_summary()
+            for service_name, status in service_summary.items():
+                logger.info(f"   {service_name.upper()}: {status}")
+            
+            if not services_ok:
+                logger.warning("⚠️ Some services failed to start - system may have degraded performance")
+            else:
+                logger.info("✅ All required services are running")
+            
             # Check Alpaca connection
             account = alpaca_client.get_account_info()
             logger.info(f"✅ Alpaca connected: {account['id']}")
@@ -793,79 +971,163 @@ class ContinuousRebalancer:
             return state
     
     
-    async def _run_rl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_hybrid_portfolio_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Comprehensive RL Decision Layer
+        Hybrid LLM-RL Portfolio Decision Layer
         
         Architecture:
         [LLM Analysis Layer: sentiment_data, market_signals] 
                     ↓
-        [Comprehensive RL Agent: Online learning with dual-agent system] ← This method
+        [LLM Portfolio Manager: Diversified sector-aware allocations] 
                     ↓
-        [Enhanced state with sophisticated RL portfolio decisions]
+        [RL Agent: Position sizing and timing optimization] ← This method
+                    ↓
+        [Intelligent Rebalancing: Prevent over-trading]
+                    ↓
+        [Enhanced state with sophisticated hybrid portfolio decisions]
         """
         try:
-            # Use comprehensive RL system only
-            from agents.rl_integration_bridge import integrate_comprehensive_rl_system
+            # Use hybrid LLM-RL system
+            from agents.rl_integration_bridge import integrate_hybrid_llm_rl_portfolio_system
             
-            logger.info("🚀 Initializing Comprehensive RL Decision Layer...")
+            logger.info("🚀 Initializing Hybrid LLM-RL Portfolio Decision Layer...")
             
-            # Use comprehensive RL system
-            result = await integrate_comprehensive_rl_system(state, config)
+            # Use hybrid system that combines LLM portfolio management with RL optimization
+            result = await integrate_hybrid_llm_rl_portfolio_system(state, config)
             
             if result and result.get("rl_decisions"):
                 state.update(result)
                 state["rl_enhanced"] = True
                 state["comprehensive_rl"] = True
+                state["llm_enhanced"] = True
+                state["hybrid_system"] = True
                 
                 rl_decisions = result["rl_decisions"]
-                logger.info(f"✅ Comprehensive RL generated {len(rl_decisions.get('allocations', []))} decisions")
-                logger.info(f"🎯 Strategy: {rl_decisions.get('strategy', 'unknown')}")
-                logger.info(f"🤖 Agent: {rl_decisions.get('active_agent', 'unknown')}")
+                strategy = rl_decisions.get("strategy", "unknown")
+                allocations = rl_decisions.get("allocations", [])
                 
-                # Log allocations
-                for allocation in rl_decisions.get('allocations', [])[:3]:
-                    weight_str = f"{allocation['weight']:+.1%}"
-                    action_str = allocation['action']
-                    logger.info(f"   🎯 {allocation['symbol']}: {action_str} {weight_str}")
+                logger.info(f"✅ Hybrid LLM-RL system generated {len(allocations)} allocation decisions")
+                logger.info(f"🎯 Strategy: {strategy}")
+                
+                # Enhanced logging for portfolio analytics
+                portfolio_analytics = rl_decisions.get("portfolio_analytics", {})
+                if portfolio_analytics:
+                    market_regime = portfolio_analytics.get("market_regime", "unknown")
+                    diversification_score = portfolio_analytics.get("diversification_score", 0.0)
+                    sector_count = portfolio_analytics.get("sector_count", 0)
+                    
+                    logger.info(f"📊 Market Regime: {market_regime}")
+                    logger.info(f"🎯 Diversification Score: {diversification_score:.2f}")
+                    logger.info(f"🏭 Sector Count: {sector_count}")
+                
+                # Log top allocations with enhanced details
+                for allocation in allocations[:5]:  # Show top 5
+                    symbol = allocation.get('symbol', 'N/A')
+                    weight = allocation.get('weight', 0.0)
+                    action = allocation.get('action', 'hold')
+                    industry = allocation.get('industry', 'Unknown')
+                    risk_level = allocation.get('risk_level', 'medium')
+                    
+                    logger.info(f"   🎯 {symbol}: {action} {weight:.1%} ({industry}, {risk_level} risk)")
+                
+                # Log rebalancing analysis
+                rebalance_analysis = rl_decisions.get("rebalance_analysis", {})
+                if rebalance_analysis:
+                    needs_rebalancing = rebalance_analysis.get("needs_rebalancing", True)
+                    if needs_rebalancing:
+                        reasons = rebalance_analysis.get("rebalance_reasons", [])
+                        logger.info(f"⚖️ Rebalancing needed: {len(reasons)} reasons")
+                        for reason in reasons[:2]:
+                            logger.info(f"   • {reason}")
+                    else:
+                        logger.info("🔒 Portfolio well-balanced, no rebalancing needed")
                 
                 return state
+                
             else:
-                logger.warning("⚠️ Comprehensive RL system failed - using minimal allocation")
+                logger.warning("⚠️ Hybrid LLM-RL system failed - using conservative fallback")
                 
-                sentiment_signals = state.get("sentiment_signals", [])
-                buy_signals = [s for s in sentiment_signals if s.get('signal') == 'BUY'][:1]
-                
-                if buy_signals:
-                    minimal_decisions = {
-                        "strategy": "minimal_allocation",
-                        "risk_level": "very_low", 
-                        "allocations": [{
-                            "symbol": buy_signals[0]['symbol'],
-                            "weight": 0.05,
-                            "confidence": 0.3,
-                            "action": "buy",
-                            "reasoning": "Minimal allocation fallback"
-                        }],
-                        "confidence": 0.3,
-                        "reasoning": "Minimal fallback allocation"
+                # Conservative fallback using existing positions
+                current_positions = state.get("portfolio", {}).get("positions", {})
+                if current_positions:
+                    logger.info(f"🔄 Maintaining {len(current_positions)} current positions")
+                    fallback_decisions = {
+                        "strategy": "maintain_current_positions",
+                        "risk_level": "conservative", 
+                        "allocations": [],  # No new trades
+                        "confidence": 0.5,
+                        "reasoning": "Hybrid system failed, maintaining current positions for safety",
+                        "rebalance_analysis": {
+                            "needs_rebalancing": False,
+                            "current_positions": len(current_positions),
+                            "strategy": "conservative_hold"
+                        }
                     }
-                    
-                    state["rl_decisions"] = minimal_decisions
-                    state["rl_enhanced"] = False
-                    
-                    logger.warning("🔧 Minimal allocation: 1 conservative position")
-                    return state
                 else:
-                    state["rl_decisions"] = {"allocations": [], "strategy": "no_action", "reasoning": "No viable signals"}
-                    return state
+                    # No current positions, create minimal diversified allocation
+                    sentiment_signals = state.get("sentiment_signals", [])
+                    buy_signals = [s for s in sentiment_signals if s.get('signal') == 'BUY'][:3]
+                    
+                    if buy_signals:
+                        fallback_allocations = []
+                        for i, signal in enumerate(buy_signals):
+                            fallback_allocations.append({
+                                "symbol": signal['symbol'],
+                                "weight": 0.03,  # 3% per position
+                                "confidence": 0.4,
+                                "action": "buy",
+                                "reasoning": "Conservative diversified fallback",
+                                "industry": "Unknown",
+                                "risk_level": "medium"
+                            })
+                        
+                        fallback_decisions = {
+                            "strategy": "conservative_diversified_fallback",
+                            "risk_level": "conservative",
+                            "allocations": fallback_allocations,
+                            "confidence": 0.4,
+                            "reasoning": f"Hybrid system failed, using {len(fallback_allocations)} conservative positions",
+                            "rebalance_analysis": {
+                                "needs_rebalancing": True,
+                                "rebalance_reasons": ["Fallback allocation needed"],
+                                "strategy": "conservative_fallback"
+                            }
+                        }
+                    else:
+                        fallback_decisions = {
+                            "strategy": "no_action",
+                            "allocations": [],
+                            "reasoning": "No viable signals for fallback allocation"
+                        }
+                
+                state["rl_decisions"] = fallback_decisions
+                state["rl_enhanced"] = False
+                state["llm_enhanced"] = False
+                state["hybrid_system"] = False
+                
+                logger.warning(f"🔧 Fallback strategy: {fallback_decisions['strategy']}")
+                return state
                 
             
         except Exception as e:
-            logger.error(f"RL Decision Layer error: {e}")
-            logger.info("Falling back to LLM-only analysis...")
+            logger.error(f"Hybrid Portfolio Decision Layer error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            logger.info("Falling back to conservative position maintenance...")
+            
+            # Ultra-conservative fallback
+            state["rl_decisions"] = {
+                "strategy": "error_recovery", 
+                "allocations": [], 
+                "reasoning": f"System error: {str(e)[:100]}",
+                "rebalance_analysis": {"needs_rebalancing": False}
+            }
             state["rl_enhanced"] = False
             state["comprehensive_rl"] = False
+            state["llm_enhanced"] = False
+            state["hybrid_system"] = False
+            
             return state
     
     def get_status_report(self) -> Dict[str, Any]:

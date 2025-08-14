@@ -202,6 +202,22 @@ class OnlineRLAgent:
         logger.debug(f"💰 Portfolio value: {portfolio_value}")
         logger.debug(f"📈 Portfolio positions: {list(portfolio_data.keys())}")
         
+        # Enhanced market data quality diagnostics
+        valid_symbols = [s for s in self.symbols if s in market_data and market_data[s].get('price', 0) > 0]
+        logger.info(f"📊 Market data coverage: {len(valid_symbols)}/{len(self.symbols)} symbols have valid prices")
+        
+        if len(valid_symbols) < len(self.symbols):
+            missing_symbols = [s for s in self.symbols if s not in valid_symbols]
+            logger.warning(f"⚠️ Missing/invalid price data for symbols: {missing_symbols}")
+            
+        # Log sample of market data for debugging
+        if valid_symbols:
+            sample_symbol = valid_symbols[0]
+            sample_data = market_data[sample_symbol]
+            logger.debug(f"📋 Sample market data for {sample_symbol}: price={sample_data.get('price', 'N/A')}, "
+                        f"change={sample_data.get('price_change_pct', 'N/A'):.3f}, "
+                        f"volume={sample_data.get('volume', 'N/A')}")
+        
         if not self.initialized:
             logger.info("🚀 Initializing RL system...")
             await self.initialize_system()
@@ -448,6 +464,14 @@ class OnlineRLAgent:
             # Skip if quantity is too small
             if quantity < 0.01:  # Minimum meaningful quantity
                 logger.debug(f"❌ Skipping {symbol}: quantity {quantity:.4f} too small")
+                continue
+            
+            # Additional validation - ensure we have valid trading parameters
+            if current_price <= 0:
+                logger.debug(f"❌ Skipping {symbol}: invalid price {current_price}")
+                continue
+            if not np.isfinite(quantity):
+                logger.debug(f"❌ Skipping {symbol}: invalid quantity {quantity}")
                 continue
             
             logger.debug(f"✅ Creating signal for {symbol}: {action_type} {quantity:.2f} shares")

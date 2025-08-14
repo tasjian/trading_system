@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import hashlib
 import pickle
+import copy
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,12 @@ class ModelVersionManager:
                              action_dim: int) -> Optional[Dict[str, Any]]:
         """Load a compatible model or migrate from closest match."""
         
+        # Validate input dimensions
+        validation = self.validate_model_architecture(state_dim, action_dim)
+        if not validation["valid"]:
+            logger.error(f"Cannot load model with invalid dimensions: {validation['issues']}")
+            return self.create_fresh_compatible_model(state_dim, action_dim)
+        
         # First try exact match
         version_id = self._generate_version_id(symbols, state_dim, action_dim)
         if version_id in self.metadata:
@@ -120,13 +127,25 @@ class ModelVersionManager:
                 
                 if migrated_model:
                     logger.info(f"🔄 Successfully migrated model from {compatible_version}")
+                    # Add migration metadata
+                    migrated_model['metadata'] = {
+                        'migrated_from': compatible_version,
+                        'original_dimensions': {
+                            'state_dim': self.metadata[compatible_version].get('state_dim'),
+                            'action_dim': self.metadata[compatible_version].get('action_dim')
+                        },
+                        'target_dimensions': {'state_dim': state_dim, 'action_dim': action_dim},
+                        'migration_timestamp': datetime.now(),
+                        'architecture': self.metadata[compatible_version].get('model_architecture', 'unknown')
+                    }
                     return migrated_model
                     
             except Exception as e:
                 logger.warning(f"Migration failed: {e}")
         
-        logger.info("🆕 No compatible model found, starting fresh")
-        return None
+        # If no compatible model found, create fresh one
+        logger.info("🆕 No compatible model found, creating fresh compatible model")
+        return self.create_fresh_compatible_model(state_dim, action_dim)
     
     def _generate_version_id(self, symbols: List[str], state_dim: int, action_dim: int) -> str:
         """Generate unique version ID based on model configuration."""
@@ -372,6 +391,150 @@ class ModelVersionManager:
             
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
+    
+    def validate_model_architecture(self, state_dim: int, action_dim: int) -> Dict[str, Any]:
+        """Validate model architecture and suggest fixes for common issues."""
+        validation_result = {
+            "valid": True,
+            "issues": [],
+            "suggestions": [],
+            "expected_dimensions": {
+                "input_layer": (256, state_dim + 16),  # Hidden units x (state + regime)
+                "output_layer": (action_dim * 2, 256)  # (mean + log_std) x hidden units
+            }
+        }
+        
+        # Check for common dimension issues
+        if state_dim <= 0:
+            validation_result["valid"] = False
+            validation_result["issues"].append(f"Invalid state dimension: {state_dim}")
+            validation_result["suggestions"].append("State dimension must be positive")
+            
+        if action_dim <= 0:
+            validation_result["valid"] = False
+            validation_result["issues"].append(f"Invalid action dimension: {action_dim}")
+            validation_result["suggestions"].append("Action dimension must be positive")
+            
+        # Check for extreme dimensions that might cause issues
+        if state_dim > 10000:
+            validation_result["issues"].append(f"Very large state dimension: {state_dim}")
+            validation_result["suggestions"].append("Consider feature reduction or normalization")
+            
+        if action_dim > 1000:
+            validation_result["issues"].append(f"Very large action dimension: {action_dim}")
+            validation_result["suggestions"].append("Consider action space reduction")
+            
+        # Check for dimension ratios that might be problematic
+        if state_dim / action_dim > 100:
+            validation_result["issues"].append(f"High state/action ratio: {state_dim}/{action_dim}")
+            validation_result["suggestions"].append("Model may overfit; consider regularization")
+            
+        return validation_result
+        
+    def create_fresh_compatible_model(self, state_dim: int, action_dim: int) -> Dict[str, Any]:
+        """Create a fresh model state dict compatible with given dimensions."""
+        try:
+            # Validate dimensions first
+            validation = self.validate_model_architecture(state_dim, action_dim)
+            if not validation["valid"]:
+                logger.error(f"Cannot create model with invalid dimensions: {validation['issues']}")
+                return None
+                
+            # Create a minimal compatible model structure
+            hidden_dim = 256
+            input_dim = state_dim + 16  # +16 for regime embedding
+            output_dim = action_dim * 2  # mean and log_std
+            
+            fresh_model = {}
+            
+            # Create policy state dict with proper initialization
+            policy_state = {
+                # Regime embedding
+                'regime_embedding.weight': torch.randn(len(self._get_market_regimes()), 16) * 0.1,
+                
+                # Network layers
+                'network.0.weight': torch.zeros(hidden_dim, input_dim),
+                'network.0.bias': torch.zeros(hidden_dim),
+                'network.2.weight': torch.zeros(hidden_dim, hidden_dim),
+                'network.2.bias': torch.zeros(hidden_dim),
+                'network.4.weight': torch.zeros(hidden_dim, hidden_dim),
+                'network.4.bias': torch.zeros(hidden_dim),
+                'network.6.weight': torch.zeros(output_dim, hidden_dim),
+                'network.6.bias': torch.zeros(output_dim)
+            }
+            
+            # Initialize weights with Xavier uniform
+            for name, param in policy_state.items():
+                if 'weight' in name:
+                    torch.nn.init.xavier_uniform_(param)
+            
+            fresh_model['stable_policy'] = policy_state
+            fresh_model['learner_policy'] = copy.deepcopy(policy_state)
+            
+            logger.info(f"🆕 Created fresh compatible model: {state_dim}D state → {action_dim}D action")
+            return fresh_model
+            
+        except Exception as e:
+            logger.error(f"Fresh model creation failed: {e}")
+            return None
+    
+    def _get_market_regimes(self) -> List[str]:
+        """Get list of market regime types for embedding initialization."""
+        return [
+            "bull_low_vol", "bull_high_vol", "bear_low_vol", "bear_high_vol",
+            "sideways", "volatile", "crisis", "unknown"
+        ]
+        
+    def get_migration_statistics(self) -> Dict[str, Any]:
+        """Get statistics about model migrations and compatibility."""
+        stats = {
+            "total_models": len(self.metadata),
+            "successful_migrations": 0,
+            "failed_migrations": 0,
+            "dimension_ranges": {
+                "state_dim": {"min": float('inf'), "max": 0},
+                "action_dim": {"min": float('inf'), "max": 0}
+            },
+            "architecture_types": {},
+            "model_ages": []
+        }
+        
+        for version_id, metadata in self.metadata.items():
+            # Track dimension ranges
+            state_dim = metadata.get("state_dim", 0)
+            action_dim = metadata.get("action_dim", 0)
+            
+            if state_dim > 0:
+                stats["dimension_ranges"]["state_dim"]["min"] = min(stats["dimension_ranges"]["state_dim"]["min"], state_dim)
+                stats["dimension_ranges"]["state_dim"]["max"] = max(stats["dimension_ranges"]["state_dim"]["max"], state_dim)
+                
+            if action_dim > 0:
+                stats["dimension_ranges"]["action_dim"]["min"] = min(stats["dimension_ranges"]["action_dim"]["min"], action_dim)
+                stats["dimension_ranges"]["action_dim"]["max"] = max(stats["dimension_ranges"]["action_dim"]["max"], action_dim)
+                
+            # Track architecture types
+            arch_type = metadata.get("model_architecture", "unknown")
+            stats["architecture_types"][arch_type] = stats["architecture_types"].get(arch_type, 0) + 1
+            
+            # Calculate model age
+            if "timestamp" in metadata:
+                try:
+                    if isinstance(metadata["timestamp"], str):
+                        timestamp = datetime.fromisoformat(metadata["timestamp"])
+                    else:
+                        timestamp = metadata["timestamp"]
+                    age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+                    stats["model_ages"].append(age_hours)
+                except:
+                    pass
+        
+        # Handle empty ranges
+        if stats["dimension_ranges"]["state_dim"]["min"] == float('inf'):
+            stats["dimension_ranges"]["state_dim"] = {"min": 0, "max": 0}
+        if stats["dimension_ranges"]["action_dim"]["min"] == float('inf'):
+            stats["dimension_ranges"]["action_dim"] = {"min": 0, "max": 0}
+            
+        return stats
 
 # Global instance
 _version_manager = None

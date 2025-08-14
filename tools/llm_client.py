@@ -30,11 +30,10 @@ class LLMResponse:
     metadata: Dict[str, Any]
 
 class LLMClient:
-    """Unified LLM client supporting OpenAI and Llama 3.1 (via Ollama)."""
+    """Unified LLM client supporting Llama 3.1 (via Ollama) and FinGPT only."""
     
     def __init__(self):
         self.anthropic_client = None
-        self.openai_client = None
         self.ollama_client = None
         self.fingpt_client = None
         self.preferred_provider = None
@@ -94,18 +93,6 @@ class LLMClient:
             except Exception as e:
                 logger.warning(f"Anthropic client initialization failed: {e}")
         
-        # OpenAI DISABLED - Using only FinGPT and Ollama
-        # if settings.openai_api_key:
-        #     try:
-        #         import openai
-        #         self.openai_client = openai.OpenAI(api_key=settings.openai_api_key)
-        #         if not self.preferred_provider:
-        #             self.preferred_provider = "openai"
-        #         logger.info("✅ OpenAI client initialized as last fallback (quota limited)")
-        #     except ImportError:
-        #         logger.warning("OpenAI package not installed. Run: pip install openai")
-        #     except Exception as e:
-        #         logger.warning(f"OpenAI client initialization failed: {e}")
         logger.info("🚫 OpenAI disabled - using only FinGPT and Ollama for LLM calls")
                 
         # Legacy Anthropic support (deprecated)
@@ -156,11 +143,6 @@ class LLMClient:
                 response = await self._call_anthropic(
                     system_prompt, user_message, model, temperature, max_tokens
                 )
-            # elif use_provider == "openai" and self.openai_client:
-            #     tried_providers.append("openai")
-            #     response = await self._call_openai(
-            #         system_prompt, user_message, model, temperature, max_tokens
-            #     )
             elif use_provider == "llama" and self.ollama_client:
                 tried_providers.append("llama")
                 response = await self._call_llama(
@@ -183,11 +165,6 @@ class LLMClient:
                     response = await self._call_llama(
                         system_prompt, user_message, model, temperature, max_tokens
                     )
-                # elif self.openai_client:
-                #     tried_providers.append("openai")
-                #     response = await self._call_openai(
-                #         system_prompt, user_message, model, temperature, max_tokens
-                #     )
                 else:
                     raise ValueError("No LLM providers available")
                     
@@ -222,14 +199,6 @@ class LLMClient:
                 except Exception as llama_error:
                     logger.warning(f"Ollama fallback failed: {llama_error}")
             
-            # if response is None and "openai" not in tried_providers and self.openai_client:
-            #     try:
-            #         logger.info("Falling back to OpenAI")
-            #         response = await self._call_openai(
-            #             system_prompt, user_message, model, temperature, max_tokens
-            #         )
-            #     except Exception as openai_error:
-            #         logger.warning(f"OpenAI fallback failed: {openai_error}")
             
             # If all providers failed, raise the original error
             if response is None:
@@ -256,61 +225,6 @@ class LLMClient:
                 metadata={"error": "No providers available"}
             )
     
-    async def _call_openai(
-        self,
-        system_prompt: str,
-        user_message: str,
-        model: Optional[str],
-        temperature: float,
-        max_tokens: int
-    ) -> LLMResponse:
-        """Call OpenAI API."""
-        
-        # Default model selection
-        if not model:
-            model = "gpt-4o" if "gpt-4" in str(settings.openai_api_key) else "gpt-3.5-turbo"
-        
-        try:
-            response = await asyncio.to_thread(
-                self.openai_client.chat.completions.create,
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=60
-            )
-            
-            content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens
-            
-            # Estimate cost (approximate pricing)
-            cost_per_token = self._get_openai_cost_per_token(model)
-            cost_estimate = tokens_used * cost_per_token
-            
-            # Estimate confidence based on response characteristics
-            confidence = self._estimate_confidence(content, temperature)
-            
-            return LLMResponse(
-                content=content,
-                model=f"openai/{model}",
-                tokens_used=tokens_used,
-                cost_estimate=cost_estimate,
-                response_time=0.0,  # Will be set by caller
-                confidence=confidence,
-                metadata={
-                    "provider": "openai",
-                    "finish_reason": response.choices[0].finish_reason,
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens
-                }
-            )
-            
-        except Exception as e:
-            logger.error(f"OpenAI API call failed: {e}")
-            raise
     
     async def _call_anthropic(
         self,

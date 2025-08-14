@@ -334,6 +334,10 @@ class DualAgentSystem:
         self.device = device
         self.symbols = symbols or []
         
+        # Dynamic dimension tracking for compatibility
+        self.expected_state_dim = state_dim
+        self.actual_state_dim = None
+        
         if not TORCH_AVAILABLE:
             logger.warning("PyTorch not available - using dummy agent")
             return
@@ -366,6 +370,104 @@ class DualAgentSystem:
         self.sync_learner_to_stable()
         
         logger.info(f"✅ DualAgentSystem initialized with {len(self.symbols)} symbols")
+        
+    def _adapt_state_tensor(self, state_tensor: torch.Tensor, actual_size: int) -> torch.Tensor:
+        """Adapt state tensor to expected dimensions."""
+        try:
+            if actual_size > self.expected_state_dim:
+                # Truncate excess features (keep most important ones)
+                adapted_tensor = state_tensor[:self.expected_state_dim]
+                logger.info(f"🔧 Truncated state tensor from {actual_size} to {self.expected_state_dim}")
+            elif actual_size < self.expected_state_dim:
+                # Pad with zeros or repeat pattern
+                padding_size = self.expected_state_dim - actual_size
+                if actual_size > 0:
+                    # Repeat pattern to fill gaps
+                    repeat_pattern = state_tensor[:(padding_size % actual_size)] if padding_size % actual_size > 0 else torch.zeros(1)
+                    padding = torch.cat([state_tensor[-padding_size//actual_size:].repeat(padding_size//actual_size), repeat_pattern])
+                else:
+                    padding = torch.zeros(padding_size)
+                    
+                adapted_tensor = torch.cat([state_tensor, padding[:padding_size]])
+                logger.info(f"🔧 Padded state tensor from {actual_size} to {self.expected_state_dim}")
+            else:
+                adapted_tensor = state_tensor
+                
+            return adapted_tensor
+            
+        except Exception as e:
+            logger.error(f"❌ State tensor adaptation failed: {e}")
+            # Return truncated or zero-padded tensor as fallback
+            if actual_size > self.expected_state_dim:
+                return state_tensor[:self.expected_state_dim]
+            else:
+                padded = torch.zeros(self.expected_state_dim)
+                padded[:actual_size] = state_tensor
+                return padded
+    
+    def _attempt_model_adaptation(self, actual_state_dim: int) -> bool:
+        """Attempt to adapt model architecture to current state dimensions."""
+        try:
+            logger.info(f"🔄 Adapting model architecture from {self.expected_state_dim} to {actual_state_dim} state dimensions")
+            
+            # Create new models with correct dimensions
+            new_stable_policy = RegimeAwarePolicy(actual_state_dim, self.action_dim).to(self.device)
+            new_learner_policy = RegimeAwarePolicy(actual_state_dim, self.action_dim).to(self.device)
+            
+            # Try to transfer weights if possible using model version manager
+            if VERSION_MANAGER_AVAILABLE:
+                try:
+                    version_manager = get_version_manager()
+                    
+                    # Save current model state for migration
+                    old_model_dict = {
+                        'stable_policy': self.stable_policy.state_dict(),
+                        'learner_policy': self.learner_policy.state_dict()
+                    }
+                    
+                    # Create metadata for migration
+                    old_metadata = {
+                        'state_dim': self.expected_state_dim,
+                        'action_dim': self.action_dim,
+                        'symbols': self.symbols
+                    }
+                    
+                    # Attempt migration to new dimensions
+                    migrated_model = version_manager._migrate_model(
+                        old_model_dict,
+                        old_metadata,
+                        actual_state_dim,
+                        self.action_dim
+                    )
+                    
+                    if migrated_model and 'stable_policy' in migrated_model:
+                        new_stable_policy.load_state_dict(migrated_model['stable_policy'])
+                        new_learner_policy.load_state_dict(migrated_model['learner_policy'])
+                        logger.info("✅ Successfully migrated model weights to new dimensions")
+                    else:
+                        logger.info("🆕 Migration not possible, using fresh model weights")
+                        
+                except Exception as migration_error:
+                    logger.warning(f"⚠️ Migration attempt failed: {migration_error}, using fresh weights")
+            
+            # Replace old models with new ones
+            self.stable_policy = new_stable_policy
+            self.learner_policy = new_learner_policy
+            
+            # Update optimizers
+            self.stable_optimizer = optim.Adam(self.stable_policy.parameters(), lr=0.0001)
+            self.learner_optimizer = optim.Adam(self.learner_policy.parameters(), lr=0.0003)
+            
+            # Update expected dimensions
+            self.expected_state_dim = actual_state_dim
+            self.state_dim = actual_state_dim
+            
+            logger.info(f"✅ Model architecture successfully adapted to {actual_state_dim} state dimensions")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Model adaptation failed: {e}")
+            return False
         
     def _load_compatible_models(self):
         """Load compatible models using version manager."""
@@ -500,7 +602,19 @@ class DualAgentSystem:
         try:
             with torch.no_grad():
                 state_tensor = torch.FloatTensor(state).to(self.device)
-                logger.debug(f"State tensor shape: {state_tensor.shape}, expected: ({self.state_dim},)")
+                
+                # Dynamic dimension adaptation
+                actual_state_size = state_tensor.shape[0] if state_tensor.dim() == 1 else state_tensor.shape[1]
+                if self.actual_state_dim is None:
+                    self.actual_state_dim = actual_state_size
+                    if actual_state_size != self.expected_state_dim:
+                        logger.warning(f"⚠️ State dimension mismatch detected: expected {self.expected_state_dim}, got {actual_state_size}")
+                
+                # Handle dimension mismatch with adaptive reshaping
+                if actual_state_size != self.expected_state_dim:
+                    state_tensor = self._adapt_state_tensor(state_tensor, actual_state_size)
+                    
+                logger.debug(f"State tensor shape: {state_tensor.shape}, expected: ({self.expected_state_dim},)")
                 
                 # Convert integer regime to enum if needed
                 if isinstance(regime, int):
@@ -515,8 +629,24 @@ class DualAgentSystem:
                 
                 logger.debug(f"Regime tensor shape: {regime_tensor.shape}")
                 
-                mean, std = policy(state_tensor, regime_tensor)
-                logger.debug(f"Policy output shapes - mean: {mean.shape}, std: {std.shape}, expected action_dim: {self.action_dim}")
+                try:
+                    mean, std = policy(state_tensor, regime_tensor)
+                    logger.debug(f"Policy output shapes - mean: {mean.shape}, std: {std.shape}, expected action_dim: {self.action_dim}")
+                except RuntimeError as model_error:
+                    if "mat1 and mat2 shapes cannot be multiplied" in str(model_error):
+                        logger.warning(f"🔄 Model dimension mismatch detected: {model_error}")
+                        logger.warning(f"🔧 Attempting model architecture adaptation...")
+                        
+                        # Try to create compatible models with current dimensions
+                        if self._attempt_model_adaptation(actual_state_size):
+                            # Retry with adapted models
+                            policy = self.stable_policy if self.active_agent == "stable" else self.learner_policy
+                            mean, std = policy(state_tensor, regime_tensor)
+                            logger.info(f"✅ Successfully adapted model architecture")
+                        else:
+                            raise model_error
+                    else:
+                        raise model_error
                 
                 # Check if the policy returned valid outputs
                 if mean is None or std is None:
@@ -590,6 +720,13 @@ class DualAgentSystem:
                 
         except Exception as e:
             logger.warning(f"PyTorch policy failed: {e}, using fallback actions")
+            
+            # Enhanced error handling with dimension information
+            if "mat1 and mat2 shapes cannot be multiplied" in str(e):
+                logger.error(f"❌ Model dimension mismatch: {e}")
+                logger.error(f"🔍 Expected state dim: {self.expected_state_dim}, Actual: {self.actual_state_dim}")
+                logger.error(f"🔍 Model input layer expects: {self.expected_state_dim + 16} (state + regime embedding)")
+                
             # Generate meaningful random actions instead of zeros
             random_actions = np.random.uniform(-0.2, 0.2, self.action_dim).astype(np.float32)
             return random_actions, {"agent": "fallback_error", "uncertainty": 0.5, "error": str(e)}
