@@ -67,9 +67,13 @@ class ServiceManager:
         
         # Handle exceptions
         if isinstance(redis_health, Exception):
-            redis_health = ServiceHealth("redis", ServiceStatus.ERROR, error_message=str(redis_health))
+            error_msg = str(redis_health)
+            logger.debug(f"Redis health check exception: {error_msg}")
+            redis_health = ServiceHealth("redis", ServiceStatus.ERROR, error_message=error_msg)
         if isinstance(ollama_health, Exception):
-            ollama_health = ServiceHealth("ollama", ServiceStatus.ERROR, error_message=str(ollama_health))
+            error_msg = str(ollama_health)
+            logger.debug(f"Ollama health check exception: {error_msg}")
+            ollama_health = ServiceHealth("ollama", ServiceStatus.ERROR, error_message=error_msg)
         
         self.service_health.update({
             "redis": redis_health,
@@ -158,7 +162,11 @@ class ServiceManager:
                         response_time = (time.time() - start_time) * 1000
                         
                         # Get Ollama process info
-                        pid = self._get_process_pid_by_name("ollama")
+                        try:
+                            pid = self._get_process_pid_by_name("ollama")
+                        except Exception as e:
+                            logger.debug(f"Error getting Ollama PID: {e}")
+                            pid = None
                         
                         # Check if our target model is available
                         models = [model.get('name', '') for model in data.get('models', [])]
@@ -250,42 +258,128 @@ class ServiceManager:
         return success
     
     async def start_redis(self) -> bool:
-        """Start Redis service."""
+        """Start Redis service with enhanced reliability."""
         try:
+            # Check if Redis is already running first
+            health = await self.check_redis_health()
+            if health.status == ServiceStatus.RUNNING:
+                logger.info("Redis is already running")
+                return True
+            
+            # Check if there's a Redis process that's not responding
+            redis_pid = self._get_process_pid_by_name("redis-server")
+            if redis_pid:
+                logger.info(f"Found non-responsive Redis process (PID: {redis_pid}), attempting restart")
+                try:
+                    subprocess.run(["kill", str(redis_pid)], timeout=5)
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    logger.debug(f"Failed to kill existing Redis process: {e}")
+            
             # Try different Redis start commands based on the system
-            redis_commands = [
-                ["redis-server", "--daemonize", "yes"],  # Standard Redis
-                ["brew", "services", "start", "redis"],   # macOS Homebrew
-                ["sudo", "systemctl", "start", "redis"], # Linux systemd
-                ["sudo", "service", "redis-server", "start"], # Linux sysvinit
-            ]
+            import platform
+            system = platform.system().lower()
+            
+            redis_commands = []
+            if system == "darwin":  # macOS
+                redis_commands = [
+                    # Try Homebrew service management first
+                    ["brew", "services", "restart", "redis"],  # Restart ensures fresh start
+                    ["brew", "services", "start", "redis"],   # Start if not running
+                    # Try direct Redis server with optimal settings
+                    ["redis-server", "--daemonize", "yes", "--port", "6379", "--bind", "127.0.0.1"],
+                    ["/opt/homebrew/bin/redis-server", "--daemonize", "yes", "--port", "6379", "--bind", "127.0.0.1"],  # M1 Mac
+                    ["/usr/local/bin/redis-server", "--daemonize", "yes", "--port", "6379", "--bind", "127.0.0.1"],     # Intel Mac
+                ]
+            else:  # Linux
+                redis_commands = [
+                    ["systemctl", "restart", "redis"],         # Restart for fresh start
+                    ["systemctl", "start", "redis"],           # systemd (no sudo needed if user has perms)
+                    ["sudo", "systemctl", "restart", "redis"], # systemd with sudo restart
+                    ["sudo", "systemctl", "start", "redis"],   # systemd with sudo
+                    ["service", "redis-server", "restart"],    # sysvinit restart
+                    ["service", "redis-server", "start"],      # sysvinit
+                    ["sudo", "service", "redis-server", "restart"], # sysvinit with sudo restart
+                    ["sudo", "service", "redis-server", "start"], # sysvinit with sudo
+                    ["redis-server", "--daemonize", "yes", "--port", "6379", "--bind", "127.0.0.1"],    # Direct Redis
+                ]
             
             for cmd in redis_commands:
                 try:
-                    logger.debug(f"Trying Redis start command: {' '.join(cmd)}")
+                    # Ensure cmd is a list and all elements are strings
+                    if not isinstance(cmd, (list, tuple)) or not cmd:
+                        logger.debug(f"Skipping invalid command: {cmd}")
+                        continue
+                    
+                    # Convert all command parts to strings and filter out empty ones
+                    cmd_safe = [str(part) for part in cmd if part]
+                    if not cmd_safe:
+                        logger.debug("Skipping empty command after filtering")
+                        continue
+                    
+                    logger.info(f"Trying Redis start command: {' '.join(cmd_safe)}")
                     result = subprocess.run(
-                        cmd,
+                        cmd_safe,
                         capture_output=True,
                         text=True,
                         timeout=30
                     )
                     
-                    if result.returncode == 0:
-                        logger.info(f"Redis start command succeeded: {' '.join(cmd)}")
-                        
-                        # Wait and verify
-                        await asyncio.sleep(2)
-                        health = await self.check_redis_health()
-                        if health.status == ServiceStatus.RUNNING:
-                            return True
-                    else:
-                        logger.debug(f"Command failed: {result.stderr}")
+                    # Log command result for debugging
+                    logger.debug(f"Command '{' '.join(cmd_safe)}' returned {result.returncode}")
+                    if result.stdout:
+                        logger.debug(f"stdout: {result.stdout.strip()}")
+                    if result.stderr:
+                        logger.debug(f"stderr: {result.stderr.strip()}")
+                    
+                    # Wait longer for Redis to fully start
+                    await asyncio.sleep(5)
+                    health = await self.check_redis_health()
+                    if health.status == ServiceStatus.RUNNING:
+                        logger.info(f"✅ Redis started successfully with: {' '.join(cmd_safe)}")
+                        return True
                         
                 except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as e:
-                    logger.debug(f"Command failed: {e}")
+                    logger.debug(f"Command '{' '.join(cmd_safe)}' failed: {e}")
+                    continue
+                except Exception as e:
+                    logger.debug(f"Unexpected error with command '{cmd}': {e}")
                     continue
             
-            logger.error("All Redis start commands failed")
+            # Try Docker Redis as last resort
+            logger.info("Trying Docker Redis as fallback...")
+            try:
+                # Check if Docker is available
+                docker_check = subprocess.run(["docker", "--version"], capture_output=True, timeout=10)
+                if docker_check.returncode == 0:
+                    # Try to start Redis in Docker
+                    docker_cmd = [
+                        "docker", "run", "-d", "--name", "redis-trading", 
+                        "-p", "6379:6379", "redis:alpine", "redis-server", "--appendonly", "yes"
+                    ]
+                    
+                    # Remove any existing container first
+                    subprocess.run(["docker", "rm", "-f", "redis-trading"], capture_output=True)
+                    
+                    result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=60)
+                    if result.returncode == 0:
+                        logger.info("Started Redis in Docker container")
+                        await asyncio.sleep(5)
+                        health = await self.check_redis_health()
+                        if health.status == ServiceStatus.RUNNING:
+                            logger.info("✅ Redis started successfully in Docker")
+                            return True
+            except Exception as e:
+                logger.debug(f"Docker Redis startup failed: {e}")
+            
+            logger.warning("⚠️ Could not start Redis - continuing without cache (will use fallback providers)")
+            
+            # Log helpful diagnostic information
+            logger.info("Redis troubleshooting suggestions:")
+            logger.info("  • Install Redis: brew install redis (macOS) or apt-get install redis-server (Ubuntu)")
+            logger.info("  • Check if Redis is already running: ps aux | grep redis")
+            logger.info("  • Manual start: redis-server /usr/local/etc/redis.conf")
+            logger.info("  • System will continue with degraded performance (no caching)")
             return False
             
         except Exception as e:
@@ -293,39 +387,107 @@ class ServiceManager:
             return False
     
     async def start_ollama(self) -> bool:
-        """Start Ollama service."""
+        """Start Ollama service with enhanced reliability."""
         try:
-            # Check if Ollama is already running
-            if self._get_process_pid_by_name("ollama"):
-                logger.info("Ollama process already running")
-                health = await self.check_ollama_health()
-                return health.status == ServiceStatus.RUNNING
+            # Check if Ollama is already running and healthy
+            health = await self.check_ollama_health()
+            if health.status == ServiceStatus.RUNNING:
+                logger.info("Ollama service is already running and healthy")
+                return True
             
-            # Start Ollama
+            # Check for existing Ollama process that might be unhealthy
+            try:
+                existing_pid = self._get_process_pid_by_name("ollama")
+                if existing_pid:
+                    logger.info(f"Found existing Ollama process (PID: {existing_pid}) but it's not responding properly")
+                    try:
+                        subprocess.run(["kill", "-TERM", str(existing_pid)], timeout=5)
+                        await asyncio.sleep(3)
+                        # Force kill if still running
+                        if self._get_process_pid_by_name("ollama"):
+                            subprocess.run(["kill", "-KILL", str(existing_pid)], timeout=5)
+                            await asyncio.sleep(2)
+                    except Exception as e:
+                        logger.debug(f"Failed to terminate existing Ollama process: {e}")
+            except Exception as e:
+                logger.debug(f"Error checking for existing Ollama process: {e}")
+                # Continue anyway - don't let this block startup
+            
+            # Ensure Ollama is installed
+            try:
+                version_check = subprocess.run(["ollama", "--version"], capture_output=True, timeout=10)
+                if version_check.returncode != 0:
+                    logger.error("Ollama not installed. Install from: https://ollama.com/download")
+                    return False
+                else:
+                    logger.info(f"Ollama version: {version_check.stdout.decode().strip()}")
+            except FileNotFoundError:
+                logger.error("Ollama not found in PATH. Install from: https://ollama.com/download")
+                return False
+            except Exception as e:
+                logger.error(f"Ollama version check failed: {e}")
+                return False
+            
+            # Start Ollama with proper environment
             logger.info("Starting Ollama service...")
             
-            # Try to start Ollama
+            # Set up environment for Ollama
+            env = {
+                **dict(subprocess.os.environ),
+                "OLLAMA_HOST": "127.0.0.1:11434",
+                "OLLAMA_ORIGINS": "*"
+            }
+            
+            # Try to start Ollama server
             process = subprocess.Popen(
                 ["ollama", "serve"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                env=env
             )
             
-            # Give Ollama time to start
-            await asyncio.sleep(5)
+            logger.info(f"Ollama server process started with PID: {process.pid}")
             
-            # Check if it's running
+            # Give Ollama more time to start up properly
+            startup_timeout = 15
+            for i in range(startup_timeout):
+                await asyncio.sleep(1)
+                health = await self.check_ollama_health()
+                if health.status == ServiceStatus.RUNNING:
+                    logger.info(f"✅ Ollama service started successfully after {i+1} seconds")
+                    break
+                elif i < startup_timeout - 1:
+                    logger.debug(f"Waiting for Ollama to start... ({i+1}/{startup_timeout})")
+            
+            # Final health check
             health = await self.check_ollama_health()
             if health.status == ServiceStatus.RUNNING:
-                logger.info("✅ Ollama service started successfully")
+                logger.info("✅ Ollama service is running and healthy")
                 return True
             elif health.status == ServiceStatus.ERROR and "not found" in (health.error_message or ""):
                 # Model not found, try to pull it
-                logger.info(f"🔄 Pulling required model: {settings.ollama_model}")
+                logger.info(f"🔄 Required model '{settings.ollama_model}' not found, attempting to pull...")
                 if await self.pull_ollama_model(settings.ollama_model):
+                    # Check again after model pull
                     health = await self.check_ollama_health()
-                    return health.status == ServiceStatus.RUNNING
+                    if health.status == ServiceStatus.RUNNING:
+                        logger.info("✅ Ollama service is running with required model")
+                        return True
+                else:
+                    logger.warning(f"Failed to pull model '{settings.ollama_model}'")
+            
+            # If we get here, Ollama didn't start properly
+            logger.warning(f"Ollama service failed to start properly. Status: {health.status.value}")
+            if health.error_message:
+                logger.warning(f"Error: {health.error_message}")
+            
+            # Log helpful troubleshooting information
+            logger.info("Ollama troubleshooting suggestions:")
+            logger.info("  • Install Ollama: https://ollama.com/download")
+            logger.info("  • Check if port 11434 is available: lsof -i :11434")
+            logger.info("  • Manual start: ollama serve")
+            logger.info("  • System will continue without LLM capabilities")
             
             return False
             
@@ -334,32 +496,72 @@ class ServiceManager:
             return False
     
     async def pull_ollama_model(self, model_name: str) -> bool:
-        """Pull an Ollama model if it's not available."""
+        """Pull an Ollama model with progress tracking."""
         try:
-            logger.info(f"📥 Pulling Ollama model: {model_name}")
+            logger.info(f"📥 Pulling Ollama model: {model_name} (this may take several minutes for large models)")
+            
+            # Check if model already exists
+            try:
+                list_result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
+                if list_result.returncode == 0 and model_name in list_result.stdout:
+                    logger.info(f"Model {model_name} already exists locally")
+                    return True
+            except Exception as e:
+                logger.debug(f"Could not check existing models: {e}")
+            
+            # Pull the model with timeout based on model size
+            pull_timeout = 600  # 10 minutes for large models
+            if "7b" in model_name.lower():
+                pull_timeout = 300  # 5 minutes for 7B models
+            elif "13b" in model_name.lower():
+                pull_timeout = 900  # 15 minutes for 13B models
+            elif "70b" in model_name.lower():
+                pull_timeout = 1800  # 30 minutes for 70B models
+            
+            logger.info(f"Starting model pull with {pull_timeout//60} minute timeout...")
             
             process = subprocess.Popen(
                 ["ollama", "pull", model_name],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                stderr=subprocess.STDOUT,  # Combine stderr into stdout for progress tracking
+                text=True,
+                bufsize=1  # Line buffered
             )
             
-            # Wait for the pull to complete (can take a while)
-            stdout, stderr = process.communicate(timeout=300)  # 5 minute timeout
-            
-            if process.returncode == 0:
-                logger.info(f"✅ Successfully pulled model: {model_name}")
-                return True
-            else:
-                logger.error(f"❌ Failed to pull model {model_name}: {stderr}")
+            # Monitor progress
+            output_lines = []
+            try:
+                stdout, stderr = process.communicate(timeout=pull_timeout)
+                output_lines.append(stdout if stdout else "")
+                
+                if process.returncode == 0:
+                    logger.info(f"✅ Successfully pulled model: {model_name}")
+                    
+                    # Verify model is available
+                    verify_result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=10)
+                    if verify_result.returncode == 0 and model_name in verify_result.stdout:
+                        logger.info(f"Model {model_name} verified and ready for use")
+                        return True
+                    else:
+                        logger.warning(f"Model {model_name} pull completed but not found in list")
+                        return False
+                else:
+                    error_output = "\n".join(output_lines)
+                    logger.error(f"❌ Failed to pull model {model_name}. Return code: {process.returncode}")
+                    logger.error(f"Output: {error_output}")
+                    return False
+                    
+            except subprocess.TimeoutExpired:
+                logger.error(f"❌ Timeout pulling model {model_name} after {pull_timeout//60} minutes")
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
                 return False
                 
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ Timeout pulling model {model_name}")
-            return False
         except Exception as e:
-            logger.error(f"Error pulling Ollama model: {e}")
+            logger.error(f"Error pulling Ollama model {model_name}: {e}")
             return False
     
     def _is_port_open(self, host: str, port: int, timeout: float = 3.0) -> bool:
@@ -384,14 +586,32 @@ class ServiceManager:
         """Get process PID by name."""
         try:
             for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                if name.lower() in proc.info['name'].lower():
-                    return proc.info['pid']
-                # Also check command line for cases where the process name might be different
-                cmdline = ' '.join(proc.info.get('cmdline', []))
-                if name.lower() in cmdline.lower():
-                    return proc.info['pid']
-        except (psutil.Error, AttributeError):
-            pass
+                try:
+                    proc_info = proc.info
+                    if proc_info and proc_info.get('name'):
+                        proc_name = proc_info['name']
+                        if proc_name and name.lower() in proc_name.lower():
+                            return proc_info['pid']
+                    
+                    # Also check command line for cases where the process name might be different
+                    cmdline = proc_info.get('cmdline') if proc_info else None
+                    if cmdline and isinstance(cmdline, (list, tuple)) and len(cmdline) > 0:
+                        try:
+                            # Filter out None values and convert to strings safely
+                            cmdline_parts = [str(arg) for arg in cmdline if arg is not None]
+                            if cmdline_parts:  # Only join if we have valid parts
+                                cmdline_str = ' '.join(cmdline_parts)
+                                if cmdline_str and name.lower() in cmdline_str.lower():
+                                    return proc_info['pid']
+                        except (TypeError, ValueError) as e:
+                            logger.debug(f"Error processing cmdline for process {proc_info.get('pid', 'unknown')}: {e}")
+                            continue
+                            
+                except (psutil.Error, AttributeError, TypeError, KeyError) as e:
+                    logger.debug(f"Error accessing process info: {e}")
+                    continue
+        except (psutil.Error, AttributeError) as e:
+            logger.debug(f"Error iterating processes: {e}")
         return None
     
     def get_service_summary(self) -> Dict[str, str]:

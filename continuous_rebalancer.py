@@ -456,6 +456,7 @@ class ContinuousRebalancer:
             # Step 6: Strategy Optimization
             pipeline_stage = "strategy_optimization"
             logger.info("🎯 Strategy Optimization...")
+            
             state = await self.workflow.strategy_optimization_agent(state, config)
             
             # Step 7: Order Management (if signals exist)
@@ -783,20 +784,29 @@ class ContinuousRebalancer:
         
         try:
             # First, ensure all required services are running
-            from tools.service_manager import ensure_services_running, get_service_summary
-            
-            logger.info("🔍 Checking and starting required services...")
-            services_ok = await ensure_services_running()
-            
-            # Log service status
-            service_summary = get_service_summary()
-            for service_name, status in service_summary.items():
-                logger.info(f"   {service_name.upper()}: {status}")
-            
-            if not services_ok:
-                logger.warning("⚠️ Some services failed to start - system may have degraded performance")
-            else:
-                logger.info("✅ All required services are running")
+            try:
+                from tools.service_manager import ensure_services_running, get_service_summary
+                
+                logger.info("🔍 Checking and starting required services...")
+                services_ok = await ensure_services_running()
+                
+                # Log service status
+                try:
+                    service_summary = get_service_summary()
+                    for service_name, status in service_summary.items():
+                        logger.info(f"   {service_name.upper()}: {status}")
+                except Exception as e:
+                    logger.debug(f"Error getting service summary: {e}")
+                
+                if not services_ok:
+                    logger.warning("⚠️ Some services failed to start - system may have degraded performance")
+                else:
+                    logger.info("✅ All required services are running")
+                    
+            except Exception as e:
+                logger.error(f"Error during service startup: {e}")
+                logger.warning("⚠️ Service startup failed - continuing with degraded performance")
+                services_ok = False
             
             # Check Alpaca connection
             account = alpaca_client.get_account_info()

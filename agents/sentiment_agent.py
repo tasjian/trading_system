@@ -81,7 +81,6 @@ class SentimentAgent:
         # Initialize components
         self.llm_analyzer = LLMSentimentAnalyzer(
             anthropic_api_key=settings.anthropic_api_key,
-            openai_api_key=settings.openai_api_key,
             ollama_base_url=settings.ollama_base_url
         )
         self.social_collector = SocialMediaCollector()
@@ -121,11 +120,11 @@ class SentimentAgent:
         
         # Collect data from all sources in parallel with performance-tested timeouts
         # Based on llama3:8b performance test: ~17s average, setting 25s buffer
-        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=45.0)
-        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=50.0)
-        earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=60.0)
-        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=70.0)
-        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=35.0)
+        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=120.0)  # Increased for CPU Ollama
+        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=150.0)  # Increased for CPU Ollama
+        earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=180.0)  # Increased for CPU Ollama
+        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=200.0)  # Increased for CPU Ollama
+        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=90.0)  # Increased for CPU Ollama
         
         # Execute all tasks with graceful failure handling
         results = await asyncio.gather(
@@ -297,7 +296,7 @@ class SentimentAgent:
                     try:
                         sentiment = await asyncio.wait_for(
                             self.llm_analyzer.analyze_text(combined_text, "social_media"),
-                            timeout=45.0  # Increased timeout for Ollama to fully process
+                            timeout=180.0  # Further increased timeout for CPU Ollama processing
                         )
                         if sentiment:
                             sentiment_results[platform] = sentiment
@@ -373,7 +372,7 @@ class SentimentAgent:
             # Add timeout for LLM analysis (increased for Ollama)
             return await asyncio.wait_for(
                 self.llm_analyzer.analyze_text(market_text, "financial_news"),
-                timeout=30.0  # Increased timeout for Ollama to fully process
+                timeout=150.0  # Further increased timeout for CPU Ollama to fully process
             )
             
         except asyncio.TimeoutError:
@@ -596,9 +595,9 @@ class SentimentAgent:
                     # Analyze sentiment with LLM
                     prompt = self._create_sec_filing_prompt(symbol, filing_with_content, filing_summary)
                     
-                    sentiment = await self.llm_analyzer.analyze_with_llm(
+                    sentiment = await self.llm_analyzer.analyze_text(
                         prompt, 
-                        content_type=f"SEC {filing.filing_type} Filing"
+                        context="analyst_report"  # Using analyst_report context for SEC filings
                     )
                     
                     if sentiment:

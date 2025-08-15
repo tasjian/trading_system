@@ -185,24 +185,22 @@ class FinnhubProvider:
         params["token"] = self.api_key
         
         try:
-            # Use asyncio.wait_for for better compatibility
-            async def _make_request():
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        # Cache successful response
-                        self._cache[cache_key] = (data, datetime.now())
-                        return data
-                    elif response.status == 429:
-                        logger.warning(f"Finnhub rate limit hit, backing off")
-                        await asyncio.sleep(2)
-                        return None
-                    else:
-                        logger.warning(f"Finnhub API error {response.status}: {await response.text()}")
-                        return None
-            
-            return await asyncio.wait_for(_make_request(), timeout=10.0)
-        except asyncio.TimeoutError:
+            # Use aiohttp timeout instead of asyncio.wait_for to avoid context manager issues
+            timeout = aiohttp.ClientTimeout(total=10.0)
+            async with session.get(url, params=params, timeout=timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # Cache successful response
+                    self._cache[cache_key] = (data, datetime.now())
+                    return data
+                elif response.status == 429:
+                    logger.warning(f"Finnhub rate limit hit, backing off")
+                    await asyncio.sleep(2)
+                    return None
+                else:
+                    logger.warning(f"Finnhub API error {response.status}: {await response.text()}")
+                    return None
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
             logger.warning(f"Finnhub request timed out for {endpoint}")
             return None
         except Exception as e:
@@ -283,30 +281,28 @@ class AlphaVantageProvider:
         params["apikey"] = self.api_key
         
         try:
-            # Use asyncio.wait_for for better compatibility
-            async def _make_request():
-                async with session.get(self.base_url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Check for API error messages
-                        if "Error Message" in data:
-                            logger.warning(f"Alpha Vantage error: {data['Error Message']}")
-                            return None
-                        if "Note" in data and "API call frequency" in data["Note"]:
-                            logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
-                            await asyncio.sleep(60)  # Wait 1 minute for rate limit reset
-                            return None
-                        
-                        # Cache successful response
-                        self._cache[cache_key] = (data, datetime.now())
-                        return data
-                    else:
-                        logger.warning(f"Alpha Vantage HTTP error {response.status}")
+            # Use aiohttp timeout instead of asyncio.wait_for to avoid context manager issues
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            async with session.get(self.base_url, params=params, timeout=timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    
+                    # Check for API error messages
+                    if "Error Message" in data:
+                        logger.warning(f"Alpha Vantage error: {data['Error Message']}")
                         return None
-            
-            return await asyncio.wait_for(_make_request(), timeout=30.0)
-        except asyncio.TimeoutError:
+                    if "Note" in data and "API call frequency" in data["Note"]:
+                        logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
+                        await asyncio.sleep(60)  # Wait 1 minute for rate limit reset
+                        return None
+                    
+                    # Cache successful response
+                    self._cache[cache_key] = (data, datetime.now())
+                    return data
+                else:
+                    logger.warning(f"Alpha Vantage HTTP error {response.status}")
+                    return None
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
             logger.warning(f"Alpha Vantage request timed out")
             return None
         except Exception as e:
@@ -391,20 +387,18 @@ class SECEdgarProvider:
         url = urljoin(self.base_url, endpoint)
         
         try:
-            # Use asyncio.wait_for for better compatibility
-            async def _make_request():
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        # Cache successful response
-                        self._cache[cache_key] = (data, datetime.now())
-                        return data
-                    else:
-                        logger.warning(f"SEC EDGAR error {response.status} for {endpoint}")
-                        return None
-            
-            return await asyncio.wait_for(_make_request(), timeout=15.0)
-        except asyncio.TimeoutError:
+            # Use aiohttp timeout instead of asyncio.wait_for to avoid context manager issues
+            timeout = aiohttp.ClientTimeout(total=15.0)
+            async with session.get(url, timeout=timeout) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # Cache successful response
+                    self._cache[cache_key] = (data, datetime.now())
+                    return data
+                else:
+                    logger.warning(f"SEC EDGAR error {response.status} for {endpoint}")
+                    return None
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
             logger.warning(f"SEC EDGAR request timed out for {endpoint}")
             return None
         except Exception as e:

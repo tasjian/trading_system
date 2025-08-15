@@ -45,14 +45,13 @@ class SentimentAnalysis(BaseModel):
 class LLMSentimentAnalyzer:
     """LLM-based sentiment analyzer for financial content using unified LLM client."""
     
-    def __init__(self, anthropic_api_key: Optional[str] = None, openai_api_key: Optional[str] = None, ollama_base_url: str = "http://localhost:11434"):
+    def __init__(self, anthropic_api_key: Optional[str] = None, ollama_base_url: str = "http://localhost:11434"):
         # Initialize unified LLM client for consistency and FinGPT support
         from tools.llm_client import LLMClient
         self.llm_client = LLMClient()
         
         # Keep legacy parameters for backward compatibility
         self.anthropic_api_key = anthropic_api_key
-        self.openai_api_key = openai_api_key
         self.ollama_base_url = ollama_base_url
         self.session: Optional[aiohttp.ClientSession] = None
         
@@ -60,7 +59,7 @@ class LLMSentimentAnalyzer:
         """Ensure aiohttp session exists."""
         if not self.session:
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=90)  # Increased based on llama3:8b performance
+                timeout=aiohttp.ClientTimeout(total=300)  # Greatly increased for CPU Ollama performance
             )
     
     def _create_sentiment_system_prompt(self, context: str = "financial_news") -> str:
@@ -129,148 +128,8 @@ Focus on:
 
 Respond only with valid JSON."""
 
-    async def _call_openai(self, prompt: str) -> Optional[Dict]:
-        """Call OpenAI API for sentiment analysis."""
-        if not self.openai_api_key:
-            return None
-            
-        await self._ensure_session()
-        
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.openai_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "model": self.openai_model,
-                "messages": [
-                    {"role": "system", "content": "You are a financial sentiment analysis expert. Always respond with valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 1000
-            }
-            
-            async with self.session.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    content = data['choices'][0]['message']['content'].strip()
-                    
-                    # Try to parse JSON response
-                    try:
-                        return json.loads(content)
-                    except json.JSONDecodeError:
-                        # Try to extract JSON from markdown code blocks
-                        if "```json" in content:
-                            json_start = content.find("```json") + 7
-                            json_end = content.find("```", json_start)
-                            json_str = content[json_start:json_end].strip()
-                            return json.loads(json_str)
-                        raise
-                        
-                else:
-                    logger.warning(f"OpenAI API error: {response.status}")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"OpenAI API call failed: {e}")
-            return None
+    # Legacy API methods removed - using unified LLM client (FinGPT -> Ollama) for local processing
     
-    async def _call_anthropic(self, prompt: str) -> Optional[Dict]:
-        """Call Anthropic Claude API for sentiment analysis."""
-        if not self.anthropic_api_key:
-            return None
-            
-        await self._ensure_session()
-        
-        try:
-            headers = {
-                "x-api-key": self.anthropic_api_key,
-                "content-type": "application/json",
-                "anthropic-version": "2023-06-01"
-            }
-            
-            payload = {
-                "model": self.anthropic_model,
-                "max_tokens": 1000,
-                "temperature": 0.3,
-                "system": "You are a financial sentiment analysis expert. Always respond with valid JSON only.",
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ]
-            }
-            
-            async with self.session.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=payload
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    content = data['content'][0]['text'].strip()
-                    
-                    # Try to parse JSON response
-                    try:
-                        return json.loads(content)
-                    except json.JSONDecodeError:
-                        # Try to extract JSON from markdown code blocks
-                        if "```json" in content:
-                            json_start = content.find("```json") + 7
-                            json_end = content.find("```", json_start)
-                            json_str = content[json_start:json_end].strip()
-                            return json.loads(json_str)
-                        raise
-                        
-                else:
-                    logger.warning(f"Anthropic API error: {response.status}")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"Anthropic API call failed: {e}")
-            return None
-    
-    async def _call_ollama(self, prompt: str) -> Optional[Dict]:
-        """Call Ollama API for sentiment analysis."""
-        await self._ensure_session()
-        
-        try:
-            payload = {
-                "model": self.ollama_model,
-                "prompt": prompt,
-                "format": "json",
-                "stream": False,
-                "options": {
-                    "temperature": 0.3,
-                    "top_p": 0.9
-                }
-            }
-            
-            async with self.session.post(
-                f"{self.ollama_base_url}/api/generate",
-                json=payload
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    content = data.get('response', '').strip()
-                    
-                    try:
-                        return json.loads(content)
-                    except json.JSONDecodeError:
-                        logger.warning("Failed to parse Ollama JSON response")
-                        return None
-                        
-                else:
-                    logger.warning(f"Ollama API error: {response.status}")
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"Ollama API call failed: {e}")
-            return None
     
     def _parse_llm_response(self, response_content: str) -> Optional[Dict]:
         """Parse LLM response and extract sentiment analysis data."""

@@ -84,25 +84,24 @@ class SECRateLimiter:
 class SECEdgarClient:
     """SEC EDGAR API client with comprehensive filing access."""
     
-    def __init__(self, user_agent: str = "ML4T Trading System research@tradingsystem.com"):
+    def __init__(self, user_agent: str = None):
         self.base_url = "https://www.sec.gov"
-        self.user_agent = user_agent
+        
+        # SEC requires specific User-Agent format as of 2024: "Company Name email@domain.com"
+        # Based on successful patterns from working libraries
+        if user_agent is None:
+            self.user_agent = "Tasjian ztaschdjian@gmail.com"
+        else:
+            self.user_agent = user_agent
+            
         self.rate_limiter = SECRateLimiter()
         self._session: Optional[aiohttp.ClientSession] = None
         self._company_tickers: Optional[Dict[str, CompanyInfo]] = None
         self._cik_to_ticker: Optional[Dict[str, str]] = None
         
-        # Headers required by SEC (must include company name and email)
-        # Updated for 2024 SEC requirements: proper company name format
-        if "ML4T Trading System" in self.user_agent and "@" in self.user_agent:
-            # Ensure proper format: "Company Name email@domain.com"
-            self.user_agent = f"ML4T Trading System research@tradingsystem.com"
-        
+        # Headers required by SEC (2024 enforcement) - simplified for compatibility
         self.headers = {
-            'User-Agent': self.user_agent,
-            'Accept-Encoding': 'gzip, deflate',
-            'Host': 'www.sec.gov',
-            'Accept': 'application/json, text/html, */*'
+            'User-Agent': self.user_agent
         }
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -144,9 +143,10 @@ class SECEdgarClient:
                 elif response.status == 403:
                     # Forbidden - likely user agent issue (2024 SEC requirements)
                     error_text = await response.text()
-                    logger.error(f"SEC API 403 Forbidden: {url}")
-                    logger.error(f"This is likely due to user-agent requirements. Current UA: {self.user_agent}")
-                    logger.error(f"SEC Response: {error_text[:200]}...")
+                    logger.warning(f"SEC API 403 Forbidden: {url}")
+                    logger.warning(f"User-Agent issue with SEC 2024 requirements. Current UA: {self.user_agent}")
+                    logger.warning(f"SEC endpoint temporarily unavailable - graceful degradation in effect")
+                    logger.debug(f"SEC Response: {error_text[:200]}...")
                     return None
                 else:
                     logger.warning(f"SEC API request failed: {response.status} for {url}")
@@ -260,6 +260,7 @@ class SECEdgarClient:
         
         try:
             # Use correct EDGAR API endpoint with normalized CIK
+            # Note: data.sec.gov requires exact formatting - tested and working
             url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
             logger.debug(f"Fetching company facts from: {url}")
             data = await self._make_request(url)

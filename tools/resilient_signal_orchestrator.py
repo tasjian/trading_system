@@ -184,7 +184,22 @@ class ResilientSignalOrchestrator:
                 f"No hardcoded fallback mechanisms are permitted per system design"
             )
             logger.error(error_msg)
+            
+            # Cleanup sessions before raising error
+            try:
+                await dual_provider.close()
+                logger.debug("✅ Cleaned up sessions after orchestration failure")
+            except Exception as e:
+                logger.debug(f"Session cleanup warning: {e}")
+            
             raise RuntimeError(error_msg)
+        
+        # Cleanup sessions after successful orchestration
+        try:
+            await dual_provider.close()
+            logger.debug("✅ Cleaned up sessions after orchestration success")
+        except Exception as e:
+            logger.debug(f"Session cleanup warning: {e}")
         
         return result
     

@@ -103,7 +103,7 @@ class UnifiedMarketIntelligence:
         
         # Initialize LLM sentiment analyzer and earnings scraper
         self.sentiment_analyzer = LLMSentimentAnalyzer(
-            openai_api_key=settings.openai_api_key,
+            anthropic_api_key=settings.anthropic_api_key,
             ollama_base_url=settings.ollama_base_url
         )
         self.earnings_scraper = EarningsCallScraper()

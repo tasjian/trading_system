@@ -304,7 +304,7 @@ class TradingWorkflow:
                     # Use comprehensive sentiment agent which includes social media analysis
                     comprehensive_sentiment = await asyncio.wait_for(
                         sentiment_agent.analyze_comprehensive_sentiment(symbol),
-                        timeout=60.0  # Longer timeout for comprehensive analysis including social media
+                        timeout=300.0  # Much longer timeout for comprehensive analysis with CPU Ollama
                     )
                     
                     # If comprehensive sentiment succeeds, return it
@@ -344,7 +344,7 @@ class TradingWorkflow:
                             *[analyze_symbol_sentiment(symbol) for symbol in batch],
                             return_exceptions=True
                         ),
-                        timeout=60.0  # 60 second timeout for entire batch
+                        timeout=300.0  # 5 minute timeout for entire batch with CPU Ollama
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Batch {i//batch_size + 1} timed out after 60 seconds")
@@ -360,21 +360,21 @@ class TradingWorkflow:
                     
                     if comprehensive_sentiment:
                         sentiment_data[symbol] = {
-                            'overall_sentiment': str(comprehensive_sentiment.sentiment),
-                            'overall_score': comprehensive_sentiment.score,
+                            'overall_sentiment': str(comprehensive_sentiment.overall_sentiment),
+                            'overall_score': comprehensive_sentiment.overall_score,
                             'confidence': comprehensive_sentiment.confidence,
                             'ensemble_used': False,  # Not using ensemble anymore
                             'models_successful': 1,  # Single Ollama model
-                            'reasoning': comprehensive_sentiment.reasoning,
-                            'model_results': {'ollama': comprehensive_sentiment.sentiment},
+                            'reasoning': f"Combined analysis from {comprehensive_sentiment.data_sources_count} sources",
+                            'model_results': {'ollama': comprehensive_sentiment.overall_sentiment},
                             'analysis_timestamp': None  # Not tracked in simple version
                         }
                         
                         # Log detailed sentiment breakdown from Ollama analysis
                         logger.info(f"{symbol} sentiment breakdown:")
-                        logger.info(f"  Overall: {comprehensive_sentiment.sentiment} (score: {comprehensive_sentiment.score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
-                        logger.info(f"  Reasoning: {comprehensive_sentiment.reasoning[:100]}...")
-                        logger.info(f"  Key phrases: {', '.join(comprehensive_sentiment.key_phrases[:3])}")
+                        logger.info(f"  Overall: {comprehensive_sentiment.overall_sentiment} (score: {comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
+                        logger.info(f"  Sources: {comprehensive_sentiment.data_sources_count} data sources")
+                        logger.info(f"  Key themes: {', '.join(comprehensive_sentiment.key_themes[:3])}")
                         
                         # Generate trading signals based on enhanced sentiment
                         signal_strength = 0.0
@@ -382,8 +382,8 @@ class TradingWorkflow:
                         signal_reason = []
                         
                         # Extract sentiment values
-                        overall_sentiment = str(comprehensive_sentiment.sentiment)
-                        overall_score = comprehensive_sentiment.score
+                        overall_sentiment = str(comprehensive_sentiment.overall_sentiment)
+                        overall_score = comprehensive_sentiment.overall_score
                         confidence = comprehensive_sentiment.confidence
                         
                         # Strong signals based on score thresholds
@@ -806,11 +806,12 @@ class TradingWorkflow:
                 logger.info("No existing positions to evaluate")
                 return []
             
-            # Risk management thresholds
-            STOP_LOSS_THRESHOLD = -0.05    # Sell if down 5% or more
-            EXTREME_LOSS_THRESHOLD = -0.08  # Short if down 8% or more (extreme underperformance)
-            CONCENTRATION_RISK_THRESHOLD = 0.15  # Sell if position > 15% of portfolio
-            MOMENTUM_LOSS_THRESHOLD = -0.03  # Sell if down 3% with negative momentum
+            # Risk management thresholds - more aggressive for better diversification and loss control
+            STOP_LOSS_THRESHOLD = -0.03    # Sell if down 3% or more (more aggressive)
+            EXTREME_LOSS_THRESHOLD = -0.06  # Short if down 6% or more (more aggressive)
+            CONCENTRATION_RISK_THRESHOLD = 0.12  # Sell if position > 12% of portfolio (more diversification)
+            MOMENTUM_LOSS_THRESHOLD = -0.02  # Sell if down 2% with negative momentum (more aggressive)
+            REBALANCE_THRESHOLD = 0.05       # Rebalance if position deviates >5% from target weight
             
             portfolio_value = portfolio.get("equity", 100000)
             total_signals = 0
@@ -1669,25 +1670,62 @@ class TradingWorkflow:
             
             # Get signals from multiple possible locations in state
             signals = state.get("signals", []) or state.get("trading_signals", [])
+            
+            # Debug state keys to understand what's available (can be removed in production)
+            signal_keys = [k for k in state.keys() if 'signal' in k.lower()]
+            logger.debug(f"Available state keys containing 'signal': {signal_keys}")
+            for key in signal_keys:
+                value = state.get(key, [])
+                if hasattr(value, '__len__') and not isinstance(value, str):
+                    logger.debug(f"State['{key}']: {len(value)} items of type {type(value).__name__}")
+                else:
+                    logger.debug(f"State['{key}']: {value} (type {type(value).__name__})")
+            
             if not signals:
-                logger.info("No signals to optimize")
+                # Safe logging that handles any state value type
+                signals_val = state.get('signals', [])
+                trading_signals_val = state.get('trading_signals', [])
+                signals_len = len(signals_val) if isinstance(signals_val, (list, tuple)) else "N/A"
+                trading_signals_len = len(trading_signals_val) if isinstance(trading_signals_val, (list, tuple)) else "N/A"
+                
+                logger.warning(f"No signals to optimize. Signal keys checked: signals={signals_len}, trading_signals={trading_signals_len}")
                 state["current_agent"] = "strategy_optimizer"
                 state["signals"] = []  # Ensure signals key exists
                 return update_state_timestamp(state)
             
             # Simple strategy optimization - filter and rank signals
             optimized_signals = []
-            for signal in signals:
-                # Handle both TradingSignal objects and dictionaries
-                if hasattr(signal, 'confidence'):
-                    confidence = signal.confidence
-                elif isinstance(signal, dict):
-                    confidence = signal.get('confidence', 0.5)
-                else:
-                    confidence = 0.5
+            for i, signal in enumerate(signals):
+                # Handle both TradingSignal objects and dictionaries with robust confidence extraction
+                confidence = None
+                symbol = "UNKNOWN"
                 
-                if confidence > 0.5:  # Only keep confident signals
+                if hasattr(signal, 'confidence'):
+                    # TradingSignal object
+                    confidence = float(getattr(signal, 'confidence', 0.5))
+                    symbol = getattr(signal, 'symbol', 'UNKNOWN')
+                    logger.debug(f"Signal {i} ({symbol}): TradingSignal with confidence={confidence}")
+                elif isinstance(signal, dict):
+                    # Dictionary signal
+                    confidence = float(signal.get('confidence', 0.5))
+                    symbol = signal.get('symbol', 'UNKNOWN')
+                    logger.debug(f"Signal {i} ({symbol}): dict with confidence={confidence}")
+                else:
+                    # Unknown format - fallback
+                    signal_type = type(signal).__name__
+                    confidence = 0.5
+                    logger.warning(f"Signal {i}: unknown type {signal_type}, using default confidence={confidence}")
+                
+                # Ensure confidence is a valid number
+                if confidence is None or not isinstance(confidence, (int, float)) or confidence != confidence:  # NaN check
+                    confidence = 0.5
+                    logger.warning(f"Signal {i} ({symbol}): invalid confidence value, using default 0.5")
+                
+                if confidence > 0.3:  # Lower threshold to allow more signals (changed from 0.5 to 0.3)
                     optimized_signals.append(signal)
+                    logger.info(f"✅ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): RETAINED with confidence={confidence}")
+                else:
+                    logger.warning(f"❌ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): FILTERED OUT with confidence={confidence} <= 0.3")
             
             # Update both signals keys to ensure compatibility
             state["signals"] = optimized_signals
@@ -1761,18 +1799,64 @@ class TradingWorkflow:
                             limit_price = None
                             logger.info(f"📈 Using MARKET order for stable {symbol}: volatility={volatility:.1%}")
                         
+                        # Extract signal attributes safely first
+                        symbol = self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')
+                        action = self._get_signal_attribute(signal, 'action', None)
+                        
+                        # Handle dictionary signals that use 'direction' instead of 'action'
+                        if not action:
+                            direction = self._get_signal_attribute(signal, 'direction', 'up')
+                            action = 'buy' if direction == 'up' else 'sell'
+                            logger.debug(f"Converted direction '{direction}' to action '{action}' for {symbol}")
+                        
                         # Calculate stop loss and take profit levels (ALGO AGENT RECOMMENDATION)
-                        if signal.action.lower() == "buy":
+                        if action.lower() == "buy":
                             stop_loss_price = current_price * 0.92   # 8% stop loss
                             take_profit_price = current_price * 1.15  # 15% take profit
                         else:  # sell or short
                             stop_loss_price = current_price * 1.08   # 8% stop loss for shorts
                             take_profit_price = current_price * 0.85  # 15% take profit for shorts
                         
-                        # Extract signal attributes safely
-                        symbol = self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')
-                        action = self._get_signal_attribute(signal, 'action', 'buy')
                         quantity = self._get_signal_attribute(signal, 'quantity', 0.0)
+                        
+                        # ALWAYS recalculate position size for safety (ignore signal quantity)
+                        # This prevents oversized positions that trigger Alpaca safety checks
+                        original_quantity = quantity
+                        logger.info(f"🔒 Recalculating safe position size for {symbol} (original quantity: {original_quantity})")
+                        
+                        if symbol == 'UNKNOWN':
+                            logger.warning(f"Skipping invalid signal: symbol={symbol}")
+                            continue
+                        
+                        # Get portfolio info for safe position sizing
+                        portfolio = state.get("portfolio", {})
+                        portfolio_value = float(portfolio.get("equity", 50000))
+                        
+                        # Calculate position size based on signal strength and confidence
+                        strength = self._get_signal_attribute(signal, 'strength', 0.5)
+                        confidence = self._get_signal_attribute(signal, 'confidence', 0.5)
+                        signal_score = min(1.0, strength * confidence)
+                        
+                        # Base position size: 0.5-2% of portfolio (very conservative for safety)
+                        base_position_pct = 0.005 + (signal_score * 0.015)  # 0.5% to 2%
+                        target_dollar_amount = portfolio_value * base_position_pct
+                        
+                        # Calculate safe quantity based on current price (whole shares only)
+                        if current_price and current_price > 0:
+                            quantity = int(target_dollar_amount / current_price)
+                            # Ensure minimum position size but cap at reasonable amount
+                            if quantity < 1 and target_dollar_amount >= current_price:
+                                quantity = 1
+                            # Safety cap: never exceed $1000 position
+                            max_quantity = int(1000 / current_price)
+                            if quantity > max_quantity:
+                                quantity = max_quantity
+                                logger.warning(f"⚠️ Capped {symbol} position at {quantity} shares (${quantity * current_price:.2f}) for safety")
+                            
+                            logger.info(f"💰 {symbol}: {base_position_pct:.1%} position = ${target_dollar_amount:.2f} = {quantity} shares @ ${current_price:.2f}")
+                        else:
+                            logger.warning(f"Cannot calculate quantity for {symbol}: no price data")
+                            continue
                         
                         if quantity <= 0 or symbol == 'UNKNOWN':
                             logger.warning(f"Skipping invalid signal: symbol={symbol}, quantity={quantity}")

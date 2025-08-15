@@ -522,12 +522,13 @@ class LLMPortfolioManager:
         total_weight = 0.0
         
         # Determine number of positions based on regime and risk profile
+        # Increase diversification across all market regimes
         if market_regime == MarketRegime.BULL_MARKET:
-            target_positions = min(25, len(scored_candidates))
+            target_positions = min(35, len(scored_candidates))  # Increased from 25
         elif market_regime == MarketRegime.BEAR_MARKET:
-            target_positions = min(15, len(scored_candidates))  # More concentrated
+            target_positions = min(25, len(scored_candidates))  # Increased from 15 - still need diversification in bear markets
         else:
-            target_positions = min(20, len(scored_candidates))
+            target_positions = min(30, len(scored_candidates))  # Increased from 20
         
         # Calculate base weight per position
         available_weight = 1.0 - self.min_cash_reserve
