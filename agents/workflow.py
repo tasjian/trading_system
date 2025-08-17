@@ -207,7 +207,7 @@ class TradingWorkflow:
             
             filter_result = await filter_stock_universe(
                 base_symbols=None,  # Use full universe
-                max_symbols=400,    # Increased to 400 for better signal diversity
+                max_symbols=50,     # Focused set of 50 actionable stocks for deep analysis
                 include_watchlist=True,
                 cached_social_data=cached_social_data
             )
@@ -406,25 +406,59 @@ class TradingWorkflow:
                             signal_type = 'SELL' 
                             signal_reason.append('Negative overall sentiment')
                         
-                        # Enhanced extreme sentiment detection based on numerical scores
-                        if overall_score <= -0.7:  # Extremely negative numerical score
-                            signal_strength += 0.4
+                        # Enhanced extreme sentiment detection based on numerical scores (MORE AGGRESSIVE)
+                        if overall_score <= -0.5:  # Extremely negative numerical score (lowered from -0.7)
+                            signal_strength += 0.5  # Increased strength
                             signal_type = 'SHORT'  # Override with SHORT if not already set
-                            signal_reason.append('EXTREME negative sentiment score (≤-0.7)')
-                        elif overall_score <= -0.5:  # Very negative numerical score
+                            signal_reason.append('EXTREME negative sentiment score (≤-0.5)')
+                        elif overall_score <= -0.3:  # Very negative numerical score (lowered from -0.5)
+                            signal_strength += 0.4  # Increased strength
+                            signal_type = 'SHORT'
+                            signal_reason.append('Strong negative sentiment score (≤-0.3)')
+                        elif overall_score <= -0.2:  # Moderate negative for short consideration (new threshold)
                             signal_strength += 0.3
                             signal_type = 'SHORT'
-                            signal_reason.append('Strong negative sentiment score (≤-0.5)')
+                            signal_reason.append('Moderate negative sentiment score for short opportunity (≤-0.2)')
                         elif overall_score >= 0.5:  # Very positive numerical score
                             signal_strength += 0.3
                             signal_type = 'BUY'
                             signal_reason.append('Strong positive sentiment score (≥0.5)')
                         
-                        # Crisis/panic sentiment detection with high confidence
-                        if (confidence > 0.8 and overall_score <= -0.6):
-                            signal_strength += 0.4  # Major boost for high-confidence extreme negativity
+                        # Crisis/panic sentiment detection with high confidence (MORE SENSITIVE)
+                        if (confidence > 0.7 and overall_score <= -0.4):  # Lowered confidence and score thresholds
+                            signal_strength += 0.5  # Major boost for high-confidence extreme negativity
                             signal_type = 'SHORT'
                             signal_reason.append('CRISIS-LEVEL sentiment - High confidence extreme negative')
+                        
+                        # Additional short opportunity: Negative sentiment with very negative classification
+                        if overall_sentiment == 'very_negative':
+                            signal_strength += 0.4
+                            signal_type = 'SHORT'
+                            signal_reason.append('Very negative sentiment classification - short opportunity')
+                        
+                        # Social media driven short opportunities
+                        social_sentiment = getattr(comprehensive_sentiment, 'social_sentiment', {})
+                        if social_sentiment:
+                            reddit_sentiment = social_sentiment.get('reddit')
+                            twitter_sentiment = social_sentiment.get('twitter')
+                            
+                            # Multiple social platforms showing negative sentiment
+                            negative_platforms = []
+                            if reddit_sentiment and getattr(reddit_sentiment, 'sentiment', '') in ['negative', 'very_negative']:
+                                negative_platforms.append('reddit')
+                            if twitter_sentiment and getattr(twitter_sentiment, 'sentiment', '') in ['negative', 'very_negative']:
+                                negative_platforms.append('twitter')
+                            
+                            if len(negative_platforms) >= 2:  # Multiple platforms bearish
+                                signal_strength += 0.3
+                                signal_type = 'SHORT'
+                                signal_reason.append(f'Bearish sentiment across {len(negative_platforms)} social platforms')
+                            elif len(negative_platforms) == 1:  # Single platform very bearish
+                                platform_sentiment = reddit_sentiment if 'reddit' in negative_platforms else twitter_sentiment
+                                if getattr(platform_sentiment, 'score', 0) <= -0.4:  # Very negative social score
+                                    signal_strength += 0.2
+                                    signal_type = 'SHORT'
+                                    signal_reason.append(f'Very bearish {negative_platforms[0]} sentiment')
                         
                         # Confidence boosts
                         if confidence > 0.7:
@@ -1952,15 +1986,27 @@ class TradingWorkflow:
                         current_price = alpaca_client.get_current_price(symbol)
                         volatility = self._get_signal_attribute(signal, 'volatility', 0.02)  # Default 2% volatility
                         
-                        # ALGO AGENT RECOMMENDATION: Use limit orders for volatile stocks
-                        if volatility > 0.25:  # High volatility threshold from algo agent
+                        # Check if market is open
+                        market_open = alpaca_client.is_market_open()
+                        
+                        # FORCE LIMIT ORDERS WHEN MARKET IS CLOSED (paper trading fix)
+                        if not market_open:
                             order_type = "limit"
-                            # Set limit price with small buffer
                             action = self._get_signal_attribute(signal, 'action', 'buy')
                             if action.lower() == "buy":
-                                limit_price = current_price * 1.002  # Buy 0.2% above current
+                                limit_price = round(current_price * 1.01, 2)  # Buy 1% above current, rounded to cents
                             else:
-                                limit_price = current_price * 0.998  # Sell 0.2% below current
+                                limit_price = round(current_price * 0.99, 2)  # Sell 1% below current, rounded to cents
+                            logger.info(f"🌙 Market CLOSED - Using LIMIT order for {symbol}: limit=${limit_price:.2f} (market opens at next session)")
+                        # ALGO AGENT RECOMMENDATION: Use limit orders for volatile stocks
+                        elif volatility > 0.25:  # High volatility threshold from algo agent
+                            order_type = "limit"
+                            # Set limit price with small buffer, rounded to cents
+                            action = self._get_signal_attribute(signal, 'action', 'buy')
+                            if action.lower() == "buy":
+                                limit_price = round(current_price * 1.002, 2)  # Buy 0.2% above current, rounded to cents
+                            else:
+                                limit_price = round(current_price * 0.998, 2)  # Sell 0.2% below current, rounded to cents
                             logger.info(f"🎯 Using LIMIT order for volatile {symbol}: volatility={volatility:.1%}, limit=${limit_price:.2f}")
                         else:
                             order_type = "market"
