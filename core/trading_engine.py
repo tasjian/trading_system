@@ -96,9 +96,37 @@ class UnifiedTradingEngine:
         self.rebalance_threshold = settings.min_rebalance_threshold
         self.pairs_z_threshold = 2.0  # Z-score threshold for pairs trading
     
+    async def validate_cash_balance(self) -> bool:
+        """Validate cash balance and halt system if negative - FAIL-FAST architecture."""
+        try:
+            account_info = alpaca_client.get_account_info()
+            cash_balance = float(account_info.get('cash', 0))
+            
+            if cash_balance < 0:
+                error_msg = (
+                    f"❌ CRITICAL SYSTEM HALT: Negative cash balance detected\n"
+                    f"Cash Balance: ${cash_balance:,.2f}\n"
+                    f"SYSTEM DESIGN PROHIBITS NEGATIVE CASH TRADING\n"
+                    f"All trading operations suspended until cash balance is positive"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            if cash_balance < 1000:
+                logger.warning(f"Low cash balance warning: ${cash_balance:,.2f}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Cash balance validation failed: {e}")
+            raise RuntimeError(f"Cash balance validation failed: {e}")
+    
     async def execute_analysis_signal(self, analysis: AnalysisResult) -> Optional[TradingOrder]:
         """Execute trading based on analysis signal."""
         try:
+            # CRITICAL: Validate cash balance first - FAIL-FAST architecture
+            await self.validate_cash_balance()
+            
             logger.info(f"🎯 Processing signal for {analysis.symbol}: {analysis.signal.value}")
             
             # Skip if confidence too low
@@ -116,11 +144,11 @@ class UnifiedTradingEngine:
                 logger.info(f"Position size too small for {analysis.symbol}")
                 return None
             
-            # Determine order side
-            if analysis.signal in [SignalType.BUY, SignalType.STRONG_BUY]:
-                side = "buy"
-            else:
-                side = "sell"
+            # Determine order side based on signal type AND current position
+            side = await self._determine_order_side(analysis.signal, analysis.symbol)
+            if not side:
+                logger.info(f"No valid order side for {analysis.symbol} with signal {analysis.signal}")
+                return None
             
             # Create order
             order = TradingOrder(
@@ -142,6 +170,9 @@ class UnifiedTradingEngine:
                                  hedge_ratio: float) -> List[TradingOrder]:
         """Execute pairs trading strategy."""
         try:
+            # CRITICAL: Validate cash balance first - FAIL-FAST architecture
+            await self.validate_cash_balance()
+            
             logger.info(f"🔄 Executing pairs trade: {symbol1}/{symbol2}, Z-score: {z_score:.2f}")
             
             orders = []
@@ -223,8 +254,13 @@ class UnifiedTradingEngine:
     
     async def rebalance_portfolio(self, target_allocation: Dict[str, float], 
                                  force: bool = False) -> List[TradingOrder]:
-        """Rebalance portfolio to target allocation."""
+        """Rebalance portfolio with FAIL-FAST cash validation."""
         try:
+            # CRITICAL: Validate cash balance first
+            if not await self.validate_cash_balance():
+                logger.error("Portfolio rebalancing halted due to cash balance issues")
+                return []
+            
             logger.info(f"🔄 Rebalancing portfolio with {len(target_allocation)} positions")
             
             # Get current portfolio
@@ -263,7 +299,29 @@ class UnifiedTradingEngine:
                     continue
                 
                 quantity = abs(trade_value) / price_data.price
-                side = "buy" if trade_value > 0 else "sell"
+                
+                # Determine side based on trade value and current position
+                current_pos = next((pos for pos in current_positions if pos['symbol'] == symbol), None)
+                
+                if trade_value > 0:
+                    side = "buy"
+                else:
+                    # Need to reduce position
+                    if current_pos and float(current_pos['qty']) > 0:
+                        # Have long position, sell it
+                        side = "sell"
+                        # Limit quantity to actual position size to avoid overselling
+                        max_sellable = float(current_pos['qty'])
+                        quantity = min(quantity, max_sellable)
+                    elif current_pos and float(current_pos['qty']) < 0:
+                        # Have short position, buy to cover
+                        side = "buy"
+                        max_coverable = abs(float(current_pos['qty']))
+                        quantity = min(quantity, max_coverable)
+                    else:
+                        # No position but target is lower, skip (can't sell what we don't have)
+                        logger.info(f"Skipping {symbol}: no position to reduce")
+                        continue
                 
                 order = TradingOrder(
                     symbol=symbol,
@@ -294,8 +352,14 @@ class UnifiedTradingEngine:
             return []
     
     async def _execute_order(self, order: TradingOrder) -> Optional[TradingOrder]:
-        """Execute a trading order with risk checks."""
+        """Execute a trading order with comprehensive validation and risk checks."""
         try:
+            # Pre-trade position validation
+            if not await self._validate_position_for_order(order.symbol, order.side, order.quantity):
+                logger.warning(f"Position validation failed for {order.symbol}")
+                order.status = OrderStatus.REJECTED
+                return order
+            
             # Pre-trade risk checks
             if not await self._validate_order(order):
                 logger.warning(f"Order validation failed for {order.symbol}")
@@ -329,10 +393,23 @@ class UnifiedTradingEngine:
             return order
     
     async def _validate_order(self, order: TradingOrder) -> bool:
-        """Validate order against risk parameters."""
+        """FAIL-FAST order validation - strict cash balance enforcement."""
         try:
             # Get account info
             account_info = alpaca_client.get_account_info()
+            
+            # CRITICAL: Check cash balance first - NEVER allow negative cash trading
+            cash_balance = float(account_info.get('cash', 0))
+            if cash_balance < 0:
+                error_msg = (
+                    f"❌ CRITICAL SYSTEM HALT: Negative cash balance detected\n"
+                    f"Cash Balance: ${cash_balance:,.2f}\n"
+                    f"Order: {order.side} {order.quantity} {order.symbol}\n"
+                    f"SYSTEM DESIGN PROHIBITS NEGATIVE CASH TRADING\n"
+                    f"All trading operations suspended until cash balance is positive"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
             
             # Check if trading is blocked
             if account_info.get('trading_blocked', False):
@@ -355,31 +432,70 @@ class UnifiedTradingEngine:
                     logger.error(f"Position size {position_pct:.2%} exceeds limit {self.max_position_size:.2%}")
                     return False
             
-            # Check buying power for buy orders
+            # STRICT CASH BALANCE VALIDATION for buy orders (no margin allowed)
             if order.side == "buy":
-                buying_power = account_info['buying_power']
-                if order_value > buying_power:
-                    logger.error(f"Insufficient buying power: ${order_value:,.2f} > ${buying_power:,.2f}")
+                # Use only cash balance - no margin/buying power for fail-fast architecture
+                if order_value > cash_balance:
+                    error_msg = (
+                        f"❌ INSUFFICIENT CASH: Order exceeds cash balance\n"
+                        f"Order Value: ${order_value:,.2f}\n"
+                        f"Cash Balance: ${cash_balance:,.2f}\n"
+                        f"Shortage: ${order_value - cash_balance:,.2f}\n"
+                        f"Order: {order.side} {order.quantity} {order.symbol}\n"
+                        f"FAIL-FAST ARCHITECTURE: No margin trading allowed"
+                    )
+                    logger.error(error_msg)
+                    return False
+                
+                # Additional safety check: ensure sufficient cash remains after trade
+                min_cash_reserve = 1000.0  # Minimum $1000 cash reserve
+                if (cash_balance - order_value) < min_cash_reserve:
+                    logger.error(
+                        f"Order would leave insufficient cash reserve: "
+                        f"${cash_balance - order_value:,.2f} < ${min_cash_reserve:,.2f}"
+                    )
                     return False
             
             return True
             
+        except RuntimeError:
+            # Re-raise critical system halts
+            raise
         except Exception as e:
             logger.error(f"Order validation error: {e}")
             return False
     
     async def _calculate_position_size(self, analysis: AnalysisResult) -> float:
-        """Calculate position size based on analysis and risk parameters."""
+        """FAIL-FAST position sizing with strict cash balance validation."""
         try:
             account_info = alpaca_client.get_account_info()
             portfolio_value = account_info['portfolio_value']
-            buying_power = account_info['buying_power']
+            cash_balance = float(account_info.get('cash', 0))
             
-            if portfolio_value <= 0:
+            # CRITICAL: Halt if negative cash balance
+            if cash_balance < 0:
+                error_msg = (
+                    f"❌ CRITICAL SYSTEM HALT: Negative cash in position sizing\n"
+                    f"Cash Balance: ${cash_balance:,.2f}\n"
+                    f"Symbol: {analysis.symbol}\n"
+                    f"POSITION SIZING SUSPENDED - NEGATIVE CASH DETECTED"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            if portfolio_value <= 0 or cash_balance <= 1000:  # Require minimum $1000 cash
+                logger.info(f"Insufficient portfolio/cash for position sizing: portfolio=${portfolio_value}, cash=${cash_balance}")
                 return 0.0
             
-            # Base position size - use smaller of 15% portfolio or 80% buying power
-            base_size = min(portfolio_value * 0.15, buying_power * 0.8)
+            # CONSERVATIVE position sizing using ONLY cash balance (no margin)
+            # Keep $1000 minimum cash reserve for safety
+            available_cash = cash_balance - 1000.0
+            if available_cash <= 0:
+                logger.info(f"No available cash for trading after reserve: cash=${cash_balance}, reserve=$1000")
+                return 0.0
+            
+            # Base position size - maximum 10% of portfolio OR 50% of available cash (whichever is smaller)
+            base_size = min(portfolio_value * 0.10, available_cash * 0.50)
             
             # Adjust for confidence
             confidence_multiplier = {
@@ -402,19 +518,163 @@ class UnifiedTradingEngine:
             # Adjust for risk
             risk_multiplier = max(0.5, 1.0 - analysis.risk_score)
             
-            # Calculate final size
+            # Calculate final size with safety caps
             position_value = base_size * confidence_multiplier * signal_multiplier * risk_multiplier
+            
+            # Additional safety: Never exceed available cash
+            position_value = min(position_value, available_cash)
             
             # Convert to quantity
             if analysis.price > 0:
                 quantity = position_value / analysis.price
-                return max(1.0, quantity)  # Minimum 1 share
+                # Final validation: ensure position value doesn't exceed cash
+                final_position_value = quantity * analysis.price
+                if final_position_value > available_cash:
+                    logger.warning(f"Position value ${final_position_value:,.2f} exceeds available cash ${available_cash:,.2f}, reducing...")
+                    quantity = available_cash / analysis.price
+                
+                return max(1.0, quantity) if quantity >= 1.0 else 0.0
             
             return 0.0
             
         except Exception as e:
             logger.error(f"Position size calculation error: {e}")
             return 0.0
+    
+    async def _determine_order_side(self, signal: SignalType, symbol: str) -> Optional[str]:
+        """Determine order side based on signal and current position with validation."""
+        try:
+            current_positions = alpaca_client.get_positions()
+            current_position = next((pos for pos in current_positions if pos['symbol'] == symbol), None)
+            
+            if signal in [SignalType.BUY, SignalType.STRONG_BUY]:
+                return "buy"
+            elif signal == SignalType.SHORT:
+                return "sell_short"
+            elif signal in [SignalType.SELL, SignalType.STRONG_SELL]:
+                return self._handle_sell_signal(current_position)
+            else:  # HOLD signal
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error determining order side for {symbol}: {e}")
+            return None
+    
+    def _handle_sell_signal(self, current_position: Optional[Dict]) -> str:
+        """Handle sell signal logic based on current position."""
+        if current_position:
+            current_qty = float(current_position['qty'])
+            if current_qty > 0:
+                # Have long position, sell it
+                return "sell"
+            elif current_qty < 0:
+                # Already short, buy to cover
+                return "buy"
+        
+        # No position to sell, consider shorting (will be validated later)
+        return "sell_short"
+    
+    async def _validate_position_for_order(self, symbol: str, side: str, quantity: float) -> bool:
+        """Validate that the intended order is possible given current positions."""
+        try:
+            current_positions = alpaca_client.get_positions()
+            current_pos = next((pos for pos in current_positions if pos['symbol'] == symbol), None)
+            
+            if side == "sell":
+                if not current_pos or float(current_pos['qty']) < quantity:
+                    logger.warning(f"Cannot sell {quantity} {symbol}: insufficient long position")
+                    return False
+            elif side == "buy" and current_pos:
+                # Check if trying to buy to cover more than short position
+                current_qty = float(current_pos['qty'])
+                if current_qty < 0 and quantity > abs(current_qty):
+                    logger.warning(f"Cannot buy {quantity} {symbol}: exceeds short position of {abs(current_qty)}")
+                    # Allow but adjust quantity
+                    return True
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Position validation error for {symbol}: {e}")
+            return False
+    
+    async def check_risk_management_triggers(self) -> List[TradingOrder]:
+        """Check for stop-loss and risk management triggers that require immediate sells."""
+        try:
+            risk_orders = []
+            current_positions = alpaca_client.get_positions()
+            
+            for pos_data in current_positions:
+                symbol = pos_data['symbol']
+                quantity = float(pos_data['qty'])
+                avg_cost = float(pos_data['cost_basis']) / abs(quantity) if quantity != 0 else 0
+                current_price = float(pos_data['current_price'])
+                unrealized_pnl_pct = float(pos_data['unrealized_plpc'])
+                market_value = float(pos_data['market_value'])
+                
+                # Skip if no position
+                if quantity == 0:
+                    continue
+                
+                # Check stop-loss triggers (both long and short positions)
+                if quantity > 0:  # Long position
+                    # Stop-loss: price dropped below threshold
+                    if unrealized_pnl_pct <= -self.stop_loss_pct:
+                        order = TradingOrder(
+                            symbol=symbol,
+                            side="sell",
+                            quantity=abs(quantity),
+                            order_type="market",
+                            strategy=StrategyType.SINGLE_STOCK,
+                            reasoning=f"Stop-loss triggered: {unrealized_pnl_pct:.1%} loss (limit: {self.stop_loss_pct:.1%})"
+                        )
+                        risk_orders.append(order)
+                        logger.warning(f"🚨 Stop-loss trigger for {symbol}: {unrealized_pnl_pct:.1%} loss")
+                        
+                elif quantity < 0:  # Short position
+                    # Stop-loss: price rose above threshold (loss on short)
+                    if unrealized_pnl_pct <= -self.stop_loss_pct:
+                        order = TradingOrder(
+                            symbol=symbol,
+                            side="buy",  # Buy to cover short
+                            quantity=abs(quantity),
+                            order_type="market",
+                            strategy=StrategyType.SINGLE_STOCK,
+                            reasoning=f"Short stop-loss triggered: {unrealized_pnl_pct:.1%} loss (limit: {self.stop_loss_pct:.1%})"
+                        )
+                        risk_orders.append(order)
+                        logger.warning(f"🚨 Short stop-loss trigger for {symbol}: {unrealized_pnl_pct:.1%} loss")
+                
+                # Check position size limits
+                account_info = alpaca_client.get_account_info()
+                portfolio_value = account_info['portfolio_value']
+                position_pct = abs(market_value) / portfolio_value if portfolio_value > 0 else 0
+                
+                if position_pct > self.max_position_size * 1.5:  # 50% over limit triggers partial sell
+                    # Calculate how much to sell to get back to limit
+                    target_value = portfolio_value * self.max_position_size
+                    excess_value = abs(market_value) - target_value
+                    excess_quantity = excess_value / current_price if current_price > 0 else 0
+                    
+                    if excess_quantity >= 1:  # Only if at least 1 share
+                        side = "sell" if quantity > 0 else "buy"
+                        order = TradingOrder(
+                            symbol=symbol,
+                            side=side,
+                            quantity=excess_quantity,
+                            order_type="limit",
+                            limit_price=current_price * 0.99,  # Slightly below market for quick fill
+                            strategy=StrategyType.SINGLE_STOCK,
+                            reasoning=f"Position size limit: {position_pct:.1%} > {self.max_position_size:.1%} limit"
+                        )
+                        risk_orders.append(order)
+                        logger.warning(f"⚖️ Position size trigger for {symbol}: {position_pct:.1%} > limit")
+            
+            return risk_orders
+            
+        except Exception as e:
+            logger.error(f"Risk management check error: {e}")
+            return []
     
     async def get_portfolio_metrics(self) -> PortfolioMetrics:
         """Get comprehensive portfolio metrics."""

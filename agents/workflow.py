@@ -491,13 +491,16 @@ class TradingWorkflow:
             return update_state_timestamp(state)
             
         except Exception as e:
-            error_msg = f"Sentiment Analysis Agent error: {e}"
+            error_msg = (
+                f"❌ CRITICAL SYSTEM FAILURE: Sentiment Analysis Failed\n"
+                f"Error: {str(e)}\n"
+                f"FAIL-FAST ARCHITECTURE: Trading halted when sentiment analysis fails\n"
+                f"System requires valid sentiment data to make trading decisions\n"
+                f"No fallback mechanisms permitted per system design"
+            )
             logger.error(error_msg)
-            # Don't fail the entire workflow for sentiment analysis errors
-            state["sentiment_data"] = {}
-            state["sentiment_signals"] = []
-            state["current_agent"] = "sentiment_analyzer"
-            return update_state_timestamp(state)
+            # FAIL-FAST: Halt the entire system when sentiment analysis fails
+            raise RuntimeError(error_msg)
     
     async def risk_assessment_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Assess portfolio risk and check limits."""
@@ -612,23 +615,42 @@ class TradingWorkflow:
                 # Ensure signals are properly transferred to state for next agent
                 state["trading_signals"] = rl_result.get("signals", [])
             
-            # Enhanced RL result validation with partial success handling
+            # COMPREHENSIVE SIGNAL QUALITY VALIDATION
             signals_generated = rl_result.get("signals", []) or rl_result.get("trading_signals", []) or state.get("trading_signals", [])
+            
+            # CRITICAL: Signal count validation
             if not signals_generated:
-                # Check if this is a complete failure or partial success
                 if rl_result.get("rl_enhanced", False):
-                    # System ran but generated no signals - this is acceptable
-                    logger.warning("⚠️ RL system ran successfully but generated no actionable signals")
-                    logger.info("This may be due to: market conditions, risk constraints, or insufficient conviction")
-                    state["trading_signals"] = []  # Ensure empty signals are set
+                    # System ran but generated no signals - FAIL FAST in production
+                    error_msg = (
+                        f"❌ CRITICAL: RL system generated ZERO signals\n"
+                        f"FAIL-FAST ARCHITECTURE: System requires minimum trading signals\n"
+                        f"Market conditions may be unsuitable for trading\n"
+                        f"System halted to prevent poor-quality decisions"
+                    )
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
                 else:
                     error_msg = "❌ CRITICAL: RL signal generation completely failed - system requires RL agent to generate signals"
                     logger.error(error_msg)
                     raise RuntimeError(error_msg)
-            else:
-                # Ensure signals are properly set in state
-                state["trading_signals"] = signals_generated
-                logger.info(f"✅ Signal generation successful: {len(signals_generated)} signals ready for optimization")
+            
+            # SIGNAL QUALITY VALIDATION
+            high_quality_signals = await self._validate_signal_quality(signals_generated)
+            if len(high_quality_signals) < len(signals_generated) * 0.5:  # Require at least 50% high-quality signals
+                error_msg = (
+                    f"❌ CRITICAL: Poor signal quality detected\n"
+                    f"Total signals: {len(signals_generated)}\n"
+                    f"High-quality signals: {len(high_quality_signals)}\n"
+                    f"Quality threshold: 50% minimum\n"
+                    f"FAIL-FAST: Trading halted due to poor signal quality"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # Use only high-quality signals
+            state["trading_signals"] = high_quality_signals
+            logger.info(f"✅ Signal quality validation passed: {len(high_quality_signals)}/{len(signals_generated)} high-quality signals")
             
             # Fix undefined variables and add final validation and metadata
             symbols = state.get("filtered_symbols", [])
@@ -637,7 +659,7 @@ class TradingWorkflow:
             if not symbols:
                 symbols = list(state.get("portfolio", {}).get("positions", {}).keys())
             if not symbols:
-                symbols = ['AAPL', 'MSFT', 'GOOGL']  # Fallback
+                symbols = []  # No hardcoded fallback - use pipeline candidates only
             
             # Calculate valid market data count from state
             market_data = state.get("market_data", {})
@@ -782,7 +804,12 @@ class TradingWorkflow:
             return update_state_timestamp(state)
             
         except Exception as e:
-            error_msg = f"❌ CRITICAL: RL signal generation failed: {e} - system requires RL agent to generate signals"
+            error_msg = (
+                f"❌ CRITICAL SYSTEM FAILURE: Signal generation failed\n"
+                f"Error: {str(e)}\n"
+                f"FAIL-FAST ARCHITECTURE: System cannot operate without valid signals\n"
+                f"All trading operations suspended"
+            )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
     
@@ -1478,7 +1505,7 @@ class TradingWorkflow:
                 logger.error("🔄 Attempting market data recovery for RL signals...")
                 try:
                     # Try to generate signals with minimal market data
-                    minimal_symbols = symbols[:5] if symbols else ['AAPL', 'MSFT', 'GOOGL']
+                    minimal_symbols = symbols[:5] if symbols else []
                     synthetic_data = self._generate_synthetic_market_data(minimal_symbols)
                     
                     if synthetic_data:
@@ -1659,6 +1686,105 @@ class TradingWorkflow:
         except Exception as e:
             logger.debug(f"Online RL cleanup: {e}")
     
+    def _calculate_signal_quality_score(self, signals: List[Dict]) -> float:
+        """Calculate overall quality score for a set of signals (0.0 to 1.0)."""
+        if not signals:
+            return 0.0
+        
+        total_score = 0.0
+        valid_signals = 0
+        
+        for signal in signals:
+            signal_score = 0.0
+            
+            # Check for required fields (25% of score)
+            required_fields = ['symbol', 'action', 'quantity']
+            if all(hasattr(signal, field) for field in required_fields):
+                signal_score += 0.25
+            
+            # Check symbol validity (25% of score)
+            symbol = getattr(signal, 'symbol', '')
+            if symbol and 1 <= len(symbol) <= 10 and symbol.isalpha():
+                signal_score += 0.25
+            
+            # Check action validity (25% of score)
+            action = getattr(signal, 'action', '').lower()
+            if action in ['buy', 'sell', 'hold', 'sell_short', 'short', 'cover']:
+                signal_score += 0.25
+            
+            # Check confidence/quantity validity (25% of score)
+            confidence = getattr(signal, 'confidence', 0)
+            quantity = getattr(signal, 'quantity', 0)
+            if confidence > 0 and quantity > 0:
+                signal_score += 0.25
+            
+            total_score += signal_score
+            valid_signals += 1
+        
+        # Return average quality score
+        return total_score / valid_signals if valid_signals > 0 else 0.0
+    
+    async def _validate_signal_quality(self, signals: List[Dict]) -> List[Dict]:
+        """Validate and filter signals based on quality criteria."""
+        high_quality_signals = []
+        
+        for signal in signals:
+            try:
+                # Required fields validation
+                required_fields = ['symbol', 'action', 'quantity']
+                if not all(hasattr(signal, field) for field in required_fields):
+                    logger.warning(f"Signal missing required fields: {signal}")
+                    continue
+                
+                # Data quality validation
+                symbol = getattr(signal, 'symbol', '')
+                action = getattr(signal, 'action', '')
+                quantity = getattr(signal, 'quantity', 0)
+                confidence = getattr(signal, 'confidence', 0)
+                
+                # Symbol validation
+                if not symbol or len(symbol) < 1 or len(symbol) > 10:
+                    logger.warning(f"Invalid symbol in signal: {symbol}")
+                    continue
+                
+                # Action validation
+                valid_actions = ['buy', 'sell', 'hold', 'sell_short', 'short', 'cover']
+                if action not in valid_actions:
+                    logger.warning(f"Invalid action in signal: {action}")
+                    continue
+                
+                # Quantity validation
+                if quantity <= 0 or quantity > 10000:  # Reasonable bounds
+                    logger.warning(f"Invalid quantity in signal: {quantity}")
+                    continue
+                
+                # Confidence validation (if present)
+                if confidence < 0.3:  # Minimum confidence threshold
+                    logger.warning(f"Low confidence signal rejected: {symbol} confidence={confidence}")
+                    continue
+                
+                # Price validation (if available)
+                price = signal.get('price', 0)
+                if price and (price <= 0 or price > 10000):  # Reasonable price bounds
+                    logger.warning(f"Invalid price in signal: {symbol} price={price}")
+                    continue
+                
+                # Additional quality checks
+                reasoning = signal.get('reasoning', '')
+                if not reasoning or len(reasoning) < 10:  # Require meaningful reasoning
+                    logger.warning(f"Signal lacks sufficient reasoning: {symbol}")
+                    continue
+                
+                # Signal passed all quality checks
+                high_quality_signals.append(signal)
+                
+            except Exception as e:
+                logger.warning(f"Signal validation error: {e}")
+                continue
+        
+        logger.info(f"Signal quality validation: {len(high_quality_signals)}/{len(signals)} signals passed")
+        return high_quality_signals
+    
     def _generate_fallback_signals(self, state: TradingState) -> List[Dict]:
         """REMOVED: Fallback signal generation disabled - system must use RL agent signals only."""
         raise RuntimeError("❌ CRITICAL: Fallback signal generation disabled - system requires RL agent to generate signals")
@@ -1668,8 +1794,25 @@ class TradingWorkflow:
         try:
             logger.info("Strategy Optimization Agent: Optimizing trading strategy")
             
-            # Get signals from multiple possible locations in state
+            # Get validated high-quality signals from state
             signals = state.get("signals", []) or state.get("trading_signals", [])
+            
+            # ADDITIONAL QUALITY GATE: Validate signals before optimization
+            if not signals:
+                error_msg = "❌ CRITICAL: No signals available for strategy optimization"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # Validate signal quality at optimization stage too
+            quality_score = self._calculate_signal_quality_score(signals)
+            if quality_score < 0.6:  # Require 60% quality score minimum
+                error_msg = (
+                    f"❌ CRITICAL: Signal quality too low for strategy optimization\n"
+                    f"Quality score: {quality_score:.2f} (minimum: 0.60)\n"
+                    f"FAIL-FAST: Strategy optimization halted"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
             
             # Debug state keys to understand what's available (can be removed in production)
             signal_keys = [k for k in state.keys() if 'signal' in k.lower()]
@@ -1739,9 +1882,14 @@ class TradingWorkflow:
             return update_state_timestamp(state)
             
         except Exception as e:
-            error_msg = f"Strategy Optimization Agent error: {e}"
+            error_msg = (
+                f"❌ CRITICAL SYSTEM FAILURE: Strategy optimization failed\n"
+                f"Error: {str(e)}\n"
+                f"FAIL-FAST ARCHITECTURE: System cannot operate without strategy optimization\n"
+                f"All trading operations suspended"
+            )
             logger.error(error_msg)
-            return add_error_to_state(state, error_msg)
+            raise RuntimeError(error_msg)
     
     def _get_signal_attribute(self, signal, attribute, default=None):
         """Helper function to get signal attributes from both TradingSignal objects and dictionaries."""
@@ -1753,19 +1901,39 @@ class TradingWorkflow:
             return default
 
     async def order_management_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute trading orders based on optimized signals."""
+        """Execute trading orders with COMPREHENSIVE DATA QUALITY VALIDATION."""
         try:
-            logger.info("Order Management Agent: Executing trading orders")
+            logger.info("Order Management Agent: FAIL-FAST order execution with quality validation")
             
             # Get signals from multiple possible state keys
             signals = (state.get("optimized_signals", []) or 
                       state.get("signals", []) or 
                       state.get("trading_signals", []))
             
+            # CRITICAL: Data quality validation before order execution
             if not signals:
-                logger.info("No signals to execute")
-                state["current_agent"] = "order_manager"
-                return update_state_timestamp(state)
+                error_msg = (
+                    f"❌ CRITICAL: No trading signals available for order execution\n"
+                    f"FAIL-FAST ARCHITECTURE: System requires valid signals to execute orders\n"
+                    f"Order execution halted"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # FINAL signal quality validation before executing real trades
+            final_quality_score = self._calculate_signal_quality_score(signals)
+            if final_quality_score < 0.7:  # Higher threshold for actual execution
+                error_msg = (
+                    f"❌ CRITICAL: Signal quality too low for order execution\n"
+                    f"Quality score: {final_quality_score:.3f} (minimum: 0.700)\n"
+                    f"Number of signals: {len(signals)}\n"
+                    f"FAIL-FAST: Order execution halted due to poor signal quality\n"
+                    f"Trading operations suspended"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            logger.info(f"✅ Final quality validation passed: {final_quality_score:.3f} quality score for {len(signals)} signals")
             
             logger.info(f"Order Management Agent processing {len(signals)} signals")
             
@@ -1950,9 +2118,14 @@ class TradingWorkflow:
             return update_state_timestamp(state)
             
         except Exception as e:
-            error_msg = f"Order Management Agent error: {e}"
+            error_msg = (
+                f"❌ CRITICAL SYSTEM FAILURE: Order management failed\n"
+                f"Error: {str(e)}\n"
+                f"FAIL-FAST ARCHITECTURE: System cannot operate without order execution\n"
+                f"All trading operations suspended"
+            )
             logger.error(error_msg)
-            return add_error_to_state(state, error_msg)
+            raise RuntimeError(error_msg)
     
     async def portfolio_tracking_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Track portfolio performance and positions."""

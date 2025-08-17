@@ -46,8 +46,7 @@ class ServiceManager:
     def __init__(self):
         self.redis_host = settings.redis_host
         self.redis_port = settings.redis_port
-        self.ollama_base_url = settings.ollama_base_url
-        self.ollama_port = 11434  # Default Ollama port
+        # Ollama removed - using GPT-5-nano for sentiment analysis
         
         # Service health cache
         self.service_health: Dict[str, ServiceHealth] = {}
@@ -55,29 +54,20 @@ class ServiceManager:
         logger.info("🔧 Service Manager initialized")
     
     async def check_all_services(self) -> Dict[str, ServiceHealth]:
-        """Check health of all required services."""
-        logger.info("🔍 Checking health of all services...")
+        """Check health of required services (Redis only - GPT-5-nano used for sentiment)."""
+        logger.info("🔍 Checking health of required services...")
         
-        # Check services concurrently
-        redis_health, ollama_health = await asyncio.gather(
-            self.check_redis_health(),
-            self.check_ollama_health(),
-            return_exceptions=True
-        )
+        # Only check Redis - GPT-5-nano handles sentiment analysis
+        redis_health = await self.check_redis_health()
         
         # Handle exceptions
         if isinstance(redis_health, Exception):
             error_msg = str(redis_health)
             logger.debug(f"Redis health check exception: {error_msg}")
             redis_health = ServiceHealth("redis", ServiceStatus.ERROR, error_message=error_msg)
-        if isinstance(ollama_health, Exception):
-            error_msg = str(ollama_health)
-            logger.debug(f"Ollama health check exception: {error_msg}")
-            ollama_health = ServiceHealth("ollama", ServiceStatus.ERROR, error_message=error_msg)
         
         self.service_health.update({
-            "redis": redis_health,
-            "ollama": ollama_health
+            "redis": redis_health
         })
         
         # Log results
@@ -139,7 +129,8 @@ class ServiceManager:
                 last_check=time.time()
             )
     
-    async def check_ollama_health(self) -> ServiceHealth:
+    # REMOVED: Ollama health check - using GPT-5-nano for sentiment analysis
+    async def _removed_check_ollama_health(self) -> ServiceHealth:
         """Check Ollama service health."""
         start_time = time.time()
         
@@ -238,12 +229,7 @@ class ServiceManager:
                     logger.error(f"❌ Failed to start {service_name}")
                     success = False
             
-            elif service_name == "ollama":
-                if await self.start_ollama():
-                    logger.info(f"✅ {service_name} started successfully")
-                else:
-                    logger.error(f"❌ Failed to start {service_name}")
-                    success = False
+            # Ollama removed - using GPT-5-nano for sentiment analysis
         
         # Verify all services are now running
         if success:

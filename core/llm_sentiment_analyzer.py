@@ -43,24 +43,58 @@ class SentimentAnalysis(BaseModel):
     
 
 class LLMSentimentAnalyzer:
-    """LLM-based sentiment analyzer for financial content using unified LLM client."""
+    """
+    LLM-based sentiment analyzer for financial content.
+    
+    NOW USES: GPT-5-nano via batch API for cost-effective, reliable sentiment analysis
+    LEGACY: Ollama code commented out for potential future restoration
+    """
     
     def __init__(self, anthropic_api_key: Optional[str] = None, ollama_base_url: str = "http://localhost:11434"):
+        # PRIMARY: Use GPT-5-nano batch sentiment analyzer
+        from .gpt_batch_sentiment_analyzer import legacy_sentiment_analyzer
+        self.gpt_analyzer = legacy_sentiment_analyzer
+        
+        # LEGACY OLLAMA CODE (COMMENTED OUT - KEEP FOR POTENTIAL RESTORATION)
+        """
         # Initialize unified LLM client for consistency and FinGPT support
         from tools.llm_client import LLMClient
         self.llm_client = LLMClient()
+        
+        # Initialize non-blocking Ollama bridge for high-performance async operations
+        self.ollama_bridge = None  # Will be initialized on first use
         
         # Keep legacy parameters for backward compatibility
         self.anthropic_api_key = anthropic_api_key
         self.ollama_base_url = ollama_base_url
         self.session: Optional[aiohttp.ClientSession] = None
+        """
+        
+        logger.info("✅ LLM Sentiment Analyzer initialized with GPT-5-nano backend")
         
     async def _ensure_session(self):
-        """Ensure aiohttp session exists."""
-        if not self.session:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=300)  # Greatly increased for CPU Ollama performance
+        """Ensure aiohttp session exists with proper resource management."""
+        if not self.session or self.session.closed:
+            # Create session with shorter timeout for faster failover
+            connector = aiohttp.TCPConnector(
+                limit=10,
+                limit_per_host=5,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+                enable_cleanup_closed=True
             )
+            
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=30.0)  # Reduced for faster failover
+            )
+    
+    async def _ensure_ollama_bridge(self):
+        """Ensure Ollama bridge is initialized and started."""
+        if self.ollama_bridge is None:
+            from tools.ollama_async_bridge import get_ollama_bridge
+            self.ollama_bridge = await get_ollama_bridge()
+            logger.info("Initialized non-blocking Ollama bridge for sentiment analysis")
     
     def _create_sentiment_system_prompt(self, context: str = "financial_news") -> str:
         """Create fast, optimized system prompt for sentiment analysis."""
@@ -78,6 +112,56 @@ class LLMSentimentAnalyzer:
 }
 
 Be fast and concise."""
+    
+    async def analyze_text_async(self, text: str, context: str = "financial_news", priority: str = "NORMAL") -> 'SentimentAnalysis':
+        """Non-blocking sentiment analysis using Ollama bridge - NO FALLBACKS."""
+        
+        try:
+            # Ensure Ollama bridge is ready with timeout
+            await asyncio.wait_for(self._ensure_ollama_bridge(), timeout=5.0)
+            
+            # Map priority string to enum
+            from tools.ollama_async_bridge import RequestPriority, query_ollama_sentiment
+            
+            priority_map = {
+                "CRITICAL": RequestPriority.CRITICAL,
+                "HIGH": RequestPriority.HIGH,
+                "NORMAL": RequestPriority.NORMAL,
+                "LOW": RequestPriority.LOW
+            }
+            
+            request_priority = priority_map.get(priority.upper(), RequestPriority.NORMAL)
+            
+            # Conservative timeout to prevent hanging
+            timeout = 10.0 if request_priority == RequestPriority.HIGH else 15.0
+            
+            # Submit non-blocking request to Ollama
+            response = await asyncio.wait_for(
+                query_ollama_sentiment(
+                    text=text,
+                    symbol="",  # No specific symbol in generic analysis
+                    priority=request_priority,
+                    timeout=timeout
+                ),
+                timeout=timeout + 5.0  # Extra buffer for network
+            )
+            
+            if response.success and response.content:
+                # Parse the JSON response
+                parsed_data = self._parse_llm_response(response.content)
+                if parsed_data:
+                    return SentimentAnalysis(**parsed_data)
+                else:
+                    raise RuntimeError(f"Failed to parse Ollama response: {response.content}")
+            else:
+                raise RuntimeError(f"Ollama bridge failed: {response.error}")
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Ollama analysis timeout ({timeout}s) - system halting")
+            raise RuntimeError(f"Ollama sentiment analysis timeout after {timeout}s")
+        except Exception as e:
+            logger.error(f"Ollama async analysis failed: {e} - system halting")
+            raise RuntimeError(f"Sentiment analysis failed: {e}")
     
     def _create_sentiment_prompt(self, text: str, context: str = "financial_news") -> str:
         """Create a detailed prompt for sentiment analysis (legacy method)."""
@@ -202,31 +286,10 @@ Respond only with valid JSON."""
             logger.error(f"Failed to parse LLM response: {e}")
             return None
     
-    def _fallback_sentiment_analysis(self, text: str) -> Dict:
-        """Fallback sentiment analysis using keyword-based approach."""
-        positive_words = [
-            'profit', 'growth', 'increase', 'positive', 'strong', 'beat', 'exceeded', 
-            'outperform', 'bullish', 'upgrade', 'buy', 'optimistic', 'confident',
-            'expansion', 'revenue', 'earnings', 'success', 'improvement', 'gain'
-        ]
-        
-        negative_words = [
-            'loss', 'decline', 'decrease', 'negative', 'weak', 'miss', 'failed',
-            'underperform', 'bearish', 'downgrade', 'sell', 'pessimistic', 'concern',
-            'contraction', 'debt', 'bankruptcy', 'crisis', 'deterioration', 'fall'
-        ]
-        
-        text_lower = text.lower()
-        pos_count = sum(1 for word in positive_words if word in text_lower)
-        neg_count = sum(1 for word in negative_words if word in text_lower)
-        
-        total_sentiment_words = pos_count + neg_count
-        
-        if total_sentiment_words == 0:
-            sentiment = "neutral"
-            score = 0.0
-            confidence = 0.3
-        else:
+    # REMOVED: Fallback sentiment analysis method - fail-fast architecture only
+    # def _fallback_sentiment_analysis(self, text: str) -> Dict:
+    #     DISABLED: No fallback sentiment analysis allowed per fail-fast design
+    #     System must halt when LLM sentiment analysis fails
             score = (pos_count - neg_count) / max(total_sentiment_words, 1)
             confidence = min(0.8, total_sentiment_words / 10)  # Max 80% confidence
             
@@ -241,51 +304,43 @@ Respond only with valid JSON."""
             else:
                 sentiment = "very_negative"
         
-        return {
-            "sentiment": sentiment,
-            "confidence": confidence,
-            "score": score,
-            "reasoning": f"Keyword-based analysis: {pos_count} positive, {neg_count} negative words found",
-            "key_phrases": [],
-            "financial_impact": "Unable to determine without advanced analysis",
-            "risk_factors": [],
-            "opportunities": []
-        }
+        # REMOVED: Fallback sentiment analysis method - fail-fast architecture only
+        # System must halt when LLM sentiment analysis fails
     
     async def analyze_text(self, text: str, context: str = "financial_news") -> SentimentAnalysis:
-        """Analyze sentiment of financial text using unified LLM client (including FinGPT)."""
+        """
+        Analyze sentiment using GPT-5-nano - FAIL-FAST, NO FALLBACKS.
+        
+        Uses GPT-5-nano for reliable, cost-effective sentiment analysis.
+        """
         
         # Truncate very long texts to avoid token limits
-        if len(text) > 8000:
-            text = text[:8000] + "... [truncated]"
-        
-        system_prompt = self._create_sentiment_system_prompt(context)
-        user_message = f"Analyze the sentiment of this financial content:\n\n{text}"
+        if len(text) > 4000:
+            text = text[:4000] + "... [truncated]"
         
         try:
-            # Use unified LLM client (FinGPT -> Claude -> Llama -> OpenAI)
-            llm_response = await self.llm_client.generate_response(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                temperature=0.3,  # Lower temperature for consistent sentiment analysis
-                max_tokens=500,
-                model=None  # Use default/preferred model
-            )
+            # Use GPT-5-nano via real-time API for immediate results
+            return await self.gpt_analyzer.analyze_text(text, context)
             
-            # Parse JSON response
-            result = self._parse_llm_response(llm_response.content)
-            
-            if result:
-                # Validate and create structured result
-                return SentimentAnalysis(**result)
-        
         except Exception as e:
-            logger.error(f"LLM sentiment analysis failed: {e}")
+            logger.error(f"GPT-5-nano sentiment analysis failed: {e} - system halting")
+            raise RuntimeError(f"Sentiment analysis failed: {e}")
         
-        # Fallback to rule-based analysis
-        logger.warning("LLM analysis failed, using fallback method")
-        result = self._fallback_sentiment_analysis(text)
-        return SentimentAnalysis(**result)
+        # LEGACY OLLAMA CODE (COMMENTED OUT - KEEP FOR POTENTIAL RESTORATION)
+        """
+        try:
+            # Try Ollama async bridge with reasonable timeout
+            return await asyncio.wait_for(
+                self.analyze_text_async(text, context, priority="NORMAL"),
+                timeout=20.0  # Reasonable timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Sentiment analysis timeout (20s) - system halting")
+            raise RuntimeError("Sentiment analysis timeout - system cannot continue")
+        except Exception as e:
+            logger.error(f"Sentiment analysis failed: {e} - system halting")
+            raise RuntimeError(f"Sentiment analysis failed: {e}")
+        """
     
     async def analyze_news_articles(self, articles: List[Dict]) -> List[SentimentAnalysis]:
         """Analyze sentiment of multiple news articles."""
@@ -425,6 +480,15 @@ Respond only with valid JSON."""
         return weighted_score / total_weight if total_weight > 0 else 0.0
     
     async def close(self):
-        """Close the aiohttp session."""
-        if self.session:
+        """Close the aiohttp session and cleanup resources."""
+        if self.session and not self.session.closed:
             await self.session.close()
+            self.session = None
+            
+        # Ensure Ollama bridge cleanup
+        if hasattr(self, 'ollama_bridge') and self.ollama_bridge:
+            try:
+                from tools.ollama_async_bridge import shutdown_ollama_bridge
+                await shutdown_ollama_bridge()
+            except Exception as e:
+                logger.warning(f"Error shutting down Ollama bridge: {e}")

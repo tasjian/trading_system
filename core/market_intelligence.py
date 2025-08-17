@@ -39,6 +39,7 @@ class SignalType(Enum):
     HOLD = "hold"
     SELL = "sell"
     STRONG_SELL = "strong_sell"
+    SHORT = "short"
 
 class ConfidenceLevel(Enum):
     VERY_HIGH = "very_high"    # 0.8+
@@ -471,26 +472,27 @@ class UnifiedMarketIntelligence:
                 
                 return comprehensive_sentiment.overall_score
             
-            # Fallback to simple momentum-based sentiment
-            return self._fallback_sentiment(symbol)
+            # FAIL-FAST: No fallback sentiment allowed
+            error_msg = (
+                f"❌ CRITICAL: LLM sentiment analysis failed for {symbol}\n"
+                f"SYSTEM REQUIRES VALID SENTIMENT DATA TO OPERATE\n"
+                f"No fallback mechanisms permitted per fail-fast design"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
             
         except Exception as e:
-            logger.warning(f"LLM sentiment analysis error for {symbol}: {e}")
-            return self._fallback_sentiment(symbol)
+            error_msg = (
+                f"❌ CRITICAL: LLM sentiment analysis error for {symbol}: {e}\n"
+                f"SYSTEM REQUIRES VALID SENTIMENT DATA TO OPERATE\n"
+                f"No fallback mechanisms permitted per fail-fast design"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
     
-    def _fallback_sentiment(self, symbol: str) -> float:
-        """Fallback sentiment based on price momentum."""
-        try:
-            hist = fetch_stock_history(symbol, period="1mo")
-            if hist is None or hist.empty or len(hist) < 5:
-                return 0.0
-            
-            # Simple momentum-based sentiment
-            recent_return = (hist['Close'].iloc[-1] / hist['Close'].iloc[0]) - 1
-            return np.tanh(recent_return * 5)  # Normalize to -1 to 1
-            
-        except:
-            return 0.0
+    # REMOVED: Fallback sentiment method - fail-fast architecture only
+    # def _fallback_sentiment(self, symbol: str) -> float:
+    #     DISABLED: No fallback sentiment allowed per fail-fast design
     
     async def _get_news_articles(self, symbol: str) -> List[Dict]:
         """Get news articles for sentiment analysis. Used by sentiment agent."""
@@ -763,7 +765,7 @@ class UnifiedMarketIntelligence:
             return None
     
     def _convert_crypto_symbol_for_yf(self, symbol: str) -> Optional[str]:
-        """Convert crypto symbol to yfinance format."""
+        """Convert crypto symbol to standardized format."""
         crypto_mapping = {
             'BTCUSD': 'BTC-USD',
             'ETHUSD': 'ETH-USD', 

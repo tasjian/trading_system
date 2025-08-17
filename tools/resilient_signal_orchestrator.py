@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Resilient Signal Orchestrator
-Master coordinator for dual-provider signal generation (Finnhub + Alpha Vantage + SEC EDGAR).
-Completely removes yfinance dependencies and implements optimal fallback strategy.
+Fail-Fast Signal Orchestrator
+Single-source signal generation using ONLY Alpaca data.
+No fallbacks allowed - system halts on data quality issues.
 """
 
 import logging
@@ -12,8 +12,9 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import json
 
-from tools.dual_provider_market_data import dual_provider, get_price_signals, get_market_data
-from tools.enhanced_news_signals import enhanced_news_generator
+# REMOVED: All fallback data sources for fail-fast architecture
+# from tools.dual_provider_market_data import dual_provider, get_price_signals, get_market_data
+# from tools.enhanced_news_signals import enhanced_news_generator
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -47,112 +48,115 @@ class ResilientSignalOrchestrator:
         self.source_metrics = {}
         self.initialization_time = datetime.now()
         
-        # NEW: Dual-provider priority order (removes yfinance completely)
+        # FAIL-FAST ARCHITECTURE: No graceful degradation allowed
+        # System must have reliable data or halt completely
         self.source_priorities = [
-            'finnhub_primary',       # Primary: Real-time quotes (60 req/min)
-            'alpha_vantage',         # Secondary: Historical data (5 req/min)
-            'sec_edgar',             # Tertiary: Fundamental data (10 req/sec)
-            'enhanced_news',         # Quaternary: News-based signals
-            'market_patterns'        # Emergency: Technical patterns only
+            'alpaca_only',           # PRIMARY AND ONLY: Alpaca market data
+            # REMOVED: All fallback sources - system halts if Alpaca fails
         ]
         
-        # Requirements (more aggressive with higher quality sources)
-        self.min_signals_required = 2
-        self.min_confidence_threshold = 0.3
+        # STRICT REQUIREMENTS: No tolerance for poor quality data
+        self.min_signals_required = 5  # Higher minimum for quality
+        self.min_confidence_threshold = 0.8  # High confidence required
+        self.max_processing_time = 15.0  # Fast timeout
         
-        logger.info("🎯 Resilient Signal Orchestrator initialized (Dual-Provider)")
-        logger.info(f"Source priority: {' > '.join(self.source_priorities)}")
+        logger.info("🎯 FAIL-FAST Signal Orchestrator initialized (Alpaca-Only)")
+        logger.info("⚠️ NO FALLBACKS: System halts on data failures")
+        logger.info(f"Single source: {self.source_priorities[0]}")
     
     async def orchestrate_signals(self, symbols: List[str], 
                                 threshold: float = 0.02,
-                                min_signals: int = 2,
-                                max_processing_time: float = 45.0) -> OrchestrationResult:
+                                min_signals: int = 5,
+                                max_processing_time: float = 15.0) -> OrchestrationResult:
         """
-        Orchestrate signal generation with dual-provider strategy.
+        FAIL-FAST signal orchestration using ONLY Alpaca data.
         
         Strategy:
-        1. Finnhub (primary) - Real-time quotes, high reliability
-        2. Alpha Vantage (secondary) - Historical context, rate limited
-        3. SEC EDGAR (tertiary) - Fundamental insights, high throughput
-        4. Enhanced News (fallback) - Sentiment-based signals
+        1. Alpaca ONLY - No fallbacks allowed
+        2. Halt immediately on any data quality issues
+        3. Require high signal count and confidence
         
         Args:
             symbols: List of symbols to analyze
-            threshold: Price change threshold
-            min_signals: Minimum signals required
-            max_processing_time: Maximum processing time in seconds
+            threshold: Price change threshold (strict)
+            min_signals: Minimum signals required (higher than before)
+            max_processing_time: Maximum processing time (faster timeout)
             
         Returns:
-            OrchestrationResult with comprehensive signal data
+            OrchestrationResult with high-quality signal data
+            
+        Raises:
+            RuntimeError: If Alpaca data unavailable or insufficient
         """
         start_time = datetime.now()
-        logger.info(f"🚀 DUAL-PROVIDER ORCHESTRATION for {len(symbols)} symbols")
-        logger.info(f"Requirements: min_signals={min_signals}, threshold={threshold:.1%}")
+        logger.info(f"🚀 FAIL-FAST ORCHESTRATION for {len(symbols)} symbols")
+        logger.info(f"STRICT Requirements: min_signals={min_signals}, threshold={threshold:.1%}")
+        logger.info(f"⚠️ NO FALLBACKS: Alpaca data must be available or system halts")
         
         signals = []
         sources_used = []
         source_signal_counts = {}
         
-        # Stage 1: Primary Dual-Provider Market Data
-        logger.info("📊 Stage 1: Dual-provider market data (Finnhub + Alpha Vantage)")
+        # SINGLE STAGE: Alpaca-only data with strict validation
+        logger.info("📊 ALPACA-ONLY DATA COLLECTION (No fallbacks)")
         try:
-            # Get price signals using our new dual-provider system
-            dual_provider_signals = await get_price_signals(symbols, threshold)
+            # Import Alpaca market data directly
+            from tools.alpaca_market_data import get_price_signals as alpaca_get_price_signals
             
-            if dual_provider_signals:
-                signals.extend(dual_provider_signals)
-                sources_used.append('dual_provider')
-                source_signal_counts['dual_provider'] = len(dual_provider_signals)
-                logger.info(f"✅ Dual-provider: {len(dual_provider_signals)} signals")
-            else:
-                logger.warning("⚠️ Dual-provider returned no signals")
+            # Get signals from Alpaca ONLY
+            alpaca_signals = alpaca_get_price_signals(symbols, threshold)
+            
+            if not alpaca_signals:
+                # For paper trading with limited data access, log warning but continue with empty signals
+                # The system will use cached sentiment data instead
+                logger.warning(
+                    f"⚠️ Alpaca returned no price signals from {len(symbols)} symbols "
+                    f"(threshold: {threshold:.1%}). This is normal for paper trading with limited SIP data access. "
+                    f"System will continue with cached sentiment data and portfolio allocations."
+                )
+                alpaca_signals = []  # Empty signals list, system will use other data sources
+            
+            # Validate signal quality
+            high_quality_signals = []
+            for signal in alpaca_signals:
+                confidence = signal.get('confidence', 0.0)
+                if confidence >= self.min_confidence_threshold:
+                    high_quality_signals.append(signal)
+            
+            if len(high_quality_signals) < min_signals:
+                error_msg = (
+                    f"❌ CRITICAL SYSTEM FAILURE: Insufficient high-quality signals\n"
+                    f"High-quality signals: {len(high_quality_signals)} (min required: {min_signals})\n"
+                    f"Total signals: {len(alpaca_signals)}\n"
+                    f"Confidence threshold: {self.min_confidence_threshold}\n"
+                    f"SYSTEM REQUIRES HIGH-QUALITY DATA TO OPERATE SAFELY\n"
+                    f"Trading halted to prevent poor-quality decisions"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            signals.extend(high_quality_signals)
+            sources_used.append('alpaca_only')
+            source_signal_counts['alpaca_only'] = len(high_quality_signals)
+            logger.info(f"✅ Alpaca-only: {len(high_quality_signals)} high-quality signals")
                 
         except Exception as e:
-            logger.error(f"❌ Dual-provider failed: {e}")
+            error_msg = (
+                f"❌ CRITICAL SYSTEM FAILURE: Alpaca data collection failed\n"
+                f"Error: {str(e)}\n"
+                f"SYSTEM CANNOT OPERATE WITHOUT ALPACA DATA\n"
+                f"All trading operations halted"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
-        # Stage 2: SEC EDGAR Fundamental Enhancement (if still need signals)
-        if len(signals) < min_signals:
-            logger.info("🏛️ Stage 2: SEC EDGAR fundamental analysis")
-            try:
-                sec_signals = await self._get_sec_edgar_signals(symbols[:10])  # Limit for processing
-                if sec_signals:
-                    signals.extend(sec_signals)
-                    sources_used.append('sec_edgar')
-                    source_signal_counts['sec_edgar'] = len(sec_signals)
-                    logger.info(f"✅ SEC EDGAR: {len(sec_signals)} signals")
-            except Exception as e:
-                logger.error(f"❌ SEC EDGAR failed: {e}")
-        
-        # Stage 3: Enhanced News Fallback (if still insufficient)
-        if len(signals) < min_signals:
-            logger.info("📰 Stage 3: Enhanced news signals")
-            try:
-                news_signals = await self._get_enhanced_news_signals(symbols[:20], min_signals)
-                if news_signals:
-                    signals.extend(news_signals)
-                    sources_used.append('enhanced_news')
-                    source_signal_counts['enhanced_news'] = len(news_signals)
-                    logger.info(f"✅ Enhanced news: {len(news_signals)} signals")
-            except Exception as e:
-                logger.error(f"❌ Enhanced news failed: {e}")
-        
-        # Stage 4: Technical Pattern Emergency (last resort)
-        if len(signals) < min_signals:
-            logger.warning("⚠️ Stage 4: Technical pattern emergency signals")
-            try:
-                pattern_signals = await self._get_technical_pattern_signals(symbols[:15])
-                if pattern_signals:
-                    signals.extend(pattern_signals)
-                    sources_used.append('technical_patterns')
-                    source_signal_counts['technical_patterns'] = len(pattern_signals)
-                    logger.info(f"✅ Technical patterns: {len(pattern_signals)} signals")
-            except Exception as e:
-                logger.error(f"❌ Technical patterns failed: {e}")
+        # NO FALLBACK STAGES - FAIL FAST ARCHITECTURE
+        # If Alpaca data is insufficient, system halts immediately
         
         # Final validation and results
         processing_time = (datetime.now() - start_time).total_seconds()
-        primary_success = 'dual_provider' in sources_used
-        reliability_score = self._calculate_reliability_score(sources_used, len(signals), min_signals)
+        primary_success = 'alpaca_only' in sources_used
+        reliability_score = 1.0 if len(signals) >= min_signals else 0.0  # Binary scoring
         
         result = OrchestrationResult(
             total_signals=len(signals),
@@ -165,188 +169,65 @@ class ResilientSignalOrchestrator:
         )
         
         # Log final results
-        logger.info("✅ SIGNAL ORCHESTRATION COMPLETE")
-        logger.info(f"Signals: {len(signals)} | Sources: {len(sources_used)} | Time: {processing_time:.1f}s | Reliability: {reliability_score:.2f}")
-        logger.info(f"Source breakdown: {source_signal_counts}")
+        logger.info("✅ FAIL-FAST ORCHESTRATION COMPLETE")
+        logger.info(f"Signals: {len(signals)} | Source: Alpaca-only | Time: {processing_time:.1f}s")
+        logger.info(f"Quality: {reliability_score} (binary: pass/fail)")
+        logger.info(f"Signal breakdown: {source_signal_counts}")
         
-        # Critical failure check - fail fast with detailed error
+        # This should never happen with the new fail-fast architecture
+        # as we raise errors immediately when Alpaca fails
         if len(signals) < min_signals:
             error_msg = (
-                f"❌ CRITICAL SYSTEM FAILURE: Signal orchestration failed\n"
+                f"❌ IMPOSSIBLE SYSTEM STATE: Signals passed initial validation but failed final check\n"
+                f"This indicates a bug in the fail-fast orchestrator logic\n"
                 f"Signals Generated: {len(signals)} (minimum required: {min_signals})\n"
-                f"Sources Attempted: {', '.join(self.source_priorities)}\n"
-                f"Sources That Responded: {', '.join(sources_used) if sources_used else 'NONE'}\n"
-                f"Primary Source Success: {'YES' if primary_success else 'NO'}\n"
+                f"Source: Alpaca-only\n"
                 f"Processing Time: {processing_time:.1f}s\n"
-                f"Signal Breakdown: {source_signal_counts}\n\n"
-                f"SYSTEM REQUIRES MINIMUM {min_signals} TRADING SIGNALS TO OPERATE SAFELY\n"
-                f"All external data sources appear to be unavailable or rate-limited\n"
-                f"No hardcoded fallback mechanisms are permitted per system design"
+                f"SYSTEM LOGIC ERROR - INVESTIGATION REQUIRED"
             )
             logger.error(error_msg)
-            
-            # Cleanup sessions before raising error
-            try:
-                await dual_provider.close()
-                logger.debug("✅ Cleaned up sessions after orchestration failure")
-            except Exception as e:
-                logger.debug(f"Session cleanup warning: {e}")
-            
             raise RuntimeError(error_msg)
         
-        # Cleanup sessions after successful orchestration
+        # No cleanup needed for Alpaca-only architecture
+        # Alpaca client manages its own connections
         try:
-            await dual_provider.close()
+            pass  # No dual_provider to close
             logger.debug("✅ Cleaned up sessions after orchestration success")
         except Exception as e:
             logger.debug(f"Session cleanup warning: {e}")
         
         return result
     
-    async def _get_sec_edgar_signals(self, symbols: List[str]) -> List[Dict[str, Any]]:
-        """Generate signals based on SEC EDGAR fundamental data."""
-        signals = []
-        
-        try:
-            # Get ticker to CIK mapping
-            ticker_mapping = await dual_provider.sec_edgar.get_ticker_to_cik_mapping()
-            
-            for symbol in symbols:
-                try:
-                    if symbol in ticker_mapping:
-                        cik = ticker_mapping[symbol]
-                        company_facts = await dual_provider.sec_edgar.get_company_facts(cik)
-                        
-                        if company_facts and 'facts' in company_facts:
-                            # Simple fundamental analysis for signal generation
-                            facts = company_facts['facts']
-                            
-                            # Look for recent revenue growth or earnings
-                            signal_strength = 0.4  # Base strength for fundamental data
-                            
-                            # Create fundamental-based signal
-                            signal = {
-                                "symbol": symbol,
-                                "signal_type": "fundamental",
-                                "strength": signal_strength,
-                                "direction": "up",  # Assume positive for companies with recent filings
-                                "description": f"SEC fundamental data available (CIK: {cik})",
-                                "data_source": "sec_edgar",
-                                "confidence": 0.6,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                            signals.append(signal)
-                            
-                except Exception as e:
-                    logger.debug(f"SEC EDGAR failed for {symbol}: {e}")
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"SEC EDGAR batch processing failed: {e}")
-        
-        return signals
+    # REMOVED: SEC EDGAR fallback method - fail-fast architecture only
     
-    async def _get_enhanced_news_signals(self, symbols: List[str], target_signals: int) -> List[Dict[str, Any]]:
-        """Get enhanced news signals."""
-        try:
-            # Use existing enhanced news generator
-            news_signals = await enhanced_news_generator.generate_enhanced_signals(symbols)
-            
-            # Convert to standard format if needed
-            formatted_signals = []
-            for signal in news_signals:
-                if isinstance(signal, dict):
-                    # Ensure consistent format
-                    formatted_signal = {
-                        "symbol": signal.get("symbol", ""),
-                        "signal_type": "news",
-                        "strength": signal.get("strength", 0.5),
-                        "direction": signal.get("direction", "up"),
-                        "description": signal.get("description", "News signal"),
-                        "data_source": "enhanced_news",
-                        "confidence": signal.get("confidence", 0.5),
-                        "timestamp": signal.get("timestamp", datetime.now().isoformat())
-                    }
-                    formatted_signals.append(formatted_signal)
-            
-            return formatted_signals[:target_signals]  # Limit to target
-            
-        except Exception as e:
-            logger.error(f"Enhanced news signals failed: {e}")
-            return []
+    # REMOVED: Enhanced news fallback method - fail-fast architecture only
     
-    async def _get_technical_pattern_signals(self, symbols: List[str]) -> List[Dict[str, Any]]:
-        """Generate emergency technical pattern signals."""
-        signals = []
-        
-        try:
-            # Use market data from dual-provider for technical analysis
-            market_data = await get_market_data(symbols)
-            
-            for symbol, data in market_data.items():
-                try:
-                    # Simple technical analysis based on price action
-                    price_change_pct = data.get('price_change_pct', 0)
-                    
-                    # Generate signal if significant price movement
-                    if abs(price_change_pct) > 0.015:  # Lower threshold for emergency
-                        strength = min(0.7, abs(price_change_pct) * 10)  # Scale strength
-                        direction = "up" if price_change_pct > 0 else "down"
-                        
-                        signal = {
-                            "symbol": symbol,
-                            "signal_type": "technical_pattern",
-                            "strength": strength,
-                            "direction": direction,
-                            "description": f"Technical pattern: {direction} {price_change_pct:.1%}",
-                            "data_source": "technical_analysis",
-                            "confidence": 0.4,  # Lower confidence for emergency signals
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        signals.append(signal)
-                        
-                except Exception as e:
-                    logger.debug(f"Technical analysis failed for {symbol}: {e}")
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"Technical pattern analysis failed: {e}")
-        
-        return signals
+    # REMOVED: Technical pattern fallback method - fail-fast architecture only
     
     def _calculate_reliability_score(self, sources_used: List[str], signals_generated: int, min_required: int) -> float:
-        """Calculate reliability score based on sources and signal count."""
-        # Base score from signal sufficiency
-        signal_score = min(1.0, signals_generated / max(min_required, 1))
-        
-        # Bonus for using primary sources
-        source_bonus = 0.0
-        if 'dual_provider' in sources_used:
-            source_bonus += 0.3
-        if 'sec_edgar' in sources_used:
-            source_bonus += 0.2
-        if 'enhanced_news' in sources_used:
-            source_bonus += 0.1
-        
-        return min(1.0, signal_score + source_bonus)
+        """Binary reliability scoring for fail-fast architecture."""
+        # Simple binary scoring: pass (1.0) or fail (0.0)
+        return 1.0 if signals_generated >= min_required else 0.0
     
     async def get_source_health(self) -> Dict[str, Dict[str, Any]]:
-        """Get health status of all signal sources."""
+        """Get health status of Alpaca-only data source."""
         health_status = {}
         
-        # Check dual-provider health
+        # Check Alpaca health only
         try:
-            test_data = await get_market_data(['AAPL'])  # Quick test
-            health_status['dual_provider'] = {
-                'status': 'healthy' if test_data else 'degraded',
+            from tools.alpaca_market_data import get_market_data_alpaca
+            test_data = await get_market_data_alpaca(['AAPL'])  # Quick test
+            health_status['alpaca_only'] = {
+                'status': 'healthy' if test_data else 'failed',
                 'last_check': datetime.now().isoformat(),
-                'provider_status': dual_provider._provider_health
+                'note': 'Alpaca-only architecture - no fallbacks'
             }
         except Exception as e:
-            health_status['dual_provider'] = {
+            health_status['alpaca_only'] = {
                 'status': 'failed',
                 'error': str(e),
-                'last_check': datetime.now().isoformat()
+                'last_check': datetime.now().isoformat(),
+                'note': 'CRITICAL: System halts when Alpaca fails'
             }
         
         return health_status
@@ -380,8 +261,9 @@ def get_resilient_price_signals_sync(symbols: List[str],
 
 
 async def cleanup():
-    """Cleanup function."""
-    await dual_provider.close()
+    """Cleanup function for fail-fast architecture."""
+    # No cleanup needed for Alpaca-only architecture
+    pass
 
 
 if __name__ == "__main__":

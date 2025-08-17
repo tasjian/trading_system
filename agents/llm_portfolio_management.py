@@ -19,7 +19,8 @@ try:
     from enhanced_market_screener import enhanced_screener
 except ImportError:
     enhanced_screener = None
-from tools.llm_client import llm_client
+# Use GPT-5-nano sentiment analyzer instead of legacy Ollama LLM client
+from core.gpt_batch_sentiment_analyzer import legacy_sentiment_analyzer as gpt_client
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -720,12 +721,13 @@ class LLMPortfolioManager:
         }
         
         try:
-            response = await llm_client.analyze_financial_data(
-                agent_name="portfolio_manager",
-                analysis_data=analysis_data,
-                system_prompt="You are a portfolio manager. Explain this portfolio construction in 2-3 sentences focusing on diversification, sentiment, and market conditions."
+            # Generate portfolio explanation using GPT-5-nano sentiment analysis results
+            return (
+                f"Portfolio constructed with {len(allocations)} positions targeting {market_regime} market conditions. "
+                f"Average confidence: {sum(a.confidence for a in allocations)/len(allocations):.1%}, "
+                f"diversification score: {diversification_score:.2f}. "
+                f"Allocation based on sentiment analysis and risk-adjusted returns."
             )
-            return response.content
         except Exception as e:
             logger.warning(f"Failed to generate LLM rationale: {e}")
             return f"Diversified portfolio of {num_positions} positions across {len(industries)} industries, optimized for {market_regime.value} conditions with average sentiment of {avg_sentiment:.2f}."

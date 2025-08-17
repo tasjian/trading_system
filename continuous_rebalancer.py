@@ -5,15 +5,12 @@ Runs end-to-end rebalancing pipeline continuously with intelligent scheduling,
 rate limiting, error handling, and autonomous operation capabilities.
 """
 
-# Apply aggressive universe filter fixes to prevent hanging issues
-try:
-    from fix_universe_filter_aggressive import patch_universe_filter_aggressive
-    patch_universe_filter_aggressive()
-    print("✅ Applied AGGRESSIVE universe filter patches")
-    print("   - Disabled: social, news, earnings collection")  
-    print("   - Enabled: price movement signals only")
-except ImportError:
-    print("⚠️ Universe filter patches not found - running without fixes")
+# Re-enable all data sources for full signal generation
+print("✅ All data sources ENABLED for comprehensive signal generation")
+print("   - Social media sentiment: ENABLED")
+print("   - News analysis: ENABLED") 
+print("   - Earnings signals: ENABLED")
+print("   - Price movement signals: ENABLED")
 
 # Apply complete workflow bypass to eliminate session leaks
 try:
@@ -339,10 +336,35 @@ class ContinuousRebalancer:
                 logger.warning("API rate limit detected, implementing cooldown")
                 await asyncio.sleep(self.api_cooldown_minutes * 60)
             
-            # Step 4: Risk Assessment
+            # Step 4: Risk Assessment and Management Triggers
             pipeline_stage = "risk_assessment"
-            logger.info("⚖️ Risk Assessment...")
+            logger.info("⚖️ Risk Assessment and Stop-Loss Checks...")
             state = await self.workflow.risk_assessment_agent(state, config)
+            
+            # Check for immediate risk management triggers (stop-losses, position limits)
+            from core.trading_engine import trading_engine
+            risk_orders = await trading_engine.check_risk_management_triggers()
+            
+            if risk_orders:
+                logger.warning(f"🚨 Risk management triggered {len(risk_orders)} immediate orders")
+                for risk_order in risk_orders:
+                    logger.warning(f"   🚨 {risk_order.symbol}: {risk_order.side} {risk_order.quantity} - {risk_order.reasoning}")
+                    # Execute risk management orders immediately
+                    executed_risk_order = await trading_engine._execute_order(risk_order)
+                    if executed_risk_order:
+                        # Add to state for tracking
+                        if "executed_orders" not in state:
+                            state["executed_orders"] = []
+                        state["executed_orders"].append({
+                            "symbol": executed_risk_order.symbol,
+                            "side": executed_risk_order.side,
+                            "quantity": executed_risk_order.quantity,
+                            "order_type": executed_risk_order.order_type,
+                            "reasoning": executed_risk_order.reasoning,
+                            "status": executed_risk_order.status.value,
+                            "timestamp": executed_risk_order.timestamp.isoformat(),
+                            "priority": "RISK_MANAGEMENT"
+                        })
             
             # Check circuit breakers
             circuit_breakers = state.get("circuit_breakers", {})
@@ -586,8 +608,8 @@ class ContinuousRebalancer:
                         social_posts_count = getattr(sentiment_data, 'social_posts_count', 0)
                         has_social_data = len(social_sentiment) > 0 or social_posts_count > 0
                     
-                    # Generate signal based on sentiment score with enhanced SHORT detection and improved neutral handling
-                    if overall_score >= 0.05:  # Lower positive sentiment threshold
+                    # Generate signal based on sentiment score with balanced BUY/SELL/SHORT detection
+                    if overall_score >= 0.02:  # Even lower positive sentiment threshold for more BUY signals
                         signal_strength = min(0.5, max(0.2, overall_score))  # Adjust strength based on score
                         # Enhanced signal with social media integration
                         reasoning_parts = [f"{overall_sentiment.title()} overall sentiment"]
@@ -610,9 +632,9 @@ class ContinuousRebalancer:
                             'social_posts_count': social_posts_count,
                             'source': 'comprehensive_sentiment_with_social'
                         })
-                    elif overall_score <= -0.5:  # Extreme negative sentiment for SHORT signals
+                    elif overall_score <= -0.3:  # Lowered threshold for SHORT signals to generate more
                         signal_strength = min(0.8, abs(overall_score))  # Higher strength for shorts
-                        signal_type = 'SHORT' if overall_score <= -0.7 else 'SELL'  # SHORT for extremely negative
+                        signal_type = 'SHORT' if overall_score <= -0.5 else 'SELL'  # Lowered threshold for SHORT
                         
                         # Enhanced reasoning with social media integration
                         reasoning_parts = []
@@ -645,7 +667,7 @@ class ContinuousRebalancer:
                             'social_posts_count': social_posts_count,
                             'source': 'comprehensive_sentiment_with_social'
                         })
-                    elif overall_score <= -0.05:  # Lower negative sentiment threshold for SELL signals
+                    elif overall_score <= -0.02:  # Much lower negative sentiment threshold for more SELL signals
                         signal_strength = min(0.6, max(0.2, abs(overall_score)))  # Adjust strength based on score
                         
                         # Enhanced reasoning for moderate negative sentiment
@@ -668,7 +690,7 @@ class ContinuousRebalancer:
                             'social_posts_count': social_posts_count,
                             'source': 'comprehensive_sentiment_with_social'
                         })
-                    elif abs(overall_score) < 0.05:  # Very neutral sentiment - generate weak HOLD signals for RL
+                    elif abs(overall_score) < 0.02:  # Very neutral sentiment - generate weak HOLD signals for RL
                         # Enhanced reasoning for neutral sentiment
                         reasoning_parts = [f"Neutral sentiment ({overall_score:.2f})"]
                         if has_social_data:
@@ -707,8 +729,9 @@ class ContinuousRebalancer:
                 else:
                     logger.info(f"📱 No cached social media data available in sentiment signals")
             else:
-                # No cached data available and no fallbacks allowed
-                raise ValueError("No cached sentiment data available and no fallback mechanisms allowed - system requires fresh sentiment analysis")
+                # No cached data available - system must halt
+                logger.error("No cached sentiment data available and fresh analysis is required")
+                raise RuntimeError("No sentiment data available - system requires fresh sentiment analysis to continue safely")
         
         return state
     

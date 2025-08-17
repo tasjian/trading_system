@@ -30,14 +30,15 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
-# Check Python dependencies
+# Check Python dependencies (REMOVED yfinance - fail-fast architecture)
 echo "🔍 Checking Python environment..."
 cd "$SCRIPT_DIR"
-if ! $(pyenv which python3) -c "import pandas, numpy, yfinance, alpaca_trade_api" 2>/dev/null; then
+if ! $(pyenv which python3) -c "import pandas, numpy, alpaca_trade_api" 2>/dev/null; then
     echo "❌ Missing required Python packages"
     echo "   Run: pip install -r requirements.txt"
     exit 1
 fi
+echo "ℹ️ YFinance dependency removed - using Alpaca-only architecture"
 
 # Start the trading system
 echo "🎯 Launching continuous rebalancer..."

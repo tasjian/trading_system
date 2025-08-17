@@ -30,7 +30,7 @@ class LLMResponse:
     metadata: Dict[str, Any]
 
 class LLMClient:
-    """Unified LLM client supporting Llama 3.1 (via Ollama) and FinGPT only."""
+    """Unified LLM client supporting Llama 3 (via Ollama) and FinGPT only."""
     
     def __init__(self):
         self.anthropic_client = None
@@ -43,73 +43,58 @@ class LLMClient:
         self._initialize_clients()
     
     def _initialize_clients(self):
-        """Initialize available LLM clients based on API keys."""
+        """Initialize available LLM clients with FAIL-FAST validation."""
         
-        # Try FinGPT first (specialized for financial tasks)
-        if settings.use_fingpt_primary:
+        # Try Llama 3 via Simple Ollama Client FIRST with strict validation
+        if settings.use_llama_fallback:
+            try:
+                from tools.ollama_simple_client import OllamaSimpleClient
+                
+                # Initialize and validate in one step - FAIL FAST
+                self.ollama_client = OllamaSimpleClient()
+                # Note: We'll validate on first use to avoid blocking initialization
+                self.preferred_provider = "llama"
+                logger.info(f"✅ Simple Ollama client initialized for model '{settings.ollama_model}'")
+                    
+            except ImportError as e:
+                raise RuntimeError(f"CRITICAL: Ollama client dependencies not available: {e}")
+            except Exception as e:
+                raise RuntimeError(f"CRITICAL: Ollama client initialization failed - {e}. System cannot continue.")
+        
+        # Try FinGPT as secondary option only
+        if settings.use_fingpt_primary and not self.preferred_provider:
             try:
                 from core.fingpt_sentiment_analyzer import get_fingpt_analyzer
                 self.fingpt_client = get_fingpt_analyzer()
-                # Don't set as preferred provider yet - let it initialize first
-                logger.info("✅ FinGPT sentiment analyzer loaded as primary financial LLM")
+                self.preferred_provider = "fingpt"
+                logger.info("✅ FinGPT sentiment analyzer loaded as secondary LLM")
             except ImportError as ie:
                 logger.warning(f"FinGPT dependencies not available: {ie}")
             except Exception as e:
                 logger.warning(f"FinGPT client initialization failed: {e}")
         
-        # Try Llama 3.1 via Ollama as secondary (better than OpenAI quota limits)
-        if settings.use_llama_fallback:
-            try:
-                import ollama
-                self.ollama_client = ollama.Client(host=settings.ollama_base_url)
-                
-                # Test connection immediately to avoid runtime failures
-                try:
-                    # Quick test to see if Ollama is responsive
-                    self.ollama_client.list()
-                    if not self.preferred_provider:
-                        self.preferred_provider = "llama"
-                    logger.info("✅ Llama 3.1 (Ollama) client initialized and connected as secondary")
-                except Exception as conn_error:
-                    logger.warning(f"Ollama server not accessible: {conn_error}")
-                    logger.info("💡 To use Ollama: 1) Install Ollama from https://ollama.com/download 2) Run 'ollama serve' 3) Run 'ollama pull llama3.1'")
-                    self.ollama_client = None  # Disable Ollama if not accessible
-                    
-            except ImportError:
-                logger.warning("Ollama package not installed. Run: pip install ollama")
-            except Exception as e:
-                logger.warning(f"Ollama client initialization failed: {e}")
-                self.ollama_client = None
-        
-        # Try Anthropic Claude as third fallback (before OpenAI)
+        # Try Anthropic Claude as final fallback
         if settings.anthropic_api_key and not self.preferred_provider:
             try:
                 import anthropic
                 self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
                 self.preferred_provider = "anthropic"
-                logger.info("✅ Anthropic Claude client initialized as third fallback")
+                logger.info("✅ Anthropic Claude client initialized as final fallback")
             except ImportError:
                 logger.warning("Anthropic package not installed. Run: pip install anthropic")
             except Exception as e:
                 logger.warning(f"Anthropic client initialization failed: {e}")
         
-        logger.info("🚫 OpenAI disabled - using only FinGPT and Ollama for LLM calls")
-                
-        # Legacy Anthropic support (deprecated)
-        # if settings.anthropic_api_key:
-        #     try:
-        #         import anthropic
-        #         self.anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        #         if not self.preferred_provider:
-        #             self.preferred_provider = "anthropic"
-        #         logger.info("✅ Anthropic client initialized")
-        #     except ImportError:
-        #         logger.warning("Anthropic package not installed. Run: pip install anthropic")
-        #     except Exception as e:
-        #         logger.warning(f"Anthropic client initialization failed: {e}")
-        
+        # FAIL-FAST: No fallbacks allowed
         if not self.preferred_provider:
-            logger.error("❌ No LLM clients available. Please ensure Ollama is running and FinGPT is configured.")
+            error_msg = f"❌ CRITICAL: No LLM providers successfully initialized. System requires Ollama with model {settings.ollama_model}."
+            logger.critical(error_msg)
+            logger.critical("🚨 SYSTEM REQUIREMENTS NOT MET:")
+            logger.critical("   1. Install Ollama: https://ollama.com/download")
+            logger.critical("   2. Start Ollama: 'ollama serve'")
+            logger.critical(f"   3. Pull model: 'ollama pull {settings.ollama_model}'")
+            logger.critical(f"   4. Verify server: curl {settings.ollama_base_url}/api/version")
+            raise RuntimeError("SYSTEM FAILURE: No working LLM providers. Cannot continue without Ollama.")
     
     async def generate_response(
         self,
@@ -118,112 +103,65 @@ class LLMClient:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 1500,
-        provider: Optional[str] = None
+        provider: Optional[str] = None,
+        timeout: float = None
     ) -> LLMResponse:
-        """Generate response using available LLM provider."""
+        """Generate response using configured LLM provider - FAIL-FAST, NO FALLBACKS."""
         
         start_time = time.time()
         self.request_count += 1
         
-        # Determine provider
+        # Use configured timeout or default
+        if timeout is None:
+            timeout = settings.ollama_default_timeout
+        
+        # Use preferred provider - STRICT, no fallback logic
         use_provider = provider or self.preferred_provider
         
-        # Try primary provider first, then fallback on failure
-        response = None
-        tried_providers = []
+        if not use_provider:
+            raise RuntimeError("CRITICAL: No LLM provider configured - system cannot continue")
+        
+        # VALIDATE PROVIDER AVAILABILITY BEFORE CALLING
+        if use_provider == "llama" and not self.ollama_client:
+            raise RuntimeError("CRITICAL: Ollama client not available - system cannot continue")
+        elif use_provider == "fingpt" and not self.fingpt_client:
+            raise RuntimeError("CRITICAL: FinGPT client not available - system cannot continue")
+        elif use_provider == "anthropic" and not self.anthropic_client:
+            raise RuntimeError("CRITICAL: Anthropic client not available - system cannot continue")
         
         try:
-            if use_provider == "fingpt" and self.fingpt_client:
-                tried_providers.append("fingpt")
-                response = await self._call_fingpt(
-                    system_prompt, user_message, model, temperature, max_tokens
-                )
-            elif use_provider == "anthropic" and self.anthropic_client:
-                tried_providers.append("anthropic")
-                response = await self._call_anthropic(
-                    system_prompt, user_message, model, temperature, max_tokens
-                )
-            elif use_provider == "llama" and self.ollama_client:
-                tried_providers.append("llama")
+            if use_provider == "llama":
                 response = await self._call_llama(
-                    system_prompt, user_message, model, temperature, max_tokens
+                    system_prompt, user_message, model, temperature, max_tokens, timeout
+                )
+            elif use_provider == "fingpt":
+                response = await self._call_fingpt(
+                    system_prompt, user_message, model, temperature, max_tokens, timeout
+                )
+            elif use_provider == "anthropic":
+                response = await self._call_anthropic(
+                    system_prompt, user_message, model, temperature, max_tokens, timeout
                 )
             else:
-                # No specific provider, try any available (FinGPT first if enabled)
-                if self.fingpt_client:
-                    tried_providers.append("fingpt")
-                    response = await self._call_fingpt(
-                        system_prompt, user_message, model, temperature, max_tokens
-                    )
-                elif self.anthropic_client:
-                    tried_providers.append("anthropic")
-                    response = await self._call_anthropic(
-                        system_prompt, user_message, model, temperature, max_tokens
-                    )
-                elif self.ollama_client:
-                    tried_providers.append("llama")
-                    response = await self._call_llama(
-                        system_prompt, user_message, model, temperature, max_tokens
-                    )
-                else:
-                    raise ValueError("No LLM providers available")
+                raise RuntimeError(f"CRITICAL: Unsupported LLM provider '{use_provider}' - system cannot continue")
                     
-        except Exception as primary_error:
-            logger.warning(f"Primary LLM provider failed ({tried_providers}): {primary_error}")
-            
-            # Try fallback providers (FinGPT -> Anthropic -> Ollama -> OpenAI)
-            if "fingpt" not in tried_providers and self.fingpt_client:
-                try:
-                    logger.info("Falling back to FinGPT")
-                    response = await self._call_fingpt(
-                        system_prompt, user_message, model, temperature, max_tokens
-                    )
-                except Exception as fingpt_error:
-                    logger.warning(f"FinGPT fallback failed: {fingpt_error}")
-            
-            if response is None and "anthropic" not in tried_providers and self.anthropic_client:
-                try:
-                    logger.info("Falling back to Anthropic Claude")
-                    response = await self._call_anthropic(
-                        system_prompt, user_message, model, temperature, max_tokens
-                    )
-                except Exception as anthropic_error:
-                    logger.warning(f"Anthropic fallback failed: {anthropic_error}")
-            
-            if response is None and "llama" not in tried_providers and self.ollama_client:
-                try:
-                    logger.info("Falling back to Ollama")
-                    response = await self._call_llama(
-                        system_prompt, user_message, model, temperature, max_tokens
-                    )
-                except Exception as llama_error:
-                    logger.warning(f"Ollama fallback failed: {llama_error}")
-            
-            
-            # If all providers failed, raise the original error
-            if response is None:
-                raise primary_error
+        except Exception as error:
+            error_msg = f"CRITICAL: LLM provider '{use_provider}' failed: {error}"
+            logger.critical(error_msg)
+            raise RuntimeError(error_msg)
         
-        if response:
-            response.response_time = time.time() - start_time
-            self.total_cost += response.cost_estimate
-            
-            logger.info(f"LLM response generated: {response.tokens_used} tokens, "
-                       f"{response.response_time:.2f}s, ${response.cost_estimate:.4f}")
-            
-            return response
-        else:
-            # This shouldn't happen with the new logic, but just in case
-            logger.error("No response generated from any provider")
-            return LLMResponse(
-                content="LLM Error: No providers available. Using fallback analysis.",
-                model="fallback",
-                tokens_used=0,
-                cost_estimate=0.0,
-                response_time=time.time() - start_time,
-                confidence=0.0,
-                metadata={"error": "No providers available"}
-            )
+        if not response or not response.content:
+            error_msg = f"CRITICAL: LLM provider '{use_provider}' returned empty response"
+            logger.critical(error_msg)
+            raise RuntimeError(error_msg)
+        
+        response.response_time = time.time() - start_time
+        self.total_cost += response.cost_estimate
+        
+        logger.info(f"LLM response generated: {response.tokens_used} tokens, "
+                   f"{response.response_time:.2f}s, ${response.cost_estimate:.4f}")
+        
+        return response
     
     
     async def _call_anthropic(
@@ -232,7 +170,8 @@ class LLMClient:
         user_message: str,
         model: Optional[str],
         temperature: float,
-        max_tokens: int
+        max_tokens: int,
+        timeout: float = 20.0
     ) -> LLMResponse:
         """Call Anthropic Claude API."""
         
@@ -241,15 +180,18 @@ class LLMClient:
             model = "claude-3-5-sonnet-20241022"  # Latest Claude 3.5 Sonnet
         
         try:
-            response = await asyncio.to_thread(
-                self.anthropic_client.messages.create,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_message}
-                ]
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.anthropic_client.messages.create,
+                    model=model,
+                    max_tokens=min(max_tokens, 1000),  # Reduced for faster response
+                    temperature=temperature,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": user_message}
+                    ]
+                ),
+                timeout=timeout
             )
             
             content = response.content[0].text
@@ -282,8 +224,11 @@ class LLMClient:
                 }
             )
             
+        except asyncio.TimeoutError:
+            logger.warning(f"Anthropic timeout after {timeout}s")
+            raise Exception(f"Anthropic timeout after {timeout}s")
         except Exception as e:
-            logger.error(f"Anthropic API call failed: {e}")
+            logger.warning(f"Anthropic API call failed: {e}")
             raise
     
     async def _call_llama(
@@ -292,82 +237,52 @@ class LLMClient:
         user_message: str,
         model: Optional[str],
         temperature: float,
-        max_tokens: int
+        max_tokens: int,
+        timeout: float = None
     ) -> LLMResponse:
-        """Call Llama 3.1 via Ollama."""
-        
-        # Default model selection
-        if not model:
-            model = settings.ollama_model
+        """Call Llama 3 via Simple Ollama Client with FAIL-FAST behavior."""
         
         try:
-            # Create combined prompt for Llama (it doesn't separate system/user)
-            combined_prompt = f"System: {system_prompt}\n\nUser: {user_message}\n\nAssistant:"
+            # Ensure client is started (lazy initialization)
+            if not hasattr(self.ollama_client, '_validated') or not self.ollama_client._validated:
+                await self.ollama_client.start()
             
-            # Try to connect to Ollama server
-            response = await asyncio.to_thread(
-                self.ollama_client.generate,
-                model=model,
-                prompt=combined_prompt,
-                options={
-                    'temperature': temperature,
-                    'num_predict': max_tokens,
-                    'top_p': 0.9,
-                    'stop': ['User:', 'System:']
-                }
+            # Generate response using simple client
+            response = await self.ollama_client.generate(
+                prompt=user_message,
+                system_prompt=system_prompt,
+                max_tokens=min(max_tokens, 500),  # Reduced for speed
+                temperature=temperature
             )
             
-            content = response['response'].strip()
+            if not response.success:
+                raise RuntimeError(f"Ollama generation failed: {response.error}")
             
-            # Ollama doesn't provide token usage directly
-            tokens_used = self._estimate_tokens(combined_prompt + content)
+            if not response.content:
+                raise RuntimeError("Ollama returned empty response")
             
-            # Local model has no cost
-            cost_estimate = 0.0
-            
-            # Estimate confidence based on response length and temperature
-            confidence = self._estimate_confidence(content, temperature)
+            # Convert to LLMResponse format
+            tokens_used = self._estimate_tokens(response.content)
+            confidence = self._estimate_confidence(response.content, temperature)
             
             return LLMResponse(
-                content=content,
-                model=f"ollama/{model}",
+                content=response.content,
+                model=f"ollama/{response.model}",
                 tokens_used=tokens_used,
-                cost_estimate=cost_estimate,
-                response_time=0.0,  # Will be set by caller
+                cost_estimate=0.0,  # Local model has no cost
+                response_time=response.processing_time,
                 confidence=confidence,
                 metadata={
-                    "provider": "ollama",
-                    "model_info": response.get('model', ''),
-                    "local_inference": True
+                    "provider": "ollama-simple",
+                    "local_inference": True,
+                    **(response.metadata or {})
                 }
             )
             
         except Exception as e:
-            logger.error(f"Llama/Ollama API call failed: {e}")
-            
-            # If Ollama server isn't running, disable the client and provide fallback
-            if any(phrase in str(e).lower() for phrase in ["failed to connect", "connection refused", "connection error", "timeout"]):
-                logger.warning("Ollama server not accessible, disabling Ollama client for this session")
-                self.ollama_client = None  # Disable for this session
-                
-                # Simple rule-based response for common financial queries
-                content = self._generate_fallback_response(system_prompt, user_message)
-                
-                return LLMResponse(
-                    content=content,
-                    model="ollama-fallback",
-                    tokens_used=self._estimate_tokens(content),
-                    cost_estimate=0.0,
-                    response_time=0.0,
-                    confidence=0.4,  # Lower confidence for rule-based
-                    metadata={
-                        "provider": "ollama-fallback",
-                        "note": "Ollama server not available, using rule-based response",
-                        "error": str(e)
-                    }
-                )
-            
-            raise
+            error_msg = f"CRITICAL: Ollama simple client failed: {e}"
+            logger.critical(error_msg)
+            raise RuntimeError(error_msg)
     
     async def _call_fingpt(
         self,
@@ -375,7 +290,8 @@ class LLMClient:
         user_message: str,
         model: Optional[str],
         temperature: float,
-        max_tokens: int
+        max_tokens: int,
+        timeout: float = 15.0
     ) -> LLMResponse:
         """Call FinGPT via HuggingFace transformers."""
         
@@ -387,13 +303,15 @@ class LLMClient:
             # Create combined prompt for FinGPT
             combined_prompt = f"System: {system_prompt}\n\nUser: {user_message}\n\nAssistant:"
             
-            # Generate response using FinGPT analyzer's sentiment analysis
-            # Note: FinGPT is primarily for sentiment analysis, not general text generation
-            analysis_result = await self.fingpt_client.analyze_sentiment(
-                user_message,
-                symbol=None,  # No specific symbol in this context
-                prompt_type='advanced',
-                use_cache=False
+            # Generate response using FinGPT with timeout
+            analysis_result = await asyncio.wait_for(
+                self.fingpt_client.analyze_sentiment(
+                    user_message,
+                    symbol=None,  # No specific symbol in this context
+                    prompt_type='basic',  # Use basic for faster response
+                    use_cache=True  # Enable caching for performance
+                ),
+                timeout=timeout
             )
             
             # Convert FinGPT sentiment analysis to general response
@@ -430,24 +348,12 @@ class LLMClient:
                 }
             )
             
+        except asyncio.TimeoutError:
+            logger.warning(f"FinGPT timeout after {timeout}s")
+            raise Exception(f"FinGPT timeout after {timeout}s")
         except Exception as e:
-            logger.error(f"FinGPT API call failed: {e}")
-            
-            # Provide a financial-focused fallback response
-            content = self._generate_financial_fallback_response(system_prompt, user_message)
-            
-            return LLMResponse(
-                content=content,
-                model="fingpt-fallback",
-                tokens_used=self._estimate_tokens(content),
-                cost_estimate=0.0,
-                response_time=0.0,
-                confidence=0.5,  # Medium confidence for rule-based financial response
-                metadata={
-                    "provider": "fingpt-fallback",
-                    "note": "FinGPT not available, using financial rule-based response"
-                }
-            )
+            logger.warning(f"FinGPT API call failed: {e}")
+            raise
     
     def _estimate_tokens(self, text: str) -> int:
         """Rough token estimation for text."""
@@ -468,6 +374,124 @@ class LLMClient:
         
         return max(0.1, min(1.0, base_confidence))
     
+    def _create_fallback_response_DISABLED(self, system_prompt: str, user_message: str, timeout: float, start_time: float) -> LLMResponse:
+        """Create intelligent fallback response when all LLM providers fail."""
+        
+        # Analyze the query to provide appropriate fallback
+        query_lower = user_message.lower()
+        system_lower = system_prompt.lower()
+        
+        # Financial sentiment analysis fallback
+        if "sentiment" in query_lower or "sentiment" in system_lower:
+            content = self._generate_sentiment_fallback(user_message)
+        # Portfolio analysis fallback  
+        elif any(word in query_lower for word in ["portfolio", "allocation", "risk", "diversification"]):
+            content = self._generate_portfolio_fallback(user_message)
+        # Market analysis fallback
+        elif any(word in query_lower for word in ["market", "trading", "stocks", "financial"]):
+            content = self._generate_market_fallback(user_message)
+        # General financial fallback
+        else:
+            content = self._generate_general_financial_fallback(user_message)
+        
+        return LLMResponse(
+            content=content,
+            model="intelligent-fallback",
+            tokens_used=self._estimate_tokens(content),
+            cost_estimate=0.0,
+            response_time=time.time() - start_time,
+            confidence=0.5,  # Medium confidence for rule-based response
+            metadata={
+                "provider": "intelligent-fallback",
+                "reason": "all_providers_failed",
+                "timeout": timeout,
+                "fallback_type": "rule_based_financial"
+            }
+        )
+    
+    def _generate_sentiment_fallback(self, text: str) -> str:
+        """Generate sentiment analysis fallback using keyword analysis."""
+        import json
+        
+        # Enhanced keyword-based sentiment analysis
+        positive_words = [
+            'profit', 'growth', 'increase', 'positive', 'strong', 'beat', 'exceeded', 
+            'outperform', 'bullish', 'upgrade', 'buy', 'optimistic', 'confident',
+            'expansion', 'revenue', 'earnings', 'success', 'improvement', 'gain'
+        ]
+        
+        negative_words = [
+            'loss', 'decline', 'decrease', 'negative', 'weak', 'miss', 'failed',
+            'underperform', 'bearish', 'downgrade', 'sell', 'pessimistic', 'concern',
+            'contraction', 'debt', 'bankruptcy', 'crisis', 'deterioration', 'fall'
+        ]
+        
+        text_lower = text.lower()
+        pos_count = sum(1 for word in positive_words if word in text_lower)
+        neg_count = sum(1 for word in negative_words if word in text_lower)
+        
+        total_sentiment_words = pos_count + neg_count
+        
+        if total_sentiment_words == 0:
+            sentiment = "neutral"
+            score = 0.0
+            confidence = 0.4
+        else:
+            score = (pos_count - neg_count) / max(total_sentiment_words, 1)
+            confidence = min(0.7, total_sentiment_words / 10)
+            
+            if score > 0.5:
+                sentiment = "positive"
+            elif score > 0.1:
+                sentiment = "neutral"
+            elif score > -0.1:
+                sentiment = "neutral"
+            elif score > -0.5:
+                sentiment = "negative"
+            else:
+                sentiment = "very_negative"
+        
+        # Extract key phrases
+        key_phrases = []
+        for word in positive_words + negative_words:
+            if word in text_lower and len(key_phrases) < 3:
+                key_phrases.append(word)
+        
+        return json.dumps({
+            "sentiment": sentiment,
+            "confidence": confidence,
+            "score": score,
+            "reasoning": f"Keyword-based analysis: {pos_count} positive, {neg_count} negative terms found",
+            "key_phrases": key_phrases or ["market", "analysis"],
+            "financial_impact": f"Based on sentiment indicators: {sentiment} market outlook",
+            "risk_factors": ["keyword_analysis", "llm_unavailable"],
+            "opportunities": ["monitor_sentiment_trends"]
+        })
+    
+    def _generate_portfolio_fallback(self, text: str) -> str:
+        """Generate portfolio analysis fallback."""
+        return ("Portfolio analysis using rule-based approach: "
+                "Recommend maintaining diversified allocation with 60% equities, 30% bonds, 10% alternatives. "
+                "Monitor risk metrics including VaR, beta, and correlation. "
+                "Rebalance quarterly or when allocation drift exceeds 5%. "
+                "Consider current market volatility (VIX) and economic indicators for tactical adjustments.")
+    
+    def _generate_market_fallback(self, text: str) -> str:
+        """Generate market analysis fallback."""
+        return ("Market analysis using technical indicators: "
+                "Current market conditions suggest mixed signals with moderate volatility. "
+                "Monitor key support/resistance levels, moving averages, and volume patterns. "
+                "Consider fundamental factors including earnings, economic data, and central bank policy. "
+                "Risk management remains crucial - maintain stop-loss orders and position sizing discipline.")
+    
+    def _generate_general_financial_fallback(self, text: str) -> str:
+        """Generate general financial analysis fallback."""
+        return ("Financial analysis using rule-based approach: "
+                "Current market conditions require careful evaluation of multiple factors including "
+                "technical indicators, fundamental metrics, and risk assessment. "
+                "Recommend maintaining diversified positions with appropriate risk management. "
+                "Monitor key economic indicators and earnings reports for trading opportunities.")
+    
     def _get_openai_cost_per_token(self, model: str) -> float:
         """Get approximate cost per token for OpenAI models."""
         costs = {
@@ -478,7 +502,7 @@ class LLMClient:
         }
         return costs.get(model, 0.000015)  # Default to GPT-4o pricing
     
-    # Removed Anthropic cost calculation - replaced with free local Llama 3.1
+    # Removed Anthropic cost calculation - replaced with free local Llama 3
     
     def _generate_fallback_response(self, system_prompt: str, user_message: str) -> str:
         """Generate a simple rule-based response when all LLM providers are unavailable."""
