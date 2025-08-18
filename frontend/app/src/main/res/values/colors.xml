@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary Colors -->
+    <color name="colorPrimary">#2196F3</color>
+    <color name="colorPrimaryDark">#1976D2</color>
+    <color name="colorAccent">#FF5722</color>
+    
+    <!-- Text Colors -->
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    
+    <!-- Financial Colors -->
+    <color name="profit_green">#4CAF50</color>
+    <color name="loss_red">#F44336</color>
+    
+    <!-- UI Colors -->
+    <color name="divider_color">#E0E0E0</color>
+    <color name="card_background">#FFFFFF</color>
+    <color name="background_color">#F5F5F5</color>
+    
+    <!-- Order Side Colors -->
+    <color name="buy_color">#4CAF50</color>
+    <color name="sell_color">#F44336</color>
+    
+    <!-- Order Status Colors -->
+    <color name="filled_color">#4CAF50</color>
+    <color name="pending_color">#FF9800</color>
+    <color name="cancelled_color">#9E9E9E</color>
+    <color name="rejected_color">#F44336</color>
+</resources>

@@ -239,17 +239,17 @@ class TradingWorkflow:
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze comprehensive sentiment for pre-filtered stocks using enhanced sentiment engine."""
         try:
-            from core.llm_sentiment_analyzer import LLMSentimentAnalyzer
+            from core.gpt_batch_sentiment_analyzer import GPTBatchSentimentAnalyzer
             from core.market_intelligence import UnifiedMarketIntelligence
             
-            logger.info("Sentiment Analysis Agent: Running Ollama-based sentiment analysis on pre-filtered stocks")
+            logger.info("Sentiment Analysis Agent: Running GPT-5-nano batch sentiment analysis on pre-filtered stocks")
             
             # Initialize comprehensive sentiment system (includes social media)
             from agents.sentiment_agent import SentimentAgent
             sentiment_agent = SentimentAgent()
             
-            # Initialize direct LLM sentiment analyzer (Ollama only)
-            sentiment_engine = LLMSentimentAnalyzer()
+            # Initialize GPT-5-nano batch sentiment analyzer
+            sentiment_engine = GPTBatchSentimentAnalyzer()
             
             # Get market intelligence for news data
             market_intel = UnifiedMarketIntelligence()
@@ -294,7 +294,7 @@ class TradingWorkflow:
             sentiment_signals = []
             
             # Process symbols in parallel batches to speed up analysis  
-            batch_size = 2  # Further reduced to prevent Ollama overload and timeouts
+            batch_size = 20  # GPT-5-nano can handle larger batches efficiently
             
             async def analyze_symbol_sentiment(symbol: str):
                 """Analyze sentiment for a single symbol using comprehensive sentiment agent."""
@@ -304,7 +304,7 @@ class TradingWorkflow:
                     # Use comprehensive sentiment agent which includes social media analysis
                     comprehensive_sentiment = await asyncio.wait_for(
                         sentiment_agent.analyze_comprehensive_sentiment(symbol),
-                        timeout=300.0  # Much longer timeout for comprehensive analysis with CPU Ollama
+                        timeout=60.0  # GPT-5-nano is much faster than Ollama
                     )
                     
                     # If comprehensive sentiment succeeds, return it
@@ -344,7 +344,7 @@ class TradingWorkflow:
                             *[analyze_symbol_sentiment(symbol) for symbol in batch],
                             return_exceptions=True
                         ),
-                        timeout=300.0  # 5 minute timeout for entire batch with CPU Ollama
+                        timeout=120.0  # 2 minute timeout for batch with GPT-5-nano
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Batch {i//batch_size + 1} timed out after 60 seconds")
@@ -364,13 +364,13 @@ class TradingWorkflow:
                             'overall_score': comprehensive_sentiment.overall_score,
                             'confidence': comprehensive_sentiment.confidence,
                             'ensemble_used': False,  # Not using ensemble anymore
-                            'models_successful': 1,  # Single Ollama model
+                            'models_successful': 1,  # Single GPT-5-nano model
                             'reasoning': f"Combined analysis from {comprehensive_sentiment.data_sources_count} sources",
-                            'model_results': {'ollama': comprehensive_sentiment.overall_sentiment},
+                            'model_results': {'gpt5_nano': comprehensive_sentiment.overall_sentiment},
                             'analysis_timestamp': None  # Not tracked in simple version
                         }
                         
-                        # Log detailed sentiment breakdown from Ollama analysis
+                        # Log detailed sentiment breakdown from GPT-5-nano analysis
                         logger.info(f"{symbol} sentiment breakdown:")
                         logger.info(f"  Overall: {comprehensive_sentiment.overall_sentiment} (score: {comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
                         logger.info(f"  Sources: {comprehensive_sentiment.data_sources_count} data sources")
@@ -465,10 +465,10 @@ class TradingWorkflow:
                             signal_strength += 0.1
                             signal_reason.append('High confidence analysis')
                         
-                        # Ollama model quality boost
+                        # GPT-5-nano model quality boost
                         if confidence > 0.8:
                             signal_strength += 0.1
-                            signal_reason.append('Very high confidence Ollama analysis')
+                            signal_reason.append('Very high confidence GPT-5-nano analysis')
                         
                         # Generate signal if significant
                         if signal_type and signal_strength > 0.3:

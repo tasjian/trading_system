@@ -16,8 +16,8 @@ class TradingSettings(BaseSettings):
     alpaca_secret_key: str = Field(..., env="ALPACA_SECRET_KEY")
     alpaca_base_url: str = Field(default="https://paper-api.alpaca.markets/v2", env="ALPACA_BASE_URL")
     
-    # LLM API Configuration - GPT-5-nano PRIMARY, Ollama commented out as fallback
-    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")  # REQUIRED for GPT-5-nano sentiment analysis
+    # LLM API Configuration - GPT-5-nano PRIMARY (REQUIRED)
+    openai_api_key: str = Field(..., env="OPENAI_API_KEY")  # REQUIRED for GPT-5-nano sentiment analysis
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     
     # FinGPT Configuration (HuggingFace)
@@ -28,7 +28,7 @@ class TradingSettings(BaseSettings):
     # Llama 3 Configuration (via Ollama) - FAIL-FAST CONFIGURATION
     ollama_base_url: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="llama3.2:1b", env="OLLAMA_MODEL")  # Use faster, smaller model
-    use_llama_fallback: bool = Field(default=True, env="USE_LLAMA_FALLBACK")
+    use_llama_fallback: bool = Field(default=False, env="USE_LLAMA_FALLBACK")  # DISABLED - GPT-5-nano only
     
     # Optimized Ollama Configuration - FAIL-FAST with short timeouts
     ollama_max_workers: int = Field(default=2, env="OLLAMA_MAX_WORKERS")  # Reduced for stability
@@ -298,8 +298,8 @@ def validate_settings():
     if not settings.alpaca_api_key or not settings.alpaca_secret_key:
         raise ValueError("Alpaca API credentials are required")
     
-    if not any([settings.huggingface_api_key, settings.openai_api_key, settings.anthropic_api_key, settings.use_llama_fallback]):
-        raise ValueError("At least one LLM provider (FinGPT/HuggingFace, OpenAI, Anthropic, or Llama) must be configured")
+    if not settings.openai_api_key:
+        raise ValueError("OpenAI API key is required for GPT-5-nano sentiment analysis")
     
     if settings.trading_mode not in ["paper", "live"]:
         raise ValueError("Trading mode must be 'paper' or 'live'")
