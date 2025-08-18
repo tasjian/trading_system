@@ -176,10 +176,12 @@ class IntelligentPortfolioBalancer:
             if analysis.action_needed == PositionAction.HOLD:
                 continue
             
-            # Check daily trade limits
-            if daily_trades_count >= self.risk_limits['max_daily_trades']:
-                logger.warning(f"Daily trade limit reached ({daily_trades_count}), skipping remaining orders")
-                break
+            # Check daily trade limits (ALWAYS allow SELL orders for risk management)
+            is_sell_action = analysis.action_needed in [PositionAction.SELL, PositionAction.REDUCE, PositionAction.CLOSE]
+            
+            if daily_trades_count >= self.risk_limits['max_daily_trades'] and not is_sell_action:
+                logger.warning(f"Daily trade limit reached ({daily_trades_count}), blocking new BUY orders but allowing SELL orders")
+                continue  # Skip BUY orders, but continue to process SELL orders
             
             # Generate order decision
             order_decision = await self._create_order_decision(analysis, risk_budget_used)
@@ -667,12 +669,20 @@ class IntelligentPortfolioBalancer:
             today = date.today().isoformat()
             
             orders = alpaca_client.get_orders(status="filled", limit=100)
-            daily_trades = len([o for o in orders if o.get('filled_at', '').startswith(today)])
+            daily_trades = 0
+            
+            for order in orders:
+                filled_at = order.get('filled_at')
+                if filled_at:
+                    # Convert timestamp to string if needed
+                    filled_at_str = str(filled_at)
+                    if filled_at_str.startswith(today):
+                        daily_trades += 1
             
             return daily_trades
         except Exception as e:
             logger.error(f"Failed to get daily trades count: {e}")
-            return 0
+            return 0  # Return 0 to allow trading if count fails
 
 # Global instance
 portfolio_balancer = IntelligentPortfolioBalancer()

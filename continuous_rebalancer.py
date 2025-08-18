@@ -458,7 +458,7 @@ class ContinuousRebalancer:
                     # Generate specific rebalancing orders with OCO support
                     rebalancing_decisions = await balancer.generate_rebalancing_orders(
                         position_analyses=position_analyses,
-                        max_orders=15  # Allow more orders for balanced trading
+                        max_orders=25  # Allow more SELL orders for portfolio rebalancing
                     )
                     
                     logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
