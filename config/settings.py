@@ -159,6 +159,29 @@ class TradingSettings(BaseSettings):
     max_daily_loss: float = Field(default=0.05, env="MAX_DAILY_LOSS")  # 5% daily loss limit
     min_cash_reserve: float = Field(default=0.02, env="MIN_CASH_RESERVE")  # 2% cash reserve
     
+    # OCO (One-Cancels-Other) Trading Configuration
+    oco_enabled: bool = Field(default=True, env="OCO_ENABLED")  # Enable OCO functionality
+    oco_default_take_profit_percent: float = Field(default=0.15, env="OCO_DEFAULT_TAKE_PROFIT_PERCENT")  # 15% profit target
+    oco_default_stop_loss_percent: float = Field(default=0.08, env="OCO_DEFAULT_STOP_LOSS_PERCENT")  # 8% stop loss
+    oco_max_position_size: float = Field(default=0.10, env="OCO_MAX_POSITION_SIZE")  # Max 10% per OCO position
+    oco_breakout_buffer_percent: float = Field(default=0.02, env="OCO_BREAKOUT_BUFFER_PERCENT")  # 2% breakout buffer
+    oco_max_daily_orders: int = Field(default=20, env="OCO_MAX_DAILY_ORDERS")  # Max 20 OCO orders per day
+    oco_max_portfolio_exposure: float = Field(default=0.30, env="OCO_MAX_PORTFOLIO_EXPOSURE")  # Max 30% portfolio in OCO
+    oco_min_position_value: float = Field(default=100.0, env="OCO_MIN_POSITION_VALUE")  # Min $100 for OCO
+    oco_risk_reward_ratio: float = Field(default=1.5, env="OCO_RISK_REWARD_RATIO")  # Min 1.5:1 risk/reward
+    oco_status_check_interval: int = Field(default=30, env="OCO_STATUS_CHECK_INTERVAL")  # Check OCO status every 30s
+    oco_auto_placement_enabled: bool = Field(default=True, env="OCO_AUTO_PLACEMENT_ENABLED")  # Auto-place OCO for new positions
+    oco_min_profit_ratio: float = Field(default=1.5, env="OCO_MIN_PROFIT_RATIO")  # Minimum profit:loss ratio (1.5:1)
+    oco_max_holding_period_hours: int = Field(default=72, env="OCO_MAX_HOLDING_PERIOD_HOURS")  # Max time to keep OCO active
+    
+    # OCO Breakout Trading Configuration
+    oco_breakout_enabled: bool = Field(default=True, env="OCO_BREAKOUT_ENABLED")
+    oco_breakout_buffer_percent: float = Field(default=0.002, env="OCO_BREAKOUT_BUFFER_PERCENT")  # 0.2% buffer for limit orders
+    oco_breakout_lookback_period: int = Field(default=20, env="OCO_BREAKOUT_LOOKBACK_PERIOD")  # Days for calculating breakout levels
+    oco_breakout_volatility_multiplier: float = Field(default=1.5, env="OCO_BREAKOUT_VOLATILITY_MULTIPLIER")  # Multiplier for ATR-based breakouts
+    oco_position_check_interval: int = Field(default=30, env="OCO_POSITION_CHECK_INTERVAL")  # Seconds between position checks
+    oco_status_check_interval: int = Field(default=60, env="OCO_STATUS_CHECK_INTERVAL")  # Seconds between OCO status checks
+    
     # Enhanced Logging Configuration
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
     log_file: str = Field(default="logs/trading_system.log", env="LOG_FILE")

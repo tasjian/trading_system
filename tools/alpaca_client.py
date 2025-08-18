@@ -400,6 +400,228 @@ class AlpacaClient:
             logger.error(f"Failed to cancel all orders: {e}")
             return False
     
+    def place_oco_order(self, symbol: str, qty: float, side: str, 
+                       take_profit_price: float, stop_loss_price: float,
+                       time_in_force: str = "gtc") -> Dict:
+        """
+        Place an OCO (One-Cancels-Other) order using Alpaca's bracket order functionality.
+        
+        Args:
+            symbol: Stock symbol
+            qty: Quantity to trade
+            side: "buy" or "sell"
+            take_profit_price: Price for take-profit order
+            stop_loss_price: Price for stop-loss order
+            time_in_force: "gtc", "day", "ioc", "fok"
+        
+        Returns:
+            Dict with order information including parent and child orders
+        """
+        try:
+            logger.info(f"Placing OCO bracket order: {side} {qty} {symbol}")
+            
+            # Safety checks
+            if not self._pre_trade_checks(symbol, qty, side):
+                raise ValueError("Pre-trade safety checks failed for OCO order")
+            
+            # Validate OCO parameters
+            current_price = self.get_current_price(symbol)
+            
+            # Bracket order validation logic:
+            # - For BUY orders (opening position): take_profit > current, stop_loss < current  
+            # - For SELL orders (closing position): take_profit > current (profit), stop_loss < current (limit loss)
+            # Note: Alpaca bracket orders assume you're OPENING a position, so validation is for the entry order
+            
+            if side.lower() == "buy":
+                # Buying: take profit should be higher, stop loss should be lower
+                if take_profit_price <= current_price:
+                    raise ValueError(f"Take profit price ({take_profit_price}) must be above current price ({current_price}) for buy orders")
+                if stop_loss_price >= current_price:
+                    raise ValueError(f"Stop loss price ({stop_loss_price}) must be below current price ({current_price}) for buy orders")
+            elif side.lower() in ["sell", "sell_short"]:
+                # For selling existing position: take_profit should be HIGHER (more profit), stop_loss LOWER (limit loss)
+                # But this is for PROTECTING existing position, so logic is:
+                # - take_profit_price is where we SELL for profit (higher than current)
+                # - stop_loss_price is where we SELL to limit loss (lower than current)
+                if take_profit_price <= current_price:
+                    raise ValueError(f"Take profit price ({take_profit_price}) must be above current price ({current_price}) - this is where you sell for profit")
+                if stop_loss_price >= current_price:
+                    raise ValueError(f"Stop loss price ({stop_loss_price}) must be below current price ({current_price}) - this is where you sell to limit losses")
+            
+            # Place bracket order (OCO using Alpaca's native functionality)
+            order = self.api.submit_order(
+                symbol=symbol,
+                qty=abs(qty),
+                side=side.lower(),
+                type="market",
+                time_in_force=time_in_force.lower(),
+                take_profit={"limit_price": str(take_profit_price)},
+                stop_loss={"stop_price": str(stop_loss_price)}
+            )
+            
+            logger.info(f"OCO bracket order placed: parent {order.id}")
+            
+            # Send notification
+            try:
+                asyncio.create_task(self._send_batched_oco_notification(
+                    order, symbol, qty, side, take_profit_price, stop_loss_price
+                ))
+            except Exception as notification_error:
+                logger.warning(f"OCO notification failed: {notification_error}")
+            
+            return {
+                "id": order.id,
+                "symbol": order.symbol,
+                "qty": float(order.qty),
+                "side": order.side,
+                "order_type": "oco_bracket",
+                "status": order.status,
+                "submitted_at": order.submitted_at,
+                "take_profit_price": take_profit_price,
+                "stop_loss_price": stop_loss_price,
+                "parent_order_id": order.id
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to place OCO order: {e}")
+            raise
+    
+    def place_breakout_oco_order(self, symbol: str, qty: float, 
+                               upper_breakout_price: float, lower_breakout_price: float,
+                               limit_buffer_percent: float = 0.002,
+                               time_in_force: str = "gtc") -> Dict:
+        """
+        Place a breakout OCO order that buys on upper breakout or sells on lower breakout.
+        
+        Args:
+            symbol: Stock symbol
+            qty: Quantity for each breakout direction
+            upper_breakout_price: Price to trigger buy breakout
+            lower_breakout_price: Price to trigger sell breakout
+            limit_buffer_percent: Buffer for limit orders (0.2% default)
+            time_in_force: "gtc", "day", "ioc", "fok"
+        
+        Returns:
+            Dict with both order IDs and tracking information
+        """
+        try:
+            logger.info(f"Placing breakout OCO: {symbol} upper={upper_breakout_price} lower={lower_breakout_price}")
+            
+            # Safety checks
+            current_price = self.get_current_price(symbol)
+            
+            # Validate breakout levels
+            if upper_breakout_price <= current_price:
+                raise ValueError(f"Upper breakout ({upper_breakout_price}) must be above current price ({current_price})")
+            if lower_breakout_price >= current_price:
+                raise ValueError(f"Lower breakout ({lower_breakout_price}) must be below current price ({current_price})")
+            
+            # Calculate limit prices with buffer and round to valid increments
+            upper_limit = round(upper_breakout_price * (1 + limit_buffer_percent), 2)
+            lower_limit = round(lower_breakout_price * (1 - limit_buffer_percent), 2)
+            
+            # Round breakout prices to pennies as well
+            upper_breakout_price = round(upper_breakout_price, 2)
+            lower_breakout_price = round(lower_breakout_price, 2)
+            
+            # Place buy stop order for upper breakout
+            buy_order = self.api.submit_order(
+                symbol=symbol,
+                qty=abs(qty),
+                side="buy",
+                type="stop_limit",
+                stop_price=str(upper_breakout_price),
+                limit_price=str(upper_limit),
+                time_in_force=time_in_force.lower()
+            )
+            
+            # Place sell stop order for lower breakout
+            sell_order = self.api.submit_order(
+                symbol=symbol,
+                qty=abs(qty),
+                side="sell",
+                type="stop_limit", 
+                stop_price=str(lower_breakout_price),
+                limit_price=str(lower_limit),
+                time_in_force=time_in_force.lower()
+            )
+            
+            logger.info(f"Breakout OCO placed: buy {buy_order.id}, sell {sell_order.id}")
+            
+            # Send notification
+            try:
+                asyncio.create_task(self._send_batched_breakout_notification(
+                    symbol, qty, upper_breakout_price, lower_breakout_price, 
+                    buy_order.id, sell_order.id
+                ))
+            except Exception as notification_error:
+                logger.warning(f"Breakout OCO notification failed: {notification_error}")
+            
+            return {
+                "breakout_group_id": f"breakout_{buy_order.id}_{sell_order.id}",
+                "symbol": symbol,
+                "qty": qty,
+                "upper_breakout_price": upper_breakout_price,
+                "lower_breakout_price": lower_breakout_price,
+                "buy_order": {
+                    "id": buy_order.id,
+                    "status": buy_order.status,
+                    "stop_price": upper_breakout_price,
+                    "limit_price": upper_limit
+                },
+                "sell_order": {
+                    "id": sell_order.id,
+                    "status": sell_order.status,
+                    "stop_price": lower_breakout_price,
+                    "limit_price": lower_limit
+                },
+                "order_type": "breakout_oco",
+                "submitted_at": buy_order.submitted_at
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to place breakout OCO order: {e}")
+            raise
+    
+    def get_bracket_orders(self, parent_order_id: str) -> List[Dict]:
+        """Get all child orders for a bracket/OCO order."""
+        try:
+            orders = self.api.list_orders(status="all", limit=100)
+            
+            # Find all orders related to the parent order
+            related_orders = []
+            for order in orders:
+                # Check if this is the parent or a child order
+                if (order.id == parent_order_id or 
+                    getattr(order, 'legs', None) or 
+                    str(getattr(order, 'order_class', '')) == 'bracket'):
+                    
+                    order_data = {
+                        "id": order.id,
+                        "symbol": order.symbol,
+                        "qty": float(order.qty),
+                        "side": order.side,
+                        "order_type": order.order_type,
+                        "status": order.status,
+                        "filled_qty": float(order.filled_qty or 0),
+                        "submitted_at": order.submitted_at,
+                        "filled_at": order.filled_at
+                    }
+                    
+                    # Add price information
+                    if hasattr(order, 'limit_price') and order.limit_price:
+                        order_data['limit_price'] = float(order.limit_price)
+                    if hasattr(order, 'stop_price') and order.stop_price:
+                        order_data['stop_price'] = float(order.stop_price)
+                    
+                    related_orders.append(order_data)
+            
+            return related_orders
+            
+        except Exception as e:
+            logger.error(f"Failed to get bracket orders for {parent_order_id}: {e}")
+            return []
+    
     def close_position(self, symbol: str, qty: Optional[float] = None) -> Dict:
         """Close a position (all or partial)."""
         try:
@@ -434,7 +656,7 @@ class AlpacaClient:
                 logger.error("Trading is blocked on this account")
                 return False
             
-            # Check buying power for buy orders
+            # Check buying power for buy orders - allow selling even with $0 cash
             if side.lower() == "buy":
                 # Estimate order value (using current market price or notional)
                 try:
@@ -464,7 +686,17 @@ class AlpacaClient:
                     logger.warning(f"Could not verify buying power: {e}")
                     # Continue without buying power check - let Alpaca API handle it
             
+            elif side.lower() in ["sell", "sell_short"]:
+                # SELL orders should always be allowed - they free up cash and don't require buying power
+                logger.info(f"Allowing {side} order for {symbol} - selling frees up capital for balanced trading")
+                return True
+            
             # Check position size limits - more flexible for balanced trading
+            # Skip position size checks for SELL orders - they reduce risk, not increase it
+            if side.lower() in ["sell", "sell_short"]:
+                logger.info(f"Skipping position size check for {side} order - selling reduces portfolio risk")
+                return True
+                
             portfolio_value = account["portfolio_value"]
             if portfolio_value > 0:
                 try:
@@ -655,6 +887,96 @@ class AlpacaClient:
             
         except Exception as e:
             logger.error(f"Failed to add transaction to batch queue: {e}")
+    
+    async def _send_batched_oco_notification(self, order, symbol: str, qty: float,
+                                           side: str, take_profit_price: float, 
+                                           stop_loss_price: float) -> None:
+        """Send batched email notification for OCO order."""
+        try:
+            # Import here to avoid circular imports
+            from notifications.email_batch_manager import send_batched_transaction_notification, email_batch_manager
+            
+            # Ensure batch processor is running
+            if not email_batch_manager.running:
+                email_batch_manager.start_batch_processor()
+            
+            # Get current portfolio value
+            account_info = self.get_account_info()
+            portfolio_value = account_info.get("portfolio_value", 0)
+            
+            # Get current price
+            try:
+                current_price = self.get_current_price(symbol)
+            except:
+                current_price = 0
+            
+            # Create reasoning message
+            reasoning = f"OCO bracket order placed via Alpaca Trading API. "
+            reasoning += f"Parent Order ID: {order.id}. "
+            reasoning += f"Take Profit: ${take_profit_price:.2f}, Stop Loss: ${stop_loss_price:.2f}. "
+            reasoning += f"Risk Management: Automatic profit-taking and loss protection enabled."
+            
+            # Send to batching system
+            await send_batched_transaction_notification(
+                symbol=symbol,
+                action=f"OCO_{side}",
+                quantity=qty,
+                price=current_price,
+                portfolio_value=portfolio_value,
+                confidence=0.95,  # High confidence for OCO orders
+                reasoning=reasoning,
+                agent_source="alpaca_oco_trading"
+            )
+            
+            logger.info(f"OCO transaction added to batch queue: {symbol} {side}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add OCO transaction to batch queue: {e}")
+    
+    async def _send_batched_breakout_notification(self, symbol: str, qty: float,
+                                                upper_breakout: float, lower_breakout: float,
+                                                buy_order_id: str, sell_order_id: str) -> None:
+        """Send batched email notification for breakout OCO order."""
+        try:
+            # Import here to avoid circular imports
+            from notifications.email_batch_manager import send_batched_transaction_notification, email_batch_manager
+            
+            # Ensure batch processor is running
+            if not email_batch_manager.running:
+                email_batch_manager.start_batch_processor()
+            
+            # Get current portfolio value
+            account_info = self.get_account_info()
+            portfolio_value = account_info.get("portfolio_value", 0)
+            
+            # Get current price
+            try:
+                current_price = self.get_current_price(symbol)
+            except:
+                current_price = 0
+            
+            # Create reasoning message
+            reasoning = f"Breakout OCO strategy deployed for {symbol}. "
+            reasoning += f"Upper breakout (buy): ${upper_breakout:.2f} (Order: {buy_order_id}). "
+            reasoning += f"Lower breakout (sell): ${lower_breakout:.2f} (Order: {sell_order_id}). "
+            reasoning += f"Strategy will trigger on price breakout in either direction."
+            
+            # Send to batching system
+            await send_batched_transaction_notification(
+                symbol=symbol,
+                action="BREAKOUT_OCO",
+                quantity=qty,
+                price=current_price,
+                portfolio_value=portfolio_value,
+                confidence=0.85,  # Good confidence for breakout strategies
+                reasoning=reasoning,
+                agent_source="alpaca_breakout_trading"
+            )
+            
+            logger.info(f"Breakout OCO transaction added to batch queue: {symbol}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add breakout OCO transaction to batch queue: {e}")
     
     # CRYPTO TRADING DISABLED - Comment out crypto fallback method
     # def _get_crypto_fallback_data(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:

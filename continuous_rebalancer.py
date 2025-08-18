@@ -49,6 +49,11 @@ from agents.workflow import TradingWorkflow
 from agents.state import create_initial_state
 from tools.alpaca_client import alpaca_client
 from config.settings import settings  # , get_crypto_pairs
+
+# Import performance optimization modules
+from core.optimized_market_data_cache import optimized_cache
+from core.enhanced_sentiment_performance import sentiment_performance_manager
+from monitoring.pipeline_performance_monitor import pipeline_monitor
 # CRYPTO TRADING DISABLED - Comment out for later implementation
 # from core.crypto_data_collector import crypto_collector
 
@@ -168,6 +173,17 @@ class ContinuousRebalancer:
         
         logger.info(f"Max Consecutive Failures: {self.max_consecutive_failures}")
         
+        # Start performance monitoring
+        logger.info("📊 Initializing performance monitoring and optimizations...")
+        await pipeline_monitor.start_monitoring()
+        
+        # Warm critical caches during startup
+        logger.info("🔥 Warming performance caches...")
+        cache_symbols = ['SPY', 'QQQ', 'IWM', 'XLF', 'XLK', 'AAPL', 'MSFT', 'GOOGL']
+        await optimized_cache.warm_cache_for_symbols(cache_symbols)
+        
+        logger.info("✅ Performance optimizations initialized")
+        
         # Initial system check
         await self._perform_system_check()
         
@@ -278,9 +294,10 @@ class ContinuousRebalancer:
             return True  # Default to running if can't check
     
     async def _run_rebalancing_pipeline(self) -> RebalanceResult:
-        """Run the complete rebalancing pipeline with error handling."""
+        """Run the complete rebalancing pipeline with error handling and performance monitoring."""
         start_time = datetime.now()
         pipeline_stage = "initialization"
+        stage_timings = {}  # Track individual stage performance
         
         try:
             # Create initial state
@@ -317,18 +334,24 @@ class ContinuousRebalancer:
             
             # Step 1: Market Monitor
             pipeline_stage = "market_monitor"
+            stage_start = time.time()
             logger.info("📊 Market Monitor...")
             state = await self.workflow.market_monitor_agent(state, config)
             initial_portfolio_value = state["portfolio"].get("equity", 0)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 2: Universe Filter (11k+ → ~200 actionable stocks)
             pipeline_stage = "universe_filter"
+            stage_start = time.time()
             logger.info("🔍 Universe Filter (99.7% processing reduction)...")
             state = await self.workflow.universe_filter_agent(state, config)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 3: Sentiment Analysis (only on filtered stocks, every 90 minutes)
             pipeline_stage = "sentiment_analysis"
+            stage_start = time.time()
             state = await self._run_scheduled_sentiment_analysis(state, config)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Check for API rate limits
             if self._check_rate_limit_indicators(state):
@@ -338,8 +361,10 @@ class ContinuousRebalancer:
             
             # Step 4: Risk Assessment and Management Triggers
             pipeline_stage = "risk_assessment"
+            stage_start = time.time()
             logger.info("⚖️ Risk Assessment and Stop-Loss Checks...")
             state = await self.workflow.risk_assessment_agent(state, config)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Check for immediate risk management triggers (stop-losses, position limits)
             from core.trading_engine import trading_engine
@@ -375,11 +400,14 @@ class ContinuousRebalancer:
             
             # Step 4.5: Hybrid LLM-RL Portfolio Decision Layer
             pipeline_stage = "hybrid_portfolio_decision"
+            stage_start = time.time()
             logger.info("🚀 Hybrid LLM-RL Portfolio Decision Layer (Diversified Portfolio Management)...")
             state = await self._run_hybrid_portfolio_decision_layer(state, config)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 5: Signal Generation (Convert Hybrid Portfolio Decisions to Trading Signals)
             pipeline_stage = "signal_generation"
+            stage_start = time.time()
             logger.info("🎯 Converting Hybrid Portfolio Decisions to Trading Signals...")
             pre_signals = len(state.get("signals", []))
             
@@ -400,51 +428,114 @@ class ContinuousRebalancer:
                 signals = []
                 from agents.state import TradingSignal, add_signal_to_state
                 from tools.alpaca_client import alpaca_client
+                from core.portfolio_balancer import IntelligentPortfolioBalancer
                 
                 # Get current portfolio data for enhanced calculation
                 current_portfolio = state.get("portfolio", {})
                 available_cash = float(current_portfolio.get("cash", 50000))
                 portfolio_value = float(current_portfolio.get("equity", 100000))
+                current_positions = state.get("positions", [])
                 
+                # Initialize portfolio balancer for intelligent buy/sell decisions
+                balancer = IntelligentPortfolioBalancer()
+                
+                # Build target allocation from RL recommendations
+                target_allocation = {}
                 for allocation in rl_allocations:
                     symbol = allocation.get("symbol", "")
-                    target_weight = float(allocation.get("weight", 0.0))  # Weight as decimal (0.05 = 5%)
-                    action = allocation.get("action", "buy")
+                    target_weight = float(allocation.get("weight", 0.0))
+                    if symbol and target_weight > 0:
+                        target_allocation[symbol] = target_weight
+                
+                logger.info(f"🎯 Target allocation: {len(target_allocation)} positions with total weight: {sum(target_allocation.values()):.2%}")
+                
+                # Generate intelligent rebalancing decisions (includes buy/sell/short)
+                try:
+                    position_analyses = await balancer.analyze_portfolio_balance(
+                        target_allocation=target_allocation
+                    )
                     
-                    if not symbol or target_weight <= 0:
-                        continue
+                    # Generate specific rebalancing orders with OCO support
+                    rebalancing_decisions = await balancer.generate_rebalancing_orders(
+                        position_analyses=position_analyses,
+                        max_orders=15  # Allow more orders for balanced trading
+                    )
                     
-                    try:
-                        # Calculate target dollar amount based on portfolio value
-                        target_dollar_amount = target_weight * portfolio_value
+                    logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
+                    
+                    # Convert rebalancing decisions to trading signals
+                    for decision in rebalancing_decisions:
+                        if decision.action.value in ["hold"]:
+                            continue  # Skip hold decisions
+                            
+                        # Map portfolio actions to trading actions
+                        action_mapping = {
+                            "buy": "buy",
+                            "sell": "sell", 
+                            "sell_short": "sell_short",
+                            "buy_to_cover": "buy",
+                            "reduce": "sell",
+                            "close": "sell"
+                        }
                         
-                        # Get current price for quantity calculation
-                        current_price = alpaca_client.get_current_price(symbol)
-                        if current_price and current_price > 0:
-                            # Calculate shares needed
-                            quantity = int(target_dollar_amount / current_price)
+                        trading_action = action_mapping.get(decision.action.value, "buy")
+                        
+                        # Create trading signal with proper action
+                        signal = TradingSignal(
+                            symbol=decision.symbol,
+                            action=trading_action,
+                            confidence=decision.confidence,
+                            quantity=abs(decision.quantity),
+                            reasoning=f"Portfolio Rebalancing: {decision.reasoning}"
+                        )
+                        signals.append(signal)
+                        
+                        logger.info(f"🔄 {decision.symbol}: {trading_action.upper()} {abs(decision.quantity):.0f} shares - {decision.reasoning}")
+                        
+                except Exception as balancer_error:
+                    logger.error(f"Portfolio balancer failed: {balancer_error}")
+                    
+                    # Fallback to simple allocation processing (buy-only as before)
+                    logger.warning("Falling back to simple allocation processing")
+                    for allocation in rl_allocations:
+                        symbol = allocation.get("symbol", "")
+                        target_weight = float(allocation.get("weight", 0.0))  # Weight as decimal (0.05 = 5%)
+                        action = allocation.get("action", "buy")
+                        
+                        if not symbol or target_weight <= 0:
+                            continue
+                        
+                        try:
+                            # Calculate target dollar amount based on portfolio value
+                            target_dollar_amount = target_weight * portfolio_value
                             
-                            # Only proceed with meaningful position sizes
-                            if quantity > 0 and target_dollar_amount >= 100:  # Min $100 position
-                                logger.info(f"💰 {symbol}: {target_weight:.1%} weight = ${target_dollar_amount:.2f} = {quantity} shares @ ${current_price:.2f}")
+                            # Get current price for quantity calculation
+                            current_price = alpaca_client.get_current_price(symbol)
+                            if current_price and current_price > 0:
+                                # Calculate shares needed
+                                quantity = int(target_dollar_amount / current_price)
                                 
-                                # Create properly structured trading signal
-                                signal = TradingSignal(
-                                    symbol=symbol,
-                                    action=action,
-                                    confidence=float(allocation.get("confidence", 0.8)),
-                                    quantity=float(quantity),
-                                    reasoning=f"Hybrid LLM-RL Portfolio: {allocation.get('reasoning', 'Diversified sector allocation with RL optimization')}"
-                                )
-                                signals.append(signal)
+                                # Only proceed with meaningful position sizes
+                                if quantity > 0 and target_dollar_amount >= 100:  # Min $100 position
+                                    logger.info(f"💰 {symbol}: {target_weight:.1%} weight = ${target_dollar_amount:.2f} = {quantity} shares @ ${current_price:.2f}")
+                                    
+                                    # Create properly structured trading signal
+                                    signal = TradingSignal(
+                                        symbol=symbol,
+                                        action=action,
+                                        confidence=float(allocation.get("confidence", 0.8)),
+                                        quantity=float(quantity),
+                                        reasoning=f"Hybrid LLM-RL Portfolio: {allocation.get('reasoning', 'Diversified sector allocation with RL optimization')}"
+                                    )
+                                    signals.append(signal)
+                                else:
+                                    logger.debug(f"⚠️ Skipping {symbol}: position too small (${target_dollar_amount:.2f})")
                             else:
-                                logger.debug(f"⚠️ Skipping {symbol}: position too small (${target_dollar_amount:.2f})")
-                        else:
-                            logger.warning(f"⚠️ Could not get price for {symbol}, skipping")
-                            
-                    except Exception as e:
-                        logger.warning(f"⚠️ Signal generation failed for {symbol}: {e}")
-                        continue
+                                logger.warning(f"⚠️ Could not get price for {symbol}, skipping")
+                                
+                        except Exception as e:
+                            logger.warning(f"⚠️ Signal generation failed for {symbol}: {e}")
+                            continue
                 
                 # Add signals to state using proper state management
                 for signal in signals:
@@ -457,7 +548,7 @@ class ContinuousRebalancer:
                 portfolio_analytics = rl_decisions.get("portfolio_analytics", {})
                 sector_count = portfolio_analytics.get("sector_count", 0)
                 
-                logger.info(f"✅ Generated {signals_generated} signals from hybrid LLM-RL system")
+                logger.info(f"✅ Generated {signals_generated} signals from hybrid LLM-RL system with intelligent portfolio balancing")
                 logger.info(f"📈 Strategy: {strategy}")
                 logger.info(f"🎯 Total Portfolio Allocation: {total_allocation:.1%}")
                 logger.info(f"🏭 Sector Diversification: {sector_count} sectors")
@@ -475,36 +566,65 @@ class ContinuousRebalancer:
                 post_signals = len(state.get("signals", []))
                 signals_generated = post_signals - pre_signals
             
+            stage_timings[pipeline_stage] = time.time() - stage_start
+            
             # Step 6: Strategy Optimization
             pipeline_stage = "strategy_optimization"
+            stage_start = time.time()
             logger.info("🎯 Strategy Optimization...")
             
             state = await self.workflow.strategy_optimization_agent(state, config)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 7: Order Management (if signals exist)
             if signals_generated > 0:
                 pipeline_stage = "order_management"
+                stage_start = time.time()
                 logger.info(f"💼 Order Management ({signals_generated} signals)...")
                 pre_orders = len(state.get("executed_orders", []))
                 state = await self.workflow.order_management_agent(state, config)
                 post_orders = len(state.get("executed_orders", []))
                 orders_executed = post_orders - pre_orders
+                stage_timings[pipeline_stage] = time.time() - stage_start
             else:
                 logger.info("No signals generated, skipping order management")
+                stage_timings["order_management"] = 0.0
             
             # Step 8: Portfolio Tracking
             pipeline_stage = "portfolio_tracking"
+            stage_start = time.time()
             logger.info("📈 Portfolio Tracking...")
             state = await self.workflow.portfolio_tracking_agent(state, config)
+            stage_timings[pipeline_stage] = time.time() - stage_start
             
             final_portfolio_value = state["portfolio"].get("equity", initial_portfolio_value)
             duration = (datetime.now() - start_time).total_seconds()
             
-            # Log results
+            # Record performance metrics
+            pipeline_monitor.record_pipeline_run(
+                total_duration=duration,
+                stages_data=stage_timings,
+                signals_generated=signals_generated,
+                orders_executed=orders_executed,
+                success=True
+            )
+            
+            # Log results with performance analysis
             logger.info(f"✅ REBALANCING CYCLE COMPLETE")
-            logger.info(f"Duration: {duration:.1f}s")
+            logger.info(f"Duration: {duration:.1f}s (target: {pipeline_monitor.performance_targets['total_pipeline']:.1f}s)")
+            
+            # Show stage performance breakdown
+            total_stage_time = sum(stage_timings.values())
+            logger.info(f"Stage Performance Breakdown:")
+            for stage, stage_time in stage_timings.items():
+                target_time = pipeline_monitor.performance_targets.get(stage, 10.0)
+                performance_pct = (target_time / max(stage_time, 0.1)) * 100
+                logger.info(f"  {stage}: {stage_time:.2f}s ({performance_pct:.1f}% vs target)")
+            
             logger.info(f"Signals Generated: {signals_generated}")
             logger.info(f"Orders Executed: {orders_executed}")
+            signal_conversion = (orders_executed / max(signals_generated, 1)) * 100
+            logger.info(f"Signal Conversion Rate: {signal_conversion:.1f}%")
             logger.info(f"Portfolio Value: ${final_portfolio_value:,.2f}")
             
             return RebalanceResult(
@@ -522,6 +642,18 @@ class ContinuousRebalancer:
             error_msg = f"Pipeline failed at {pipeline_stage}: {str(e)}"
             logger.error(error_msg)
             traceback.print_exc()
+            
+            # Record failed pipeline run for performance analysis
+            try:
+                pipeline_monitor.record_pipeline_run(
+                    total_duration=duration,
+                    stages_data=stage_timings,
+                    signals_generated=signals_generated,
+                    orders_executed=orders_executed,
+                    success=False
+                )
+            except Exception as monitor_error:
+                logger.warning(f"Performance monitoring failed: {monitor_error}")
             
             return RebalanceResult(
                 timestamp=start_time,
@@ -608,11 +740,12 @@ class ContinuousRebalancer:
                         social_posts_count = getattr(sentiment_data, 'social_posts_count', 0)
                         has_social_data = len(social_sentiment) > 0 or social_posts_count > 0
                     
-                    # Generate signal based on sentiment score with balanced BUY/SELL/SHORT detection
-                    if overall_score >= 0.02:  # Even lower positive sentiment threshold for more BUY signals
-                        signal_strength = min(0.5, max(0.2, overall_score))  # Adjust strength based on score
-                        # Enhanced signal with social media integration
-                        reasoning_parts = [f"{overall_sentiment.title()} overall sentiment"]
+                    # FIXED: Generate BALANCED signal distribution for proper buy/sell behavior
+                    # Key Issue: Previous logic was heavily biased towards BUY signals
+                    
+                    if overall_score >= 0.15:  # Strong positive sentiment - BUY
+                        signal_strength = min(0.8, max(0.3, overall_score))
+                        reasoning_parts = [f"{overall_sentiment.title()} overall sentiment ({overall_score:.2f})"]
                         if has_social_data:
                             reasoning_parts.append(f"Social media activity: {len(social_sentiment)} platforms")
                             if social_posts_count > 0:
@@ -626,22 +759,22 @@ class ContinuousRebalancer:
                             'confidence': confidence,
                             'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
-                            'has_earnings': False,  # Cached data doesn't track earnings
+                            'has_earnings': False,
                             'has_social_data': has_social_data,
                             'social_platforms': len(social_sentiment),
                             'social_posts_count': social_posts_count,
                             'source': 'comprehensive_sentiment_with_social'
                         })
-                    elif overall_score <= -0.3:  # Lowered threshold for SHORT signals to generate more
-                        signal_strength = min(0.8, abs(overall_score))  # Higher strength for shorts
-                        signal_type = 'SHORT' if overall_score <= -0.5 else 'SELL'  # Lowered threshold for SHORT
                         
-                        # Enhanced reasoning with social media integration
+                    elif overall_score <= -0.15:  # Strong negative sentiment - SELL/SHORT
+                        signal_strength = min(0.8, abs(overall_score))
+                        signal_type = 'SHORT' if overall_score <= -0.6 else 'SELL'
+                        
                         reasoning_parts = []
-                        if overall_score <= -0.7:
-                            reasoning_parts.append(f"CRISIS-LEVEL negative sentiment ({overall_score:.2f})")
-                        else:
+                        if overall_score <= -0.6:
                             reasoning_parts.append(f"EXTREME negative sentiment ({overall_score:.2f})")
+                        else:
+                            reasoning_parts.append(f"Negative sentiment ({overall_score:.2f})")
                         
                         if has_social_data:
                             reasoning_parts.append(f"Social media negativity: {len(social_sentiment)} platforms")
@@ -649,29 +782,50 @@ class ContinuousRebalancer:
                                 reasoning_parts.append(f"{social_posts_count} negative posts")
                         reasoning_parts.append("Multiple data sources")
                         
-                        # Boost strength if social media confirms negative sentiment
+                        # Boost strength for multi-platform confirmation
                         if has_social_data and len(social_sentiment) >= 2:
-                            signal_strength = min(0.9, signal_strength * 1.1)  # 10% boost for multi-platform negativity
+                            signal_strength = min(0.9, signal_strength * 1.1)
                         
                         sentiment_signals.append({
                             'symbol': symbol,
                             'signal': signal_type,
                             'strength': signal_strength,
-                            'confidence': min(0.95, confidence * 1.2),  # Boost confidence for extreme negatives
+                            'confidence': min(0.95, confidence * 1.2),
                             'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
                             'has_earnings': False,
-                            'sentiment_score': overall_score,  # Include raw score for further analysis
+                            'sentiment_score': overall_score,
                             'has_social_data': has_social_data,
                             'social_platforms': len(social_sentiment),
                             'social_posts_count': social_posts_count,
                             'source': 'comprehensive_sentiment_with_social'
                         })
-                    elif overall_score <= -0.02:  # Much lower negative sentiment threshold for more SELL signals
-                        signal_strength = min(0.6, max(0.2, abs(overall_score)))  # Adjust strength based on score
                         
-                        # Enhanced reasoning for moderate negative sentiment
-                        reasoning_parts = [f"Negative sentiment ({overall_score:.2f})"]
+                    elif 0.02 <= overall_score < 0.15:  # Moderate positive - cautious BUY
+                        signal_strength = min(0.5, max(0.2, overall_score * 2))
+                        reasoning_parts = [f"Moderate positive sentiment ({overall_score:.2f})"]
+                        if has_social_data:
+                            reasoning_parts.append(f"Social sentiment: {len(social_sentiment)} platforms")
+                        reasoning_parts.append("Multiple data sources")
+                        
+                        sentiment_signals.append({
+                            'symbol': symbol,
+                            'signal': 'BUY',
+                            'strength': signal_strength,
+                            'confidence': confidence,
+                            'reasoning': ", ".join(reasoning_parts),
+                            'timestamp': datetime.now(),
+                            'has_earnings': False,
+                            'sentiment_score': overall_score,
+                            'has_social_data': has_social_data,
+                            'social_platforms': len(social_sentiment),
+                            'social_posts_count': social_posts_count,
+                            'source': 'comprehensive_sentiment_with_social'
+                        })
+                        
+                    elif -0.15 < overall_score <= -0.02:  # Moderate negative - SELL existing positions
+                        signal_strength = min(0.6, max(0.2, abs(overall_score) * 2))
+                        reasoning_parts = [f"Moderate negative sentiment ({overall_score:.2f})"]
                         if has_social_data:
                             reasoning_parts.append(f"Social sentiment: {len(social_sentiment)} platforms")
                         reasoning_parts.append("Multiple data sources")
@@ -690,17 +844,18 @@ class ContinuousRebalancer:
                             'social_posts_count': social_posts_count,
                             'source': 'comprehensive_sentiment_with_social'
                         })
-                    elif abs(overall_score) < 0.02:  # Very neutral sentiment - generate weak HOLD signals for RL
-                        # Enhanced reasoning for neutral sentiment
+                        
+                    else:  # Neutral sentiment - HOLD or minimal action
+                        # For existing positions, this becomes a rebalancing opportunity
                         reasoning_parts = [f"Neutral sentiment ({overall_score:.2f})"]
                         if has_social_data:
                             reasoning_parts.append(f"Mixed social signals: {len(social_sentiment)} platforms")
-                        reasoning_parts.append("Multiple data sources")
+                        reasoning_parts.append("Portfolio optimization opportunity")
                         
                         sentiment_signals.append({
                             'symbol': symbol,
-                            'signal': 'HOLD',
-                            'strength': 0.1,  # Very weak signal strength
+                            'signal': 'HOLD',  # Will be processed by portfolio balancer for optimization
+                            'strength': 0.1,
                             'confidence': confidence,
                             'reasoning': ", ".join(reasoning_parts),
                             'timestamp': datetime.now(),
@@ -1099,20 +1254,38 @@ class ContinuousRebalancer:
                 else:
                     # No current positions, create minimal diversified allocation
                     sentiment_signals = state.get("sentiment_signals", [])
-                    buy_signals = [s for s in sentiment_signals if s.get('signal') == 'BUY'][:3]
+                    # Process ALL signal types, not just BUY signals
+                    filtered_signals = sentiment_signals[:10]  # Top 10 signals regardless of type
                     
-                    if buy_signals:
+                    if filtered_signals:
                         fallback_allocations = []
-                        for i, signal in enumerate(buy_signals):
+                        for i, signal in enumerate(filtered_signals):
+                            signal_type = signal.get('signal', 'BUY')
+                            symbol = signal['symbol']
+                            
+                            # Map signal types to actions
+                            action_mapping = {
+                                'BUY': 'buy',
+                                'SELL': 'sell', 
+                                'SHORT': 'sell_short',
+                                'STRONG_BUY': 'buy',
+                                'STRONG_SELL': 'sell_short'
+                            }
+                            
+                            action = action_mapping.get(signal_type, 'buy')
+                            weight = 0.03 if action == 'buy' else -0.03 if action == 'sell_short' else 0.02
+                            
                             fallback_allocations.append({
-                                "symbol": signal['symbol'],
-                                "weight": 0.03,  # 3% per position
-                                "confidence": 0.4,
-                                "action": "buy",
-                                "reasoning": "Conservative diversified fallback",
+                                "symbol": symbol,
+                                "weight": weight,
+                                "confidence": signal.get('confidence', 0.4),
+                                "action": action,
+                                "reasoning": f"Sentiment-based {signal_type}: {signal.get('reasoning', 'fallback')}",
                                 "industry": "Unknown",
                                 "risk_level": "medium"
                             })
+                            
+                            logger.info(f"🔄 Fallback allocation: {symbol} {action.upper()} {abs(weight)*100:.1f}% ({signal_type})")
                         
                         fallback_decisions = {
                             "strategy": "conservative_diversified_fallback",

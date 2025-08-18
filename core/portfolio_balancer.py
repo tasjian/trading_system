@@ -17,6 +17,7 @@ import asyncio
 
 from tools.alpaca_client import alpaca_client
 from config.settings import settings
+from core.oco_order_manager import oco_manager, OCOType
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +61,19 @@ class RebalanceDecision:
     symbol: str
     action: PositionAction
     quantity: float
-    order_type: str  # "market", "limit", "stop_limit"
+    order_type: str  # "market", "limit", "stop_limit", "oco_bracket", "oco_breakout"
     limit_price: Optional[float] = None
     stop_price: Optional[float] = None
     urgency: OrderUrgency = OrderUrgency.MEDIUM
     reasoning: str = ""
     confidence: float = 0.5
     risk_adjustments: Dict[str, float] = field(default_factory=dict)
+    
+    # OCO-specific parameters
+    use_oco: bool = False
+    take_profit_price: Optional[float] = None
+    stop_loss_price: Optional[float] = None
+    oco_type: Optional[str] = None  # "bracket", "breakout"
 
 class IntelligentPortfolioBalancer:
     """
@@ -329,8 +336,19 @@ class IntelligentPortfolioBalancer:
         # Calculate confidence based on analysis
         confidence = self._calculate_order_confidence(analysis)
         
+        # Determine if OCO should be used
+        use_oco, oco_type, take_profit_price, stop_loss_price = await self._evaluate_oco_usage(
+            analysis, order_action, confidence
+        )
+        
+        # Update order type if using OCO
+        if use_oco:
+            order_type = f"oco_{oco_type}"
+        
         # Generate enhanced reasoning
         reasoning = f"{analysis.reasoning} | Rebalance: {analysis.deviation:.1%} deviation"
+        if use_oco:
+            reasoning += f" | OCO {oco_type}: TP=${take_profit_price:.2f}, SL=${stop_loss_price:.2f}"
         
         return RebalanceDecision(
             symbol=analysis.symbol,
@@ -346,7 +364,11 @@ class IntelligentPortfolioBalancer:
                 'risk_weight': analysis.risk_score,
                 'original_quantity': quantity_needed,
                 'risk_adjusted_quantity': risk_adjusted_quantity
-            }
+            },
+            use_oco=use_oco,
+            take_profit_price=take_profit_price,
+            stop_loss_price=stop_loss_price,
+            oco_type=oco_type
         )
     
     def _map_position_action_to_order_side(self, 
@@ -437,6 +459,65 @@ class IntelligentPortfolioBalancer:
             adjusted_quantity = min_trade_value / current_price
         
         return max(0, adjusted_quantity)
+    
+    async def _evaluate_oco_usage(self, analysis: PositionAnalysis, order_action: PositionAction, 
+                                confidence: float) -> Tuple[bool, Optional[str], Optional[float], Optional[float]]:
+        """Evaluate whether to use OCO orders for this rebalancing decision."""
+        
+        # Check if OCO is enabled globally
+        if not settings.oco_enabled:
+            return False, None, None, None
+        
+        # Don't use OCO for HOLD actions
+        if order_action == PositionAction.HOLD:
+            return False, None, None, None
+        
+        # Use OCO for significant positions (relaxed thresholds for more usage)
+        use_oco = (
+            settings.oco_enabled and
+            confidence >= 0.5 and  # Medium confidence trades (lowered from 0.7)
+            abs(analysis.deviation) >= 0.05 and  # 5% deviation (lowered from 10%)
+            analysis.target_weight >= 0.02  # 2% position size (lowered from 5%)
+        )
+        
+        if not use_oco:
+            return False, None, None, None
+        
+        # Get current price for OCO calculations
+        try:
+            current_price = await self._get_current_price(analysis.symbol)
+            if not current_price:
+                return False, None, None, None
+        except:
+            return False, None, None, None
+        
+        # Determine OCO type and calculate prices
+        if order_action in [PositionAction.BUY, PositionAction.SELL]:
+            # Bracket OCO for position entry/exit
+            oco_type = "bracket"
+            
+            if order_action == PositionAction.BUY:
+                take_profit_price = current_price * (1 + settings.oco_default_take_profit_percent)
+                stop_loss_price = current_price * (1 - settings.oco_default_stop_loss_percent)
+            else:  # SELL
+                take_profit_price = current_price * (1 - settings.oco_default_take_profit_percent)
+                stop_loss_price = current_price * (1 + settings.oco_default_stop_loss_percent)
+            
+            return True, oco_type, take_profit_price, stop_loss_price
+        
+        elif analysis.current_quantity == 0 and settings.oco_breakout_enabled:
+            # Consider breakout OCO for new positions with high volatility
+            oco_type = "breakout"
+            
+            # Calculate breakout levels based on recent volatility
+            try:
+                upper_breakout = current_price * (1 + settings.oco_default_take_profit_percent)
+                lower_breakout = current_price * (1 - settings.oco_default_take_profit_percent)
+                return True, oco_type, upper_breakout, lower_breakout
+            except:
+                return False, None, None, None
+        
+        return False, None, None, None
     
     def _calculate_position_risk(self, symbol: str, target_weight: float, deviation: float) -> float:
         """Calculate risk score for a position."""
