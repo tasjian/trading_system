@@ -155,7 +155,7 @@ class TradingSettings(BaseSettings):
     # crypto_max_single_position: float = Field(default=0.025, env="CRYPTO_MAX_SINGLE_POSITION")  # Max 2.5% per crypto asset (half of total)
     
     # Risk Management
-    max_daily_trades: int = Field(default=10, env="MAX_DAILY_TRADES")
+    max_daily_trades: int = Field(default=999999, env="MAX_DAILY_TRADES")  # Effectively unlimited for portfolio rebalancing
     max_daily_loss: float = Field(default=0.05, env="MAX_DAILY_LOSS")  # 5% daily loss limit
     min_cash_reserve: float = Field(default=0.02, env="MIN_CASH_RESERVE")  # 2% cash reserve
     

@@ -169,26 +169,17 @@ class IntelligentPortfolioBalancer:
         
         orders = []
         risk_budget_used = 0.0
-        daily_trades_count = await self._get_daily_trades_count()
         
         for analysis in position_analyses[:max_orders]:
             # Skip if no action needed
             if analysis.action_needed == PositionAction.HOLD:
                 continue
             
-            # Check daily trade limits (ALWAYS allow SELL orders for risk management)
-            is_sell_action = analysis.action_needed in [PositionAction.SELL, PositionAction.REDUCE, PositionAction.CLOSE]
-            
-            if daily_trades_count >= self.risk_limits['max_daily_trades'] and not is_sell_action:
-                logger.warning(f"Daily trade limit reached ({daily_trades_count}), blocking new BUY orders but allowing SELL orders")
-                continue  # Skip BUY orders, but continue to process SELL orders
-            
             # Generate order decision
             order_decision = await self._create_order_decision(analysis, risk_budget_used)
             if order_decision:
                 orders.append(order_decision)
                 risk_budget_used += order_decision.risk_adjustments.get('risk_weight', 0.0)
-                daily_trades_count += 1
         
         logger.info(f"✅ Generated {len(orders)} rebalancing orders")
         return orders
