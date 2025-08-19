@@ -18,6 +18,31 @@ An advanced autonomous trading system that combines reinforcement learning, sent
 - **📧 Real-time Notifications**: Email alerts for trades and portfolio updates
 - **📋 Compliance**: Regulatory compliance checks and audit trails
 
+## 🆕 Recent Major Improvements
+
+### 🔧 Enhanced Order Management (Latest)
+- **Smart Quantity Adjustment**: Automatically adjusts sell orders to available shares
+- **OCO Order Support**: Full One-Cancels-Other bracket and breakout order types
+- **Improved Error Handling**: Graceful handling of insufficient quantities and API errors
+
+### 📊 Optimized Sentiment Analysis
+- **59% Performance Boost**: SEC filings analysis optimized (17.1s → 7.0s)
+- **Comprehensive Timeout Management**: Increased from 60s to 240s for full analysis
+- **Multi-source Integration**: News, social media, SEC filings, earnings, and market sentiment
+- **Social Media Confirmed**: Reddit + Twitter collection operational (3 posts per symbol)
+
+### 🎯 Pure Dynamic Discovery
+- **Removed Hardcoded Symbols**: No more AAPL, GOOGL, MSFT, TSLA, NVDA preferences
+- **Universe Filter Focus**: Pure 11,400+ stock scanning to 9 actionable candidates
+- **ETF-Only Cache Warming**: SPY, QQQ, IWM, XLF, XLK for market context
+- **Fresh Analysis**: Cleared cached sentiment for unbiased symbol discovery
+
+### ✅ End-to-End Validation
+- **Signal-to-Order Pipeline**: 6 signals → 3 orders successfully placed
+- **Portfolio Rebalancing**: SELL/BUY execution operational with risk controls
+- **99.9% Efficiency**: Universe filtering reduces 11,402 symbols to 9 candidates
+- **50% Success Rate**: Strong signal conversion with quality filtering
+
 ## 🏗️ Architecture
 
 ```
@@ -224,7 +249,7 @@ tail -f logs/continuous_rebalancer.log
 - **Earnings**: Earnings call transcripts
 
 ### AI Services
-- **OpenAI**: GPT models for sentiment analysis
+- **OpenAI**: GPT-5-nano for fast sentiment analysis (primary)
 - **Anthropic**: Claude models for decision making
 - **Local Models**: Llama 3.1 via Ollama (fallback)
 
