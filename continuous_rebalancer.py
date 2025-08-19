@@ -38,7 +38,8 @@ import asyncio
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta, time
+import time
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -434,7 +435,12 @@ class ContinuousRebalancer:
                 current_portfolio = state.get("portfolio", {})
                 available_cash = float(current_portfolio.get("cash", 50000))
                 portfolio_value = float(current_portfolio.get("equity", 100000))
-                current_positions = state.get("positions", [])
+                
+                # CRITICAL FIX: Get current positions from the correct state location
+                # Market monitor stores as: state["portfolio"]["positions"] = {symbol: pos_data}
+                current_positions_dict = current_portfolio.get("positions", {})
+                # Convert to list format for portfolio balancer compatibility
+                current_positions = [{"symbol": symbol, **pos_data} for symbol, pos_data in current_positions_dict.items()]
                 
                 # Initialize portfolio balancer for intelligent buy/sell decisions
                 balancer = IntelligentPortfolioBalancer()
@@ -447,7 +453,27 @@ class ContinuousRebalancer:
                     if symbol and target_weight > 0:
                         target_allocation[symbol] = target_weight
                 
+                # CRITICAL FIX: Add all current positions with 0% weight if not in RL recommendations
+                # This ensures the portfolio balancer knows to CLOSE/SELL positions not recommended by RL
+                for position in current_positions:
+                    symbol = position.get("symbol", "")
+                    if symbol and symbol not in target_allocation:
+                        # Current position not in RL recommendations = should be closed (0% target)
+                        target_allocation[symbol] = 0.0
+                        logger.info(f"🔴 SELL TARGET ADDED: {symbol} = 0% (current position not in RL recommendations)")
+                
+                # DEBUG: Log detailed target allocation
                 logger.info(f"🎯 Target allocation: {len(target_allocation)} positions with total weight: {sum(target_allocation.values()):.2%}")
+                for symbol, weight in target_allocation.items():
+                    if weight == 0.0:
+                        logger.info(f"   🔴 SELL TARGET: {symbol} = {weight:.1%} (should be sold)")
+                    else:
+                        logger.info(f"   🟢 BUY/HOLD TARGET: {symbol} = {weight:.1%}")
+                        
+                # DEBUG: Check if current positions are properly added for selling
+                logger.info(f"📊 Current positions to check for selling: {[p.get('symbol') for p in current_positions]}")
+                logger.info(f"📊 RL recommendations: {[symbol for symbol, weight in target_allocation.items() if weight > 0]}")
+                logger.info(f"📊 Positions to SELL: {[symbol for symbol, weight in target_allocation.items() if weight == 0.0]}")
                 
                 # Generate intelligent rebalancing decisions (includes buy/sell/short)
                 try:
