@@ -238,7 +238,7 @@ class TradingSettings(BaseSettings):
     # Sentiment Analysis Performance Settings
     sentiment_batch_size: int = Field(default=10, env="SENTIMENT_BATCH_SIZE")
     sentiment_max_concurrent: int = Field(default=5, env="SENTIMENT_MAX_CONCURRENT")
-    sentiment_priority_symbols: str = Field(default="AAPL,GOOGL,MSFT,TSLA,NVDA", env="SENTIMENT_PRIORITY_SYMBOLS")
+    sentiment_priority_symbols: str = Field(default="", env="SENTIMENT_PRIORITY_SYMBOLS")  # No hardcoded symbols - use universe filter
     enable_sentiment_caching: bool = Field(default=True, env="ENABLE_SENTIMENT_CACHING")
     sentiment_cache_ttl: int = Field(default=300, env="SENTIMENT_CACHE_TTL")  # 5 minutes
     

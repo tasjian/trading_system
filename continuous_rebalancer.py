@@ -178,9 +178,9 @@ class ContinuousRebalancer:
         logger.info("📊 Initializing performance monitoring and optimizations...")
         await pipeline_monitor.start_monitoring()
         
-        # Warm critical caches during startup
+        # Warm critical caches during startup with ETFs only (no hardcoded stocks)
         logger.info("🔥 Warming performance caches...")
-        cache_symbols = ['SPY', 'QQQ', 'IWM', 'XLF', 'XLK', 'AAPL', 'MSFT', 'GOOGL']
+        cache_symbols = ['SPY', 'QQQ', 'IWM', 'XLF', 'XLK']  # ETFs only - let universe filter discover individual stocks
         await optimized_cache.warm_cache_for_symbols(cache_symbols)
         
         logger.info("✅ Performance optimizations initialized")
@@ -586,11 +586,92 @@ class ContinuousRebalancer:
                     for reason in rebalance_reasons[:3]:
                         logger.info(f"   • {reason}")
             else:
-                # Fallback to traditional signal generation
-                logger.warning("🔄 No hybrid allocations found, falling back to LLM signal generation")
-                state = await self.workflow.signal_generation_agent(state, config)
-                post_signals = len(state.get("signals", []))
-                signals_generated = post_signals - pre_signals
+                # CRITICAL FIX: When no RL allocations, we need to force SELL current positions
+                # and generate signals based on universe filter, not fall back to old signal generation
+                logger.warning("🔄 No hybrid allocations found - forcing portfolio rebalancing with universe filter symbols")
+                
+                signals = []
+                from agents.state import TradingSignal, add_signal_to_state
+                from core.portfolio_balancer import IntelligentPortfolioBalancer
+                
+                # Get current portfolio data
+                current_portfolio = state.get("portfolio", {})
+                available_cash = float(current_portfolio.get("cash", 50000))
+                portfolio_value = float(current_portfolio.get("equity", 100000))
+                
+                # Get current positions and filtered symbols
+                current_positions_dict = current_portfolio.get("positions", {})
+                current_positions = [{"symbol": symbol, **pos_data} for symbol, pos_data in current_positions_dict.items()]
+                filtered_symbols = state.get("filtered_symbols", [])
+                
+                logger.info(f"📊 Current positions: {list(current_positions_dict.keys())}")
+                logger.info(f"📊 Universe filter symbols: {filtered_symbols[:10]}")
+                
+                # Create target allocation - if no RL allocations, sell everything and stay in cash
+                # OR optionally buy top universe filter symbols
+                target_allocation = {}
+                
+                # Option 1: Sell everything (conservative approach)
+                for position in current_positions:
+                    symbol = position.get("symbol", "")
+                    if symbol:
+                        target_allocation[symbol] = 0.0
+                        logger.info(f"🔴 FORCED SELL TARGET: {symbol} = 0% (no RL recommendations)")
+                
+                # Option 2: Alternatively, buy top universe filter symbols (aggressive approach)
+                # Uncomment to enable buying new symbols when RL fails:
+                # if filtered_symbols:
+                #     # Allocate 10% to top 2 universe filter symbols
+                #     for i, symbol in enumerate(filtered_symbols[:2]):
+                #         target_allocation[symbol] = 0.10
+                #         logger.info(f"🟢 FORCED BUY TARGET: {symbol} = 10% (top universe filter symbol)")
+                
+                if target_allocation:
+                    # Use portfolio balancer to generate orders
+                    balancer = IntelligentPortfolioBalancer()
+                    try:
+                        position_analyses = await balancer.analyze_portfolio_balance(
+                            target_allocation=target_allocation
+                        )
+                        
+                        rebalancing_decisions = await balancer.generate_rebalancing_orders(
+                            position_analyses=position_analyses
+                        )
+                        
+                        logger.info(f"🔄 Generated {len(rebalancing_decisions)} forced rebalancing orders")
+                        
+                        # Convert to trading signals
+                        action_mapping = {
+                            "buy": "buy",
+                            "sell": "sell", 
+                            "short": "sell",
+                            "close": "sell"
+                        }
+                        
+                        for decision in rebalancing_decisions:
+                            trading_action = action_mapping.get(decision.action.value, "buy")
+                            
+                            signal = TradingSignal(
+                                symbol=decision.symbol,
+                                action=trading_action,
+                                confidence=decision.confidence,
+                                quantity=abs(decision.quantity),
+                                reasoning=f"Forced Rebalancing: {decision.reasoning}"
+                            )
+                            signals.append(signal)
+                            logger.info(f"🔄 FORCED {decision.symbol}: {trading_action.upper()} {abs(decision.quantity):.0f} shares")
+                        
+                        # Add signals to state
+                        for signal in signals:
+                            state = add_signal_to_state(state, signal)
+                        signals_generated = len(signals)
+                        
+                    except Exception as e:
+                        logger.error(f"Forced rebalancing failed: {e}")
+                        signals_generated = 0
+                else:
+                    logger.warning("No current positions found to rebalance")
+                    signals_generated = 0
             
             stage_timings[pipeline_stage] = time.time() - stage_start
             

@@ -38,6 +38,13 @@ class OrderUrgency(Enum):
     HIGH = "high"
     CRITICAL = "critical"
 
+class RiskLevel(Enum):
+    """Risk level classifications."""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
 @dataclass
 class PositionAnalysis:
     """Analysis of current position vs target."""
@@ -67,6 +74,7 @@ class RebalanceDecision:
     urgency: OrderUrgency = OrderUrgency.MEDIUM
     reasoning: str = ""
     confidence: float = 0.5
+    risk_level: RiskLevel = RiskLevel.MEDIUM
     risk_adjustments: Dict[str, float] = field(default_factory=dict)
     
     # OCO-specific parameters

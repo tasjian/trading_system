@@ -304,7 +304,7 @@ class TradingWorkflow:
                     # Use comprehensive sentiment agent which includes social media analysis
                     comprehensive_sentiment = await asyncio.wait_for(
                         sentiment_agent.analyze_comprehensive_sentiment(symbol),
-                        timeout=60.0  # GPT-5-nano is much faster than Ollama
+                        timeout=240.0  # Increased to account for SEC filings analysis (17s) + LLM processing + network delays
                     )
                     
                     # If comprehensive sentiment succeeds, return it

@@ -377,6 +377,52 @@ class AlpacaClient:
                     logger.error(f"Retry with integer quantity also failed for {symbol}: {retry_error}")
                     raise
             
+            # Handle insufficient quantity errors for sell orders
+            elif "insufficient qty available" in error_message and side in ["sell", "sell_short"]:
+                logger.warning(f"Insufficient quantity for {symbol}, attempting to sell all available shares")
+                try:
+                    # Get current position to determine available quantity
+                    positions = self.get_positions()
+                    available_qty = 0
+                    
+                    # Find the position for this symbol
+                    for position in positions:
+                        if position.get("symbol") == symbol:
+                            available_qty = abs(float(position.get("qty", 0)))
+                            break
+                    
+                    if available_qty > 0:
+                        # Retry with available quantity
+                        order_params["qty"] = available_qty
+                        
+                        logger.info(f"Retrying {symbol} sell order with available quantity: {available_qty}")
+                        order = self.api.submit_order(**order_params)
+                        
+                        # Send batched email notification asynchronously
+                        try:
+                            asyncio.create_task(self._send_batched_transaction_notification(
+                                order, symbol, available_qty, side, order_type, limit_price
+                            ))
+                        except Exception as notification_error:
+                            logger.warning(f"Batched email notification failed: {notification_error}")
+                        
+                        return {
+                            "id": order.id,
+                            "symbol": order.symbol,
+                            "qty": float(order.qty),
+                            "side": order.side,
+                            "order_type": order.order_type,
+                            "status": order.status,
+                            "submitted_at": order.submitted_at
+                        }
+                    else:
+                        logger.warning(f"No shares available to sell for {symbol}")
+                        raise ValueError(f"No shares available to sell for {symbol}")
+                        
+                except Exception as retry_error:
+                    logger.error(f"Retry with available quantity failed for {symbol}: {retry_error}")
+                    raise
+            
             logger.error(f"Failed to place order: {e}")
             raise
     

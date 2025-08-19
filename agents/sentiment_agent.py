@@ -123,7 +123,7 @@ class SentimentAgent:
         news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=120.0)  # Increased for CPU Ollama
         social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=150.0)  # Increased for CPU Ollama
         earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=180.0)  # Increased for CPU Ollama
-        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=200.0)  # Increased for CPU Ollama
+        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=60.0)  # Reduced due to optimizations (fewer filings, shorter lookback)
         market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=90.0)  # Increased for CPU Ollama
         
         # Execute all tasks with graceful failure handling
@@ -561,11 +561,11 @@ class SentimentAgent:
             if not hasattr(self.sec_edgar_client, '_company_tickers') or not self.sec_edgar_client._company_tickers:
                 await self.sec_edgar_client.load_company_tickers()
             
-            # Get recent filings (10-K, 10-Q, 8-K)
+            # Get recent filings (10-K, 10-Q, 8-K) - reduced lookback for speed
             recent_filings = await self.sec_edgar_client.search_filings(
                 ticker=symbol,
                 form_types=['10-K', '10-Q', '8-K'],
-                days_back=90
+                days_back=30  # Reduced from 90 days for faster performance
             )
             
             if not recent_filings:
@@ -576,8 +576,8 @@ class SentimentAgent:
             
             sentiment_results = {}
             
-            # Analyze up to 5 most recent filings
-            for filing in recent_filings[:5]:
+            # Analyze up to 2 most recent filings for speed (reduced from 5)
+            for filing in recent_filings[:2]:
                 try:
                     # Download filing content
                     filing_with_content = await self.sec_edgar_client.get_filing_content(filing)

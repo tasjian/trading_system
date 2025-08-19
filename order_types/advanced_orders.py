@@ -112,7 +112,7 @@ class AdvancedOrderManager:
                 return await self._place_stop_limit_order(order_request, current_price)
             elif order_request.order_type == "trailing_stop":
                 return await self._place_trailing_stop_order(order_request, current_price)
-            elif order_request.order_type == "oco":
+            elif order_request.order_type in ["oco", "oco_bracket", "oco_breakout"]:
                 return await self._place_oco_order(order_request, current_price)
             elif order_request.order_type in ["market", "limit", "stop"]:
                 return await self._place_standard_order(order_request, current_price)
@@ -449,7 +449,7 @@ class AdvancedOrderManager:
         if order_request.quantity <= 0:
             return OrderExecutionResult(success=False, error_message="Quantity must be positive")
         
-        if order_request.order_type not in ["market", "limit", "stop", "stop_limit", "trailing_stop", "oco"]:
+        if order_request.order_type not in ["market", "limit", "stop", "stop_limit", "trailing_stop", "oco", "oco_bracket", "oco_breakout"]:
             return OrderExecutionResult(success=False, error_message=f"Invalid order type: {order_request.order_type}")
         
         if order_request.side not in ["buy", "sell", "sell_short"]:
