@@ -476,7 +476,7 @@ class IntelligentPortfolioBalancer:
         # Use OCO for significant positions (relaxed thresholds for more usage)
         use_oco = (
             settings.oco_enabled and
-            confidence >= 0.5 and  # Medium confidence trades (lowered from 0.7)
+            confidence >= 0.3 and  # Medium confidence trades (lowered to match realistic confidence levels)
             abs(analysis.deviation) >= 0.05 and  # 5% deviation (lowered from 10%)
             analysis.target_weight >= 0.02  # 2% position size (lowered from 5%)
         )
@@ -537,19 +537,23 @@ class IntelligentPortfolioBalancer:
     def _calculate_order_confidence(self, analysis: PositionAnalysis) -> float:
         """Calculate confidence level for an order."""
         
-        # Base confidence from deviation size
-        deviation_confidence = min(abs(analysis.deviation) / self.significant_deviation_threshold, 1.0)
+        # Base confidence from deviation size - more realistic scaling
+        # Use smaller threshold for confidence calculation
+        confidence_threshold = 0.05  # 5% instead of 10% for more realistic confidence scores
+        deviation_confidence = min(abs(analysis.deviation) / confidence_threshold, 1.0)
         
-        # Adjust for urgency
+        # Adjust for urgency with higher multipliers
         urgency_multiplier = {
             OrderUrgency.CRITICAL: 1.0,
-            OrderUrgency.HIGH: 0.9,
-            OrderUrgency.MEDIUM: 0.8,
-            OrderUrgency.LOW: 0.6
+            OrderUrgency.HIGH: 0.95,
+            OrderUrgency.MEDIUM: 0.9,  # Increased from 0.8
+            OrderUrgency.LOW: 0.8     # Increased from 0.6
         }
         
         confidence = deviation_confidence * urgency_multiplier.get(analysis.urgency, 0.5)
-        return min(max(confidence, 0.1), 0.95)  # Clamp between 0.1 and 0.95
+        
+        # Higher minimum confidence for portfolio rebalancing decisions
+        return min(max(confidence, 0.2), 0.95)  # Raised minimum from 0.1 to 0.2
     
     def _generate_position_reasoning(self, 
                                    symbol: str, 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Fail-Fast Signal Orchestrator
-Single-source signal generation using ONLY Alpaca data.
-No fallbacks allowed - system halts on data quality issues.
+Alpaca Price Signal Orchestrator
+Primary price signal generation using Alpaca data.
+When price signals are insufficient, system continues with other data sources (news, sentiment, portfolio).
 """
 
 import logging
@@ -57,41 +57,41 @@ class ResilientSignalOrchestrator:
         
         # RELAXED REQUIREMENTS for development/testing when market closed
         self.min_signals_required = 2  # Lower minimum for development
-        self.min_confidence_threshold = 0.3  # Lower confidence for testing
+        self.min_confidence_threshold = 0.15  # Lowered to allow more price signals
         self.max_processing_time = 15.0  # Fast timeout
         
-        logger.info("🎯 FAIL-FAST Signal Orchestrator initialized (Alpaca-Only)")
-        logger.info("⚠️ NO FALLBACKS: System halts on data failures")
-        logger.info(f"Single source: {self.source_priorities[0]}")
+        logger.info("🎯 Alpaca Price Signal Orchestrator initialized")
+        logger.info("⚠️ PRICE SIGNALS ONLY: System continues with other data sources when price signals fail")
+        logger.info(f"Primary source: {self.source_priorities[0]}")
     
     async def orchestrate_signals(self, symbols: List[str], 
                                 threshold: float = 0.02,
                                 min_signals: int = 5,
                                 max_processing_time: float = 15.0) -> OrchestrationResult:
         """
-        FAIL-FAST signal orchestration using ONLY Alpaca data.
+        Alpaca price signal orchestration.
         
         Strategy:
-        1. Alpaca ONLY - No fallbacks allowed
-        2. Halt immediately on any data quality issues
-        3. Require high signal count and confidence
+        1. Alpaca price signals as primary data source
+        2. Raise exception when price signals are insufficient (handled by universe filter)
+        3. System continues with other data sources (news, sentiment, portfolio)
         
         Args:
             symbols: List of symbols to analyze
-            threshold: Price change threshold (strict)
-            min_signals: Minimum signals required (higher than before)
-            max_processing_time: Maximum processing time (faster timeout)
+            threshold: Price change threshold
+            min_signals: Minimum signals required 
+            max_processing_time: Maximum processing time
             
         Returns:
-            OrchestrationResult with high-quality signal data
+            OrchestrationResult with price signal data
             
         Raises:
-            RuntimeError: If Alpaca data unavailable or insufficient
+            RuntimeError: If Alpaca price signals unavailable or insufficient (handled gracefully by universe filter)
         """
         start_time = datetime.now()
-        logger.info(f"🚀 FAIL-FAST ORCHESTRATION for {len(symbols)} symbols")
-        logger.info(f"STRICT Requirements: min_signals={min_signals}, threshold={threshold:.1%}")
-        logger.info(f"⚠️ NO FALLBACKS: Alpaca data must be available or system halts")
+        logger.info(f"🚀 ALPACA PRICE SIGNAL COLLECTION for {len(symbols)} symbols")
+        logger.info(f"Requirements: min_signals={min_signals}, threshold={threshold:.1%}")
+        logger.info(f"⚠️ PRICE SIGNALS ONLY: System continues with other data sources if insufficient")
         
         signals = []
         sources_used = []
@@ -110,9 +110,9 @@ class ResilientSignalOrchestrator:
                 # For paper trading with limited data access, log warning but continue with empty signals
                 # The system will use cached sentiment data instead
                 logger.warning(
-                    f"⚠️ Alpaca returned no price signals from {len(symbols)} symbols "
+                    f"⚠️ ALPACA PRICE SIGNALS: No price signals from {len(symbols)} symbols "
                     f"(threshold: {threshold:.1%}). This is normal for paper trading with limited SIP data access. "
-                    f"System will continue with cached sentiment data and portfolio allocations."
+                    f"System continues with news, sentiment, and portfolio data."
                 )
                 alpaca_signals = []  # Empty signals list, system will use other data sources
             
@@ -134,12 +134,12 @@ class ResilientSignalOrchestrator:
                     high_quality_signals = alpaca_signals  # Use all signals when market closed
                 else:
                     error_msg = (
-                        f"❌ CRITICAL SYSTEM FAILURE: Insufficient high-quality signals\n"
+                        f"⚠️ ALPACA PRICE SIGNALS: Insufficient high-quality price signals from Alpaca\n"
                         f"High-quality signals: {len(high_quality_signals)} (min required: {min_signals})\n"
                         f"Total signals: {len(alpaca_signals)}\n"
                         f"Confidence threshold: {self.min_confidence_threshold}\n"
-                        f"SYSTEM REQUIRES HIGH-QUALITY DATA TO OPERATE SAFELY\n"
-                        f"Trading halted to prevent poor-quality decisions"
+                        f"ALPACA PRICE DATA REJECTED - SYSTEM CONTINUES WITH OTHER DATA SOURCES\n"
+                        f"Trading will proceed using news, sentiment, and portfolio data"
                     )
                     logger.error(error_msg)
                     raise RuntimeError(error_msg)
@@ -151,10 +151,10 @@ class ResilientSignalOrchestrator:
                 
         except Exception as e:
             error_msg = (
-                f"❌ CRITICAL SYSTEM FAILURE: Alpaca data collection failed\n"
+                f"⚠️ ALPACA PRICE SIGNALS: Alpaca price data collection failed\n"
                 f"Error: {str(e)}\n"
-                f"SYSTEM CANNOT OPERATE WITHOUT ALPACA DATA\n"
-                f"All trading operations halted"
+                f"ALPACA PRICE DATA UNAVAILABLE - SYSTEM CONTINUES WITH OTHER DATA SOURCES\n"
+                f"Trading will proceed using news, sentiment, and portfolio data"
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
@@ -178,8 +178,8 @@ class ResilientSignalOrchestrator:
         )
         
         # Log final results
-        logger.info("✅ FAIL-FAST ORCHESTRATION COMPLETE")
-        logger.info(f"Signals: {len(signals)} | Source: Alpaca-only | Time: {processing_time:.1f}s")
+        logger.info("✅ ALPACA PRICE SIGNAL COLLECTION COMPLETE")
+        logger.info(f"Price signals: {len(signals)} | Source: Alpaca | Time: {processing_time:.1f}s")
         logger.info(f"Quality: {reliability_score} (binary: pass/fail)")
         logger.info(f"Signal breakdown: {source_signal_counts}")
         

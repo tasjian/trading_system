@@ -107,8 +107,13 @@ class SECEdgarClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=30)
-            connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+            timeout = aiohttp.ClientTimeout(total=15, connect=5)  # Reduced timeout
+            connector = aiohttp.TCPConnector(
+                limit=10, 
+                limit_per_host=5,
+                ttl_dns_cache=300,  # DNS cache
+                use_dns_cache=True
+            )
             self._session = aiohttp.ClientSession(
                 headers=self.headers,
                 timeout=timeout,
@@ -152,7 +157,9 @@ class SECEdgarClient:
                     logger.warning(f"SEC API request failed: {response.status} for {url}")
                     return None
         except Exception as e:
-            logger.error(f"SEC API request error: {e}")
+            logger.error(f"SEC API request error: {str(e)}")
+            logger.debug(f"Failed URL: {url}")
+            logger.debug(f"Exception type: {type(e).__name__}")
             return None
     
     def normalize_cik(self, cik: int or str) -> str:
@@ -173,6 +180,8 @@ class SECEdgarClient:
                 data = await self._make_request(url)
                 
             if not data:
+                logger.error("Both standard and exchange mappings failed - SEC API may be temporarily unavailable")
+                logger.warning("Operating with degraded functionality - some SEC features disabled")
                 return False
             
             self._company_tickers = {}
@@ -222,7 +231,11 @@ class SECEdgarClient:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to load company tickers: {e}")
+            logger.error(f"Failed to load company tickers: {str(e)}")
+            logger.warning("SEC Edgar integration will operate with reduced functionality")
+            # Initialize empty mappings to prevent crashes
+            self._company_tickers = {}
+            self._cik_to_ticker = {}
             return False
     
     def get_cik_from_ticker(self, ticker: str) -> Optional[str]:
