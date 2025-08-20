@@ -1341,6 +1341,19 @@ class ContinuousRebalancer:
             # Use hybrid system that combines LLM portfolio management with RL optimization
             result = await integrate_hybrid_llm_rl_portfolio_system(state, config)
             
+            # PRIORITY 1: BACKTESTING VALIDATION GATE
+            # Validate RL decisions against recent backtest performance before proceeding
+            if result and result.get("rl_decisions"):
+                validation_result = await self._validate_rl_decisions_with_backtesting(
+                    result.get("rl_decisions"), state
+                )
+                if validation_result == "REJECT_RL_DECISIONS":
+                    logger.warning("❌ RL decisions rejected by backtesting validation - using fallback")
+                    # Clear RL decisions to force fallback to LLM-only or cached portfolio
+                    result["rl_decisions"] = None
+                else:
+                    logger.info("✅ RL decisions passed backtesting validation")
+            
             if result and result.get("rl_decisions"):
                 state.update(result)
                 state["rl_enhanced"] = True
@@ -1493,6 +1506,131 @@ class ContinuousRebalancer:
             state["hybrid_system"] = False
             
             return state
+    
+    async def _validate_rl_decisions_with_backtesting(self, rl_decisions: Dict[str, Any], state: Dict[str, Any]) -> str:
+        """
+        PRIORITY 1: Backtesting Validation Gate
+        Validate RL decisions against recent backtest performance before live execution.
+        
+        Safety thresholds:
+        - Sharpe ratio > 0.5 (positive risk-adjusted returns)
+        - Max drawdown < 15% (acceptable risk level) 
+        - Win rate > 30% (reasonable success rate for paper trading)
+        
+        Returns:
+            "APPROVE_RL_DECISIONS" if validation passes
+            "REJECT_RL_DECISIONS" if validation fails
+        """
+        try:
+            logger.info("🔍 Running backtesting validation for RL decisions...")
+            
+            # Import backtesting framework
+            from agents.rl_backtesting_framework import BacktestConfig, RLBacktestingFramework
+            from agents.rl_integration_bridge import get_current_rl_agent
+            
+            # Get symbols from RL decisions for validation
+            allocations = rl_decisions.get("allocations", [])
+            if not allocations:
+                logger.warning("⚠️ No allocations in RL decisions - approving by default")
+                return "APPROVE_RL_DECISIONS"
+            
+            # Extract symbols from allocations
+            symbols = []
+            for allocation in allocations[:5]:  # Limit to top 5 symbols for quick validation
+                symbol = allocation.get("symbol")
+                if symbol and isinstance(symbol, str):
+                    symbols.append(symbol)
+            
+            if not symbols:
+                logger.warning("⚠️ No valid symbols in RL decisions - approving by default") 
+                return "APPROVE_RL_DECISIONS"
+            
+            logger.info(f"🎯 Validating RL decisions for symbols: {symbols}")
+            
+            # Get current RL agent for backtesting
+            current_agent = get_current_rl_agent()
+            if not current_agent:
+                logger.warning("⚠️ No RL agent available for backtesting - approving by default")
+                return "APPROVE_RL_DECISIONS"
+            
+            # Configure quick backtest (last 30 days for speed)
+            config = BacktestConfig(
+                start_date=(datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"),
+                end_date=datetime.now().strftime("%Y-%m-%d"),
+                initial_capital=50000,  # Smaller capital for quick validation
+                use_enhanced_environment=True,
+                save_results=False,  # Don't save validation results
+                save_plots=False,   # Skip plots for speed
+            )
+            
+            # Run quick backtest on primary symbol
+            primary_symbol = symbols[0]
+            start_validation = datetime.now()
+            
+            logger.info(f"⏱️ Starting 30-day backtest validation for {primary_symbol}...")
+            
+            # Import and run quick backtest
+            from agents.rl_backtesting_framework import RLBacktestingFramework
+            framework = RLBacktestingFramework(config)
+            
+            # Set timeout for validation (max 60 seconds)
+            try:
+                validation_results = await asyncio.wait_for(
+                    framework.backtest_single_symbol(current_agent, primary_symbol),
+                    timeout=60.0
+                )
+                
+                validation_duration = (datetime.now() - start_validation).total_seconds()
+                logger.info(f"⏱️ Backtest validation completed in {validation_duration:.1f}s")
+                
+                # Extract key metrics
+                metrics = validation_results.metrics
+                sharpe_ratio = metrics.sharpe_ratio
+                max_drawdown = metrics.max_drawdown
+                win_rate = metrics.win_rate
+                total_return = metrics.total_return
+                
+                logger.info(f"📊 Validation Results for {primary_symbol}:")
+                logger.info(f"   Sharpe Ratio: {sharpe_ratio:.3f}")
+                logger.info(f"   Max Drawdown: {max_drawdown:.1%}")
+                logger.info(f"   Win Rate: {win_rate:.1%}")
+                logger.info(f"   Total Return: {total_return:.1%}")
+                
+                # Apply validation criteria (relaxed for paper trading)
+                validation_passed = True
+                rejection_reasons = []
+                
+                if sharpe_ratio < 0.5:
+                    validation_passed = False
+                    rejection_reasons.append(f"Sharpe ratio too low: {sharpe_ratio:.3f} < 0.5")
+                
+                if abs(max_drawdown) > 0.15:  # 15% max drawdown
+                    validation_passed = False
+                    rejection_reasons.append(f"Max drawdown too high: {abs(max_drawdown):.1%} > 15%")
+                
+                if win_rate < 0.30:  # 30% minimum win rate
+                    validation_passed = False
+                    rejection_reasons.append(f"Win rate too low: {win_rate:.1%} < 30%")
+                
+                if validation_passed:
+                    logger.info("✅ RL decisions PASSED backtesting validation")
+                    logger.info(f"   Model shows acceptable risk-adjusted performance")
+                    return "APPROVE_RL_DECISIONS"
+                else:
+                    logger.warning("❌ RL decisions FAILED backtesting validation")
+                    for reason in rejection_reasons:
+                        logger.warning(f"   {reason}")
+                    logger.warning("   Falling back to LLM-only portfolio management")
+                    return "REJECT_RL_DECISIONS"
+                
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ Backtesting validation timed out (60s) - approving by default")
+                return "APPROVE_RL_DECISIONS"
+                
+        except Exception as e:
+            logger.error(f"❌ Backtesting validation error: {str(e)}")
+            logger.warning("   Approving RL decisions by default due to validation error")
+            return "APPROVE_RL_DECISIONS"
     
     def get_status_report(self) -> Dict[str, Any]:
         """Get current system status report."""

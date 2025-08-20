@@ -397,6 +397,8 @@ def initialize_rl_agent(symbols: List[str]) -> SimplifiedRLAgent:
     
     if _global_rl_agent is None:
         _global_rl_agent = SimplifiedRLAgent(symbols)
+        # Set as current agent for backtesting validation
+        _set_current_rl_agent(_global_rl_agent)
     
     return _global_rl_agent
 
@@ -875,6 +877,19 @@ async def cleanup_rl_agent():
         except Exception as e:
             logger.error(f"❌ Failed to save RL agent state: {e}")
 
+# Global RL agent instance for backtesting validation
+_current_rl_agent = None
+
+def get_current_rl_agent():
+    """Get the current RL agent instance for backtesting validation."""
+    global _current_rl_agent
+    return _current_rl_agent
+
+def _set_current_rl_agent(agent):
+    """Set the current RL agent instance (internal use)."""
+    global _current_rl_agent
+    _current_rl_agent = agent
+
 # Backward compatibility aliases
 OnlineRLAgent = SimplifiedRLAgent
 create_rl_bridge = initialize_rl_agent
@@ -886,6 +901,7 @@ __all__ = [
     'TradingSignal',
     'initialize_rl_agent',
     'get_rl_agent',
+    'get_current_rl_agent',
     'generate_rl_enhanced_signals',
     'integrate_comprehensive_rl_system',
     'cleanup_rl_agent',

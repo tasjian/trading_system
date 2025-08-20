@@ -5,8 +5,6 @@ Provides detailed performance analysis, risk metrics, and visualization
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import logging
 import asyncio
 from typing import Dict, List, Tuple, Optional, Any, Union
@@ -17,13 +15,25 @@ import pickle
 import os
 from pathlib import Path
 
+# Initialize logger first
+logger = logging.getLogger(__name__)
+
+# Optional plotting dependencies
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    PLOTTING_AVAILABLE = False
+    logger.warning("⚠️ Matplotlib/seaborn not available - plotting disabled")
+
 from agents.rl_trading_agent import RLTradingAgent, TrainingConfig, TradingPerformance
 from agents.llm_rl_integration import EnhancedLLMTradingEnvironment, LLMStateEnricher
-# Use existing tools instead of separate market data fetcher
-from tools.alpaca_client import alpaca_client
+from agents.realistic_trading_env import RealisticTradingEnvironment
+# Import proper market data fetcher for backtesting
+from tools.market_data_fetcher import MarketDataFetcher
 
 warnings.filterwarnings('ignore')
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -314,23 +324,24 @@ class RLBacktestingFramework:
         """Create trading environment for backtesting."""
         
         if self.config.use_enhanced_environment:
-            from agents.llm_rl_integration import EnhancedLLMTradingEnvironment
+            # Use enhanced LLM environment
             env = EnhancedLLMTradingEnvironment(
                 symbol=symbol,
                 initial_balance=self.config.initial_capital,
                 transaction_cost=self.config.transaction_cost,
                 max_position_size=self.config.position_size_limit
             )
+            env.set_data(data)
         else:
-            from agents.rl_trading_env import LLMTradingEnvironment
-            env = LLMTradingEnvironment(
-                symbol=symbol,
+            # Use realistic trading environment (generates its own data)
+            env = RealisticTradingEnvironment(
+                symbols=[symbol],
                 initial_balance=self.config.initial_capital,
-                transaction_cost=self.config.transaction_cost,
                 max_position_size=self.config.position_size_limit
             )
+            # RealisticTradingEnvironment generates its own market data
+            logger.warning(f"⚠️ Using RealisticTradingEnvironment with synthetic data for {symbol}")
         
-        env.set_data(data)
         return env
     
     async def _run_backtest_simulation(self, agent: RLTradingAgent, env) -> Dict[str, Any]:
@@ -727,6 +738,10 @@ class RLBacktestingFramework:
     
     async def _generate_plots(self, results: BacktestResults, filename: str):
         """Generate visualization plots for backtest results."""
+        
+        if not PLOTTING_AVAILABLE:
+            logger.warning("⚠️ Plotting disabled - matplotlib/seaborn not available")
+            return
         
         # Setup plotting style
         plt.style.use('seaborn-v0_8')
