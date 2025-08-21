@@ -55,6 +55,7 @@ from config.settings import settings  # , get_crypto_pairs
 from core.optimized_market_data_cache import optimized_cache
 from core.enhanced_sentiment_performance import sentiment_performance_manager
 from monitoring.pipeline_performance_monitor import pipeline_monitor
+from utils.daily_summary_scheduler import daily_scheduler, start_daily_summary_service
 # CRYPTO TRADING DISABLED - Comment out for later implementation
 # from core.crypto_data_collector import crypto_collector
 
@@ -177,6 +178,10 @@ class ContinuousRebalancer:
         # Start performance monitoring
         logger.info("📊 Initializing performance monitoring and optimizations...")
         await pipeline_monitor.start_monitoring()
+        
+        # Start daily summary scheduler
+        logger.info("📧 Starting daily summary email scheduler...")
+        asyncio.create_task(start_daily_summary_service())
         
         # Warm critical caches during startup with ETFs only (no hardcoded stocks)
         logger.info("🔥 Warming performance caches...")
@@ -378,6 +383,9 @@ class ContinuousRebalancer:
                     # Execute risk management orders immediately
                     executed_risk_order = await trading_engine._execute_order(risk_order)
                     if executed_risk_order:
+                        # Record trade in daily summary tracker
+                        daily_scheduler.record_trade()
+                        
                         # Add to state for tracking
                         if "executed_orders" not in state:
                             state["executed_orders"] = []
@@ -504,14 +512,19 @@ class ContinuousRebalancer:
                     if symbol and target_weight > 0:
                         target_allocation[symbol] = target_weight
                 
-                # CRITICAL FIX: Add all current positions with 0% weight if not in RL recommendations
+                # CRITICAL FIX: Add ALL current positions with 0% weight if not in RL recommendations
                 # This ensures the portfolio balancer knows to CLOSE/SELL positions not recommended by RL
+                logger.info(f"📊 Checking {len(current_positions)} current positions against RL recommendations...")
+                sell_targets_added = 0
                 for position in current_positions:
                     symbol = position.get("symbol", "")
                     if symbol and symbol not in target_allocation:
                         # Current position not in RL recommendations = should be closed (0% target)
                         target_allocation[symbol] = 0.0
+                        sell_targets_added += 1
                         logger.info(f"🔴 SELL TARGET ADDED: {symbol} = 0% (current position not in RL recommendations)")
+                
+                logger.info(f"✅ Added {sell_targets_added} SELL targets for positions not in RL recommendations")
                 
                 # DEBUG: Log detailed target allocation
                 logger.info(f"🎯 Target allocation: {len(target_allocation)} positions with total weight: {sum(target_allocation.values()):.2%}")
@@ -533,9 +546,10 @@ class ContinuousRebalancer:
                     )
                     
                     # Generate specific rebalancing orders with OCO support
+                    # Prioritize SELL orders by allowing more total orders and sorting by action type
                     rebalancing_decisions = await balancer.generate_rebalancing_orders(
                         position_analyses=position_analyses,
-                        max_orders=25  # Allow more SELL orders for portfolio rebalancing
+                        max_orders=30  # Increased to ensure SELL orders are not limited
                     )
                     
                     logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
@@ -743,6 +757,11 @@ class ContinuousRebalancer:
                 state = await self.workflow.order_management_agent(state, config)
                 post_orders = len(state.get("executed_orders", []))
                 orders_executed = post_orders - pre_orders
+                
+                # Record trades in daily summary tracker
+                for _ in range(orders_executed):
+                    daily_scheduler.record_trade()
+                
                 stage_timings[pipeline_stage] = time.time() - stage_start
             else:
                 logger.info("No signals generated, skipping order management")
@@ -898,10 +917,11 @@ class ContinuousRebalancer:
                         social_posts_count = getattr(sentiment_data, 'social_posts_count', 0)
                         has_social_data = len(social_sentiment) > 0 or social_posts_count > 0
                     
-                    # FIXED: Generate BALANCED signal distribution for proper buy/sell behavior
-                    # Key Issue: Previous logic was heavily biased towards BUY signals
+                    # CRITICAL FIX: Generate truly BALANCED signal distribution for proper buy/sell behavior
+                    # Previous Issue: Thresholds were heavily biased towards BUY signals
+                    # New approach: Symmetric and realistic thresholds for live trading
                     
-                    if overall_score >= 0.15:  # Strong positive sentiment - BUY
+                    if overall_score >= 0.10:  # Lowered from 0.15 - Positive sentiment BUY (more sensitive)
                         signal_strength = min(0.8, max(0.3, overall_score))
                         reasoning_parts = [f"{overall_sentiment.title()} overall sentiment ({overall_score:.2f})"]
                         if has_social_data:
@@ -924,7 +944,7 @@ class ContinuousRebalancer:
                             'source': 'comprehensive_sentiment_with_social'
                         })
                         
-                    elif overall_score <= -0.15:  # Strong negative sentiment - SELL/SHORT
+                    elif overall_score <= -0.10:  # Lowered from -0.15 - Negative sentiment SELL (more sensitive)
                         signal_strength = min(0.8, abs(overall_score))
                         signal_type = 'SHORT' if overall_score <= -0.6 else 'SELL'
                         
@@ -959,7 +979,7 @@ class ContinuousRebalancer:
                             'source': 'comprehensive_sentiment_with_social'
                         })
                         
-                    elif 0.02 <= overall_score < 0.15:  # Moderate positive - cautious BUY
+                    elif 0.02 <= overall_score < 0.10:  # Moderate positive - cautious BUY
                         signal_strength = min(0.5, max(0.2, overall_score * 2))
                         reasoning_parts = [f"Moderate positive sentiment ({overall_score:.2f})"]
                         if has_social_data:
@@ -981,7 +1001,7 @@ class ContinuousRebalancer:
                             'source': 'comprehensive_sentiment_with_social'
                         })
                         
-                    elif -0.15 < overall_score <= -0.02:  # Moderate negative - SELL existing positions
+                    elif -0.10 < overall_score <= -0.02:  # Moderate negative - SELL existing positions
                         signal_strength = min(0.6, max(0.2, abs(overall_score) * 2))
                         reasoning_parts = [f"Moderate negative sentiment ({overall_score:.2f})"]
                         if has_social_data:

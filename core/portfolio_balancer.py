@@ -100,10 +100,10 @@ class IntelligentPortfolioBalancer:
             'stop_loss_percent': settings.stop_loss_percent
         }
         
-        # Rebalancing thresholds
-        self.rebalance_threshold = settings.min_rebalance_threshold
-        self.significant_deviation_threshold = 0.10  # 10%
-        self.critical_deviation_threshold = 0.20     # 20%
+        # Rebalancing thresholds - made more sensitive for better trading
+        self.rebalance_threshold = 0.02  # Lowered from settings default - 2% threshold for action
+        self.significant_deviation_threshold = 0.05  # Lowered from 10% - 5% for high urgency
+        self.critical_deviation_threshold = 0.10     # Lowered from 20% - 10% for critical urgency
         
         # Order execution preferences
         self.prefer_limit_orders = True
@@ -154,8 +154,14 @@ class IntelligentPortfolioBalancer:
                 analysis = await self._analyze_position_to_close(symbol, pos_data, portfolio_value)
                 analyses.append(analysis)
         
-        # Sort by urgency and deviation size
-        analyses.sort(key=lambda x: (x.urgency.value, abs(x.deviation)), reverse=True)
+        # Sort by priority: SELL/CLOSE orders first (for risk management), then by urgency and deviation
+        def sort_priority(analysis):
+            # Priority score: SELL/CLOSE orders get highest priority (0), then by urgency, then deviation
+            action_priority = 0 if analysis.action_needed in [PositionAction.SELL, PositionAction.CLOSE, PositionAction.REDUCE] else 1
+            urgency_score = {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(analysis.urgency.value, 4)
+            return (action_priority, urgency_score, -abs(analysis.deviation))
+        
+        analyses.sort(key=sort_priority)
         
         logger.info(f"📊 Portfolio analysis complete: {len(analyses)} positions analyzed")
         return analyses

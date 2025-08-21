@@ -733,15 +733,32 @@ class AlpacaClient:
                     # Continue without buying power check - let Alpaca API handle it
             
             elif side.lower() in ["sell", "sell_short"]:
-                # SELL orders should always be allowed - they free up cash and don't require buying power
-                logger.info(f"Allowing {side} order for {symbol} - selling frees up capital for balanced trading")
-                return True
+                # For SELL orders, validate that we actually own the shares
+                try:
+                    positions = self.get_positions()
+                    available_qty = 0
+                    
+                    for position in positions:
+                        if position.get("symbol") == symbol:
+                            available_qty = abs(float(position.get("qty", 0)))
+                            break
+                    
+                    if available_qty == 0:
+                        logger.warning(f"❌ Cannot sell {symbol}: No shares owned (position: {available_qty})")
+                        return False
+                    elif available_qty < qty:
+                        logger.warning(f"⚠️ Insufficient shares for {symbol}: requested {qty}, available {available_qty}")
+                        return False
+                    else:
+                        logger.info(f"✅ Sell validation passed for {symbol}: {qty} shares (available: {available_qty})")
+                        return True
+                        
+                except Exception as e:
+                    logger.error(f"Failed to validate position for sell order {symbol}: {e}")
+                    return False
             
             # Check position size limits - more flexible for balanced trading
-            # Skip position size checks for SELL orders - they reduce risk, not increase it
-            if side.lower() in ["sell", "sell_short"]:
-                logger.info(f"Skipping position size check for {side} order - selling reduces portfolio risk")
-                return True
+            # Note: SELL orders are already validated above for position availability
                 
             portfolio_value = account["portfolio_value"]
             if portfolio_value > 0:

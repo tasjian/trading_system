@@ -476,7 +476,7 @@ class EmailWebhookNotifier:
         """Generate daily summary email subject and HTML body."""
         
         # Generate subject
-        subject = "Trading_system daily summary"
+        subject = "algoTrader daily summary"
         
         # Determine performance color and emoji
         if summary.day_change > 0:

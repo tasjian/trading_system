@@ -1,6 +1,6 @@
 #!/bin/bash
-# Stop the ML4T Trading System
-# This script gracefully shuts down the continuous rebalancer
+# Enhanced ML4T Trading System Stop Script
+# Gracefully shuts down all trading system components
 
 set -e  # Exit on any error
 
@@ -8,7 +8,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$SCRIPT_DIR/trading_system.pid"
 LOG_FILE="$SCRIPT_DIR/logs/continuous_rebalancer.log"
 
-echo "🛑 Stopping ML4T Trading System..."
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+echo -e "${CYAN}🛑 Stopping Enhanced ML4T Trading System${NC}"
+echo -e "${CYAN}==========================================${NC}"
 
 # Check if PID file exists
 if [ ! -f "$PID_FILE" ]; then
@@ -73,7 +83,8 @@ for i in {1..30}; do
         fi
         
         echo ""
-        echo "✅ Trading system stopped successfully"
+        echo -e "${GREEN}✅ Enhanced ML4T Trading System stopped successfully${NC}"
+        echo -e "${BLUE}   All components gracefully shut down${NC}"
         exit 0
     fi
     sleep 1
@@ -96,5 +107,5 @@ else
     rm -f "$PID_FILE"
     echo "🧹 PID file cleaned up"
     echo ""
-    echo "✅ Trading system stopped successfully"
+    echo -e "${GREEN}✅ Enhanced ML4T Trading System stopped successfully${NC}"
 fi
