@@ -148,46 +148,28 @@ class AlpacaMarketData:
     def get_price_change_signals(self, symbols: List[str], 
                                 threshold: float = 0.02) -> List[Dict]:
         """
-        Get price change signals using Alpaca REAL-TIME data (paper trading compatible).
-        Uses current price vs previous close from quote data instead of historical bars.
+        Get price change signals using Alpaca snapshot data with real previous close prices.
+        Uses get_snapshot() API which provides prev_daily_bar for accurate price change calculation.
         
         Args:
             symbols: List of symbols to analyze
             threshold: Minimum price change threshold (default 2%)
             
         Returns:
-            List of signal dictionaries
+            List of signal dictionaries with real market-based price changes
         """
         signals = []
         
         for symbol in symbols:
             try:
-                # Use real-time quote data instead of historical bars (paper trading compatible)
-                quote = self.api.get_latest_trade(symbol)
+                # Get snapshot data which includes current price AND previous daily bar
+                snapshot = self.api.get_snapshot(symbol)
                 
-                if quote and hasattr(quote, 'price'):
-                    curr_price = float(quote.price)
+                if snapshot and snapshot.latest_trade and snapshot.prev_daily_bar:
+                    curr_price = float(snapshot.latest_trade.price)
+                    prev_close = float(snapshot.prev_daily_bar.close)
                     
-                    # Use quote data for previous close - no historical bars needed
-                    # For paper trading, we'll use simplified price change detection
-                    try:
-                        # Get latest quote which includes prev_close
-                        latest_quote = self.api.get_latest_quote(symbol)
-                        
-                        if latest_quote and hasattr(latest_quote, 'bid_price') and latest_quote.bid_price > 0:
-                            # Use bid price as baseline for change calculation
-                            prev_close = float(latest_quote.bid_price)
-                        else:
-                            # Fallback: assume 1% baseline change to detect movement
-                            prev_close = curr_price * 0.99  # Simulate previous close
-                            logger.debug(f"Using simulated previous close for {symbol}")
-                    
-                    except Exception as e:
-                        # Use current price with small offset as fallback
-                        prev_close = curr_price * 0.99  # Assume 1% previous difference
-                        logger.debug(f"Using fallback price calculation for {symbol}: {e}")
-                    
-                    # Calculate price change
+                    # Calculate real price change using actual market data
                     if prev_close > 0:
                         price_change = (curr_price - prev_close) / prev_close
                         
@@ -195,6 +177,9 @@ class AlpacaMarketData:
                         if abs(price_change) >= threshold:
                             strength = min(1.0, abs(price_change) / 0.1)  # Scale to 0-1
                             direction = "up" if price_change > 0 else "down"
+                            
+                            # High confidence for real market data
+                            confidence = min(0.95, 0.7 + (strength * 0.25))  # Range: 0.7-0.95
                             
                             signals.append({
                                 "symbol": symbol,
@@ -204,19 +189,27 @@ class AlpacaMarketData:
                                 "description": f"{direction} {price_change:.1%}",
                                 "current_price": curr_price,
                                 "previous_close": prev_close,
-                                "data_source": "alpaca_realtime"
+                                "confidence": confidence,
+                                "data_source": "alpaca_snapshot",
+                                "prev_bar_timestamp": snapshot.prev_daily_bar.timestamp.strftime('%Y-%m-%d')
                             })
                             
-                            logger.debug(f"📈 Signal: {symbol} {direction} {price_change:.1%}")
+                            logger.debug(f"📈 Signal: {symbol} {direction} {price_change:.1%} (${curr_price:.2f} from ${prev_close:.2f})")
+                
+                elif snapshot and snapshot.latest_trade:
+                    # Fallback: no previous daily bar available
+                    logger.debug(f"⚠️ No previous daily bar for {symbol}, skipping price signal")
+                    
+                else:
+                    logger.debug(f"⚠️ No snapshot data available for {symbol}")
                 
             except Exception as e:
-                # Log error but continue with other symbols to allow trading
                 logger.warning(f"⚠️ Price signal generation failed for {symbol}: {e}. Skipping symbol and continuing.")
                 
-            # Rate limiting for paper trading
-            time.sleep(0.05)  # Faster rate for real-time quotes
+            # Rate limiting for API requests
+            time.sleep(0.05)
         
-        logger.info(f"🎯 Generated {len(signals)} real-time price signals from {len(symbols)} symbols")
+        logger.info(f"🎯 Generated {len(signals)} real market-based price signals from {len(symbols)} symbols using Alpaca snapshots")
         return signals
     
     def get_price_signals(self, symbols: List[str], threshold: float = 0.02) -> List[Dict]:
