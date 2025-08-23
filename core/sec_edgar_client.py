@@ -107,16 +107,15 @@ class SECEdgarClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=15, connect=5)  # Reduced timeout
             connector = aiohttp.TCPConnector(
                 limit=10, 
                 limit_per_host=5,
                 ttl_dns_cache=300,  # DNS cache
                 use_dns_cache=True
             )
+            # Don't set default timeout to avoid conflicts
             self._session = aiohttp.ClientSession(
                 headers=self.headers,
-                timeout=timeout,
                 connector=connector
             )
         return self._session
@@ -127,7 +126,8 @@ class SECEdgarClient:
         
         try:
             session = await self._get_session()
-            async with session.get(url, **kwargs) as response:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with session.get(url, timeout=timeout, **kwargs) as response:
                 if response.status == 200:
                     content_type = response.headers.get('content-type', '')
                     if 'application/json' in content_type:

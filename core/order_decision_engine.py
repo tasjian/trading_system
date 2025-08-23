@@ -34,6 +34,12 @@ from order_types.advanced_orders import (
 from monitoring.portfolio_monitoring import portfolio_monitor
 from config.settings import settings
 
+# Enhanced Short-Selling Modules
+from core.enhanced_short_signal_engine import enhanced_short_signal_engine, EnhancedShortSignal
+from core.borrow_cost_monitor import borrow_cost_monitor, ShortabilityAnalysis
+from core.short_risk_manager import short_risk_manager, SqueezeRiskMetrics
+from core.enhanced_position_sizer import enhanced_position_sizer, EnhancedPositionSize
+
 logger = logging.getLogger(__name__)
 
 class MarketRegime(Enum):
@@ -47,6 +53,7 @@ class OrderDecisionType(Enum):
     BUY_NEW = "buy_new"           # New long position
     SELL_CLOSE = "sell_close"     # Close long position
     SELL_SHORT = "sell_short"     # Open short position
+    ENHANCED_SHORT = "enhanced_short"  # Enhanced short with comprehensive analysis
     BUY_COVER = "buy_cover"       # Close short position
     REBALANCE_UP = "rebalance_up" # Increase position size
     REBALANCE_DOWN = "rebalance_down" # Decrease position size
@@ -81,6 +88,14 @@ class OrderDecision:
     reasoning: str = ""
     priority: int = 5  # 1-10, higher = more urgent
     estimated_impact: float = 0.0  # Portfolio impact percentage
+    
+    # Enhanced short-selling fields
+    enhanced_short_signal: Optional[EnhancedShortSignal] = None
+    shortability_analysis: Optional[ShortabilityAnalysis] = None
+    squeeze_risk_metrics: Optional[SqueezeRiskMetrics] = None
+    enhanced_position_size: Optional[EnhancedPositionSize] = None
+    borrow_cost_validated: bool = False
+    ssr_compliant: bool = True
 
 class OrderDecisionEngine:
     """Intelligent order decision engine for portfolio balancing."""
@@ -185,6 +200,156 @@ class OrderDecisionEngine:
         except Exception as e:
             logger.error(f"Error in order decision analysis for {symbol}: {e}")
             return []
+    
+    async def analyze_enhanced_short_opportunity(self, symbol: str, 
+                                               current_portfolio: Dict) -> Optional[OrderDecision]:
+        """
+        Comprehensive enhanced short opportunity analysis using all short-selling modules.
+        
+        Args:
+            symbol: Symbol to analyze for short opportunities
+            current_portfolio: Current portfolio state
+            
+        Returns:
+            Enhanced short order decision if opportunity found, None otherwise
+        """
+        try:
+            logger.info(f"Analyzing enhanced short opportunity for {symbol}")
+            
+            # Check basic eligibility
+            if not self._can_trade_symbol(symbol):
+                logger.debug(f"Symbol {symbol} not eligible for trading (anti-overtrading)")
+                return None
+            
+            # Step 1: Generate enhanced short signals
+            short_signals = await enhanced_short_signal_engine.generate_enhanced_short_signals([symbol], max_signals=1)
+            
+            if not short_signals:
+                logger.debug(f"No enhanced short signals generated for {symbol}")
+                return None
+            
+            enhanced_signal = short_signals[0]
+            
+            # Only proceed with SHORT or WEAK_SHORT signals
+            if enhanced_signal.signal_type not in ['SHORT', 'WEAK_SHORT']:
+                logger.debug(f"Enhanced signal type {enhanced_signal.signal_type} not suitable for shorting")
+                return None
+            
+            # Step 2: Analyze shortability (borrow costs, availability, SSR compliance)
+            shortability_analysis = await borrow_cost_monitor.get_borrow_cost_analysis(symbol)
+            
+            if not shortability_analysis:
+                logger.warning(f"Could not obtain shortability analysis for {symbol}")
+                return None
+            
+            # Check if shortability score is acceptable
+            if shortability_analysis.shortability_score < 40:  # Below 40/100
+                logger.info(f"Low shortability score for {symbol}: {shortability_analysis.shortability_score:.1f}/100")
+                return None
+            
+            # Step 3: Assess squeeze risk
+            squeeze_risk = await short_risk_manager.squeeze_analyzer.assess_squeeze_risk(symbol)
+            
+            # High squeeze risk should be avoided
+            if squeeze_risk.squeeze_risk_score > 75:  # Above 75/100
+                logger.info(f"High squeeze risk for {symbol}: {squeeze_risk.squeeze_risk_score:.1f}/100")
+                return None
+            
+            # Step 4: Calculate enhanced position size
+            enhanced_position_size = await enhanced_position_sizer.calculate_enhanced_position_size(
+                symbol, enhanced_signal, current_portfolio
+            )
+            
+            # Check if position size is viable
+            if enhanced_position_size.recommended_size < enhanced_position_size.min_size:
+                logger.debug(f"Recommended position size too small for {symbol}")
+                return None
+            
+            # Step 5: Validate the trade comprehensively
+            trade_valid, validation_message, validation_details = await short_risk_manager.validate_short_trade(
+                symbol, 
+                int(enhanced_position_size.recommended_size * current_portfolio.get('equity', 100000) / (enhanced_signal.technical_indicators.get('current_price', 100) or 100)),
+                current_portfolio
+            )
+            
+            if not trade_valid:
+                logger.info(f"Short trade validation failed for {symbol}: {validation_message}")
+                return None
+            
+            # Step 6: Validate borrow costs and SSR compliance
+            current_price = alpaca_client.get_current_price(symbol) or enhanced_signal.technical_indicators.get('current_price', 100)
+            quantity = int(enhanced_position_size.recommended_size * current_portfolio.get('equity', 100000) / current_price)
+            
+            borrow_valid, borrow_message, borrow_details = await borrow_cost_monitor.validate_short_trade(
+                symbol, quantity, current_price
+            )
+            
+            if not borrow_valid:
+                logger.info(f"Borrow cost validation failed for {symbol}: {borrow_message}")
+                return None
+            
+            # Step 7: Create enhanced order decision
+            # Determine order type based on signal urgency and market conditions
+            if enhanced_signal.signal_strength > 0.8 and squeeze_risk.squeeze_risk_score < 30:
+                order_type = "market"  # High conviction, low squeeze risk
+                limit_price = None
+                priority = 8
+            elif enhanced_signal.signal_strength > 0.6:
+                order_type = "limit"
+                limit_price = current_price * 1.002  # Slight premium for execution
+                priority = 7
+            else:
+                order_type = "limit"
+                limit_price = current_price * 1.005  # Conservative limit
+                priority = 6
+            
+            # Calculate stop loss and take profit from enhanced position size
+            stop_loss_price = enhanced_position_size.stop_loss_level
+            take_profit_price = enhanced_position_size.take_profit_level
+            
+            # Create comprehensive reasoning
+            reasoning_parts = [
+                f"Enhanced short analysis: {enhanced_signal.reasoning}",
+                f"Shortability score: {shortability_analysis.shortability_score:.1f}/100",
+                f"Squeeze risk: {squeeze_risk.squeeze_risk_score:.1f}/100",
+                f"Position sizing: {enhanced_position_size.primary_method} method",
+                f"Borrow cost: {shortability_analysis.borrow_cost.borrow_fee_rate:.1%} annually" if shortability_analysis.borrow_cost else "",
+                f"Confidence: {enhanced_position_size.confidence_score:.1%}"
+            ]
+            reasoning = " | ".join([part for part in reasoning_parts if part])
+            
+            # Create the enhanced order decision
+            decision = OrderDecision(
+                decision_type=OrderDecisionType.ENHANCED_SHORT,
+                order_side="sell_short",
+                order_type=order_type,
+                quantity=float(quantity),
+                limit_price=limit_price,
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                confidence=enhanced_position_size.confidence_score,
+                reasoning=reasoning,
+                priority=priority,
+                estimated_impact=enhanced_position_size.recommended_size,
+                
+                # Enhanced short-selling fields
+                enhanced_short_signal=enhanced_signal,
+                shortability_analysis=shortability_analysis,
+                squeeze_risk_metrics=squeeze_risk,
+                enhanced_position_size=enhanced_position_size,
+                borrow_cost_validated=borrow_valid,
+                ssr_compliant=shortability_analysis.ssr_status.ssr_active if shortability_analysis.ssr_status else True
+            )
+            
+            logger.info(f"✅ Enhanced short opportunity identified for {symbol}: {quantity} shares @ {order_type}")
+            logger.info(f"   Signal strength: {enhanced_signal.signal_strength:.1%}, Shortability: {shortability_analysis.shortability_score:.0f}/100")
+            logger.info(f"   Position size: {enhanced_position_size.recommended_size:.1%}, Risk level: {shortability_analysis.risk_level}")
+            
+            return decision
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced short analysis for {symbol}: {e}")
+            return None
     
     async def _get_position_context(self, symbol: str, current_portfolio: Dict) -> Optional[PositionContext]:
         """Get context about existing position."""
@@ -832,6 +997,10 @@ async def analyze_and_decide_orders(symbol: str, signal_data: Dict,
 async def execute_order_decisions(decisions: List[OrderDecision], symbol: str) -> List[Dict]:
     """Execute order decisions."""
     return await order_decision_engine.execute_decisions(decisions, symbol)
+
+async def analyze_enhanced_short_opportunity(symbol: str, current_portfolio: Dict) -> Optional[OrderDecision]:
+    """Analyze enhanced short opportunity for a symbol."""
+    return await order_decision_engine.analyze_enhanced_short_opportunity(symbol, current_portfolio)
 
 def get_decision_engine_status() -> Dict[str, Any]:
     """Get order decision engine status."""

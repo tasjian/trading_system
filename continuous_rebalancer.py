@@ -418,6 +418,10 @@ class ContinuousRebalancer:
             pipeline_stage = "signal_generation"
             stage_start = time.time()
             logger.info("🎯 Converting Hybrid Portfolio Decisions to Trading Signals...")
+            
+            # Enhanced Short-Selling Intelligence Integration
+            await self._integrate_enhanced_short_analysis(state, config)
+            
             pre_signals = len(state.get("signals", []))
             
             # Check if hybrid system generated allocations
@@ -1336,6 +1340,133 @@ class ContinuousRebalancer:
             logger.error(f"Failed to prepare market data for FinRL: {e}")
             return state
     
+    
+    async def _integrate_enhanced_short_analysis(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Integrate Enhanced Short-Selling Intelligence into the trading pipeline.
+        
+        This method analyzes the current market conditions and filtered symbols to identify
+        high-conviction short selling opportunities using the comprehensive short analysis framework.
+        """
+        try:
+            logger.info("🎯 Integrating Enhanced Short-Selling Intelligence...")
+            
+            # Get current portfolio and filtered symbols
+            current_portfolio = state.get("portfolio", {})
+            filtered_symbols = state.get("filtered_symbols", [])
+            sentiment_data = state.get("sentiment_data", {})
+            
+            if not filtered_symbols:
+                logger.debug("No filtered symbols available for enhanced short analysis")
+                return state
+            
+            # Import enhanced short analysis
+            from core.order_decision_engine import analyze_enhanced_short_opportunity
+            from agents.state import TradingSignal, add_signal_to_state
+            
+            # Analyze top symbols for short opportunities
+            # Focus on top candidates to avoid overanalysis
+            max_symbols_to_analyze = min(20, len(filtered_symbols))
+            symbols_to_analyze = filtered_symbols[:max_symbols_to_analyze]
+            
+            logger.info(f"📊 Analyzing {len(symbols_to_analyze)} symbols for enhanced short opportunities...")
+            
+            enhanced_short_decisions = []
+            short_opportunities_found = 0
+            
+            # Analyze symbols in parallel for efficiency
+            import asyncio
+            async def analyze_symbol_for_short(symbol):
+                try:
+                    # Add sentiment context to the analysis
+                    symbol_sentiment = sentiment_data.get(symbol, {})
+                    
+                    # Only analyze symbols with negative sentiment indicators for shorting
+                    if isinstance(symbol_sentiment, dict):
+                        sentiment_score = symbol_sentiment.get('overall_score', 0.0)
+                        # Focus on negative sentiment for short opportunities
+                        if sentiment_score > -0.05:  # Skip if not sufficiently negative
+                            return None
+                    
+                    decision = await analyze_enhanced_short_opportunity(symbol, current_portfolio)
+                    return decision
+                except Exception as e:
+                    logger.debug(f"Error analyzing {symbol} for enhanced short: {e}")
+                    return None
+            
+            # Execute analysis in parallel with limited concurrency
+            semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent analyses
+            
+            async def bounded_analyze(symbol):
+                async with semaphore:
+                    return await analyze_symbol_for_short(symbol)
+            
+            # Run analyses in parallel
+            analysis_tasks = [bounded_analyze(symbol) for symbol in symbols_to_analyze]
+            analysis_results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+            
+            # Process results and convert to trading signals
+            for symbol, result in zip(symbols_to_analyze, analysis_results):
+                if isinstance(result, Exception):
+                    logger.debug(f"Enhanced short analysis failed for {symbol}: {result}")
+                    continue
+                
+                if result and result.decision_type.value == "enhanced_short":
+                    enhanced_short_decisions.append(result)
+                    short_opportunities_found += 1
+                    
+                    # Convert to TradingSignal for compatibility with existing pipeline
+                    trading_signal = TradingSignal(
+                        symbol=symbol,
+                        action="sell_short",  # Enhanced short action
+                        confidence=result.confidence,
+                        quantity=result.quantity,
+                        reasoning=f"Enhanced Short Analysis: {result.reasoning[:200]}..."
+                    )
+                    
+                    # Add enhanced metadata
+                    if hasattr(trading_signal, 'metadata'):
+                        trading_signal.metadata = {
+                            'enhanced_short': True,
+                            'signal_strength': result.enhanced_short_signal.signal_strength if result.enhanced_short_signal else 0.7,
+                            'shortability_score': result.shortability_analysis.shortability_score if result.shortability_analysis else 50,
+                            'squeeze_risk_score': result.squeeze_risk_metrics.squeeze_risk_score if result.squeeze_risk_metrics else 50,
+                            'position_size_method': result.enhanced_position_size.primary_method if result.enhanced_position_size else 'conservative',
+                            'borrow_cost_validated': result.borrow_cost_validated,
+                            'ssr_compliant': result.ssr_compliant
+                        }
+                    
+                    # Add to state signals
+                    state = add_signal_to_state(state, trading_signal)
+                    
+                    logger.info(f"🎯 Enhanced short opportunity: {symbol} - {result.reasoning[:100]}...")
+            
+            # Store enhanced short decisions in state for order management
+            if enhanced_short_decisions:
+                if "enhanced_short_decisions" not in state:
+                    state["enhanced_short_decisions"] = []
+                state["enhanced_short_decisions"].extend(enhanced_short_decisions)
+            
+            # Log summary
+            if short_opportunities_found > 0:
+                logger.info(f"✅ Enhanced Short Intelligence: Found {short_opportunities_found} high-conviction short opportunities")
+                
+                # Log top opportunities
+                for decision in enhanced_short_decisions[:3]:  # Top 3
+                    symbol = decision.enhanced_short_signal.symbol if decision.enhanced_short_signal else "Unknown"
+                    strength = decision.enhanced_short_signal.signal_strength if decision.enhanced_short_signal else 0
+                    shortability = decision.shortability_analysis.shortability_score if decision.shortability_analysis else 0
+                    logger.info(f"   🎯 {symbol}: Signal {strength:.1%}, Shortability {shortability:.0f}/100")
+            else:
+                logger.info("📊 Enhanced Short Intelligence: No high-conviction short opportunities identified")
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced short analysis integration: {e}")
+            import traceback
+            traceback.print_exc()
+            return state
     
     async def _run_hybrid_portfolio_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """

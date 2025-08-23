@@ -196,6 +196,7 @@ class TradingSettings(BaseSettings):
     
     # Data Sources - Multiple API Keys for Enhanced Data Aggregation
     alpha_vantage_api_key: Optional[str] = Field(default=None, env="ALPHA_VANTAGE_API_KEY")
+    iex_api_key: Optional[str] = Field(default=None, env="IEX_API_KEY")  # IEX Cloud for enhanced short-selling data
     finnhub_api_key: Optional[str] = Field(default=None, env="FINNHUB_API_KEY")
     fmp_api_key: Optional[str] = Field(default=None, env="FMP_API_KEY")  # Financial Modeling Prep
     nasdaq_api_key: Optional[str] = Field(default=None, env="NASDAQ_API_KEY")  # Nasdaq Data Link

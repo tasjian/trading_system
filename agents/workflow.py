@@ -234,7 +234,47 @@ class TradingWorkflow:
         except Exception as e:
             error_msg = f"Universe Filter Agent error: {e}"
             logger.error(error_msg)
-            return add_error_to_state(state, error_msg)
+            
+            # FALLBACK: Use existing positions if external data sources fail
+            if "CRITICAL SYSTEM FAILURE" in str(e) and ("All external data sources" in str(e) or "Universe filtering failed" in str(e)):
+                logger.warning("🔄 FALLBACK: External data sources failed, using existing portfolio positions")
+                
+                try:
+                    # Get existing positions from state or Alpaca
+                    current_positions = list(state.get("portfolio", {}).get("positions", {}).keys())
+                    watchlist_symbols = state.get("watchlist", [])
+                    
+                    if not current_positions:
+                        # Get from Alpaca if state is empty
+                        from tools.alpaca_client import AlpacaClient
+                        alpaca_client = AlpacaClient()
+                        positions = alpaca_client.get_positions()
+                        current_positions = [pos['symbol'] for pos in positions if float(pos['qty']) != 0]
+                    
+                    # Add some high-volume ETFs as backup
+                    backup_symbols = ['SPY', 'QQQ', 'IWM', 'VTI', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA']
+                    
+                    # Combine all symbols
+                    fallback_symbols = list(set(current_positions + watchlist_symbols + backup_symbols))
+                    
+                    # Update state with fallback symbols
+                    state["filtered_symbols"] = fallback_symbols[:100]  # Limit to 100
+                    state["universe_filter_result"] = {
+                        "total_symbols": len(fallback_symbols),
+                        "filtered_symbols": fallback_symbols,
+                        "filter_summary": "FALLBACK: External data sources failed",
+                        "processing_time": 0.1
+                    }
+                    state["current_agent"] = "universe_filter"
+                    
+                    logger.info(f"🔄 FALLBACK SUCCESS: Using {len(fallback_symbols)} symbols from existing positions + backup")
+                    return update_state_timestamp(state)
+                    
+                except Exception as fallback_error:
+                    logger.error(f"❌ Fallback also failed: {fallback_error}")
+                    return add_error_to_state(state, f"Both universe filtering and fallback failed: {e}")
+            else:
+                return add_error_to_state(state, error_msg)
     
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze comprehensive sentiment for pre-filtered stocks using enhanced sentiment engine."""

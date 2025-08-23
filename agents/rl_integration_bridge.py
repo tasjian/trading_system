@@ -682,11 +682,11 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
         # STEP 4: Intelligent Rebalancing Logic with Sector Constraints
         logger.info("⚖️ Step 4: Intelligent Rebalancing - Preventing Over-Trading")
         
-        # Calculate rebalancing thresholds
-        rebalancing_threshold = 0.05  # 5% deviation triggers rebalancing
-        min_trade_size = portfolio_value * 0.005  # Minimum $500 trade size
-        max_single_position = 0.08  # Max 8% per position
-        max_sector_allocation = 0.25  # Max 25% per sector
+        # Calculate rebalancing thresholds - ENHANCED FOR MORE AGGRESSIVE TRADING
+        rebalancing_threshold = 0.015  # 1.5% deviation triggers rebalancing (was 5%)
+        min_trade_size = portfolio_value * 0.002  # Minimum $200 trade size (was $500)
+        max_single_position = 0.15  # Max 15% per position (was 8%)
+        max_sector_allocation = 0.35  # Max 35% per sector (was 25%)
         
         # Apply sector concentration limits
         sector_allocations = {}
@@ -756,8 +756,20 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
             needs_rebalancing = True
             rebalance_reasons.extend(overweight_positions[:2])  # Add top 2 overweight positions
         
+        # FORCE REBALANCING: Check if we've been idle too long
+        force_rebalancing = False
+        try:
+            # Force rebalancing if no real trades in last 2 hours 
+            from datetime import datetime
+            last_real_trade_time = getattr(self, 'last_real_trade_time', None)
+            if last_real_trade_time is None or (datetime.now() - last_real_trade_time).seconds > 7200:  # 2 hours
+                force_rebalancing = True
+                logger.info("🚀 FORCE REBALANCING: No real trades in 2+ hours, forcing active trading")
+        except:
+            pass
+        
         # Only proceed with rebalancing if significant changes are needed
-        if not needs_rebalancing and len(current_positions) > 5:  # Allow rebalancing if portfolio too small
+        if not needs_rebalancing and len(current_positions) > 20 and not force_rebalancing:  # Allow rebalancing if portfolio too small (was 5, now 20)
             logger.info("🔒 No significant rebalancing needed - maintaining current positions")
             return {
                 'rl_decisions': {

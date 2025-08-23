@@ -163,8 +163,8 @@ class FinnhubProvider:
     async def _get_session(self):
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=10)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            # Create session without default timeout to avoid conflicts
+            self._session = aiohttp.ClientSession()
         return self._session
     
     async def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
@@ -261,8 +261,8 @@ class AlphaVantageProvider:
     async def _get_session(self):
         """Get or create aiohttp session."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=30)  # Longer timeout for AV
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            # Create session without default timeout to avoid conflicts
+            self._session = aiohttp.ClientSession()
         return self._session
     
     async def _make_request(self, params: Dict) -> Optional[Dict]:
@@ -364,9 +364,8 @@ class SECEdgarProvider:
     async def _get_session(self):
         """Get or create aiohttp session with SEC headers."""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=15)
+            # Create session without default timeout to avoid conflicts
             self._session = aiohttp.ClientSession(
-                timeout=timeout,
                 headers=self.headers
             )
         return self._session
