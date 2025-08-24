@@ -1,9 +1,9 @@
-"""Secure Alpaca API client with comprehensive trading functionality."""
+"""Secure Alpaca API client with comprehensive trading functionality and tax-loss harvesting support."""
 
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
 from decimal import Decimal
 
 import alpaca_trade_api as tradeapi
@@ -1177,6 +1177,324 @@ class AlpacaClient:
             logger.error(f"Error in enhanced short selling validation for {symbol}: {e}")
             # Return True to allow fallback to basic validation
             return True
+    
+    # Tax-Loss Harvesting Enhancement Methods
+    
+    def place_lot_specific_order(self, 
+                               symbol: str, 
+                               qty: float, 
+                               side: str,
+                               lot_ids: Optional[List[str]] = None,
+                               lot_accounting_method: Optional[str] = None,
+                               **kwargs) -> Dict:
+        """
+        Place an order with specific lot identification for tax purposes.
+        
+        Args:
+            symbol: Stock symbol
+            qty: Quantity to trade
+            side: "buy" or "sell"
+            lot_ids: Specific lot IDs to sell (for tax-loss harvesting)
+            lot_accounting_method: "FIFO", "LIFO", "HIFO", "LOFO", or "SPECIFIC_ID"
+            **kwargs: Additional order parameters
+            
+        Returns:
+            Order result with lot tracking information
+        """
+        try:
+            logger.info(f"🎯 Placing lot-specific order: {side} {qty} {symbol}")
+            
+            if lot_ids:
+                logger.info(f"   Using specific lots: {lot_ids}")
+            if lot_accounting_method:
+                logger.info(f"   Accounting method: {lot_accounting_method}")
+            
+            # Place the order through normal channels
+            # Note: Alpaca paper trading doesn't support true lot-specific orders,
+            # but we simulate the functionality for tax tracking
+            order_result = self.place_order(symbol, qty, side, **kwargs)
+            
+            # Enhance the result with tax information
+            order_result.update({
+                "lot_specific": True,
+                "lot_ids_specified": lot_ids or [],
+                "lot_accounting_method": lot_accounting_method,
+                "tax_optimized": True,
+                "is_tax_loss_harvest": side.lower() == "sell" and lot_accounting_method == "HIFO"
+            })
+            
+            logger.info(f"✅ Lot-specific order placed: {order_result['id']}")
+            return order_result
+            
+        except Exception as e:
+            logger.error(f"Error placing lot-specific order: {e}")
+            raise
+    
+    def get_cost_basis_information(self, symbol: str) -> Dict:
+        """
+        Get cost basis information for tax reporting.
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            Dict with cost basis details
+        """
+        try:
+            positions = self.get_positions()
+            position = next((p for p in positions if p["symbol"] == symbol), None)
+            
+            if not position:
+                return {
+                    "symbol": symbol,
+                    "has_position": False,
+                    "cost_basis": 0.0,
+                    "current_value": 0.0,
+                    "unrealized_pnl": 0.0
+                }
+            
+            # In a real implementation, this would integrate with lot_tracking.py
+            # to provide detailed lot-level cost basis information
+            return {
+                "symbol": symbol,
+                "has_position": True,
+                "quantity": position["qty"],
+                "cost_basis": position["cost_basis"],
+                "current_value": position["market_value"],
+                "unrealized_pnl": position["unrealized_pl"],
+                "unrealized_pnl_percent": position["unrealized_plpc"],
+                "current_price": position["current_price"],
+                "avg_cost_per_share": position["cost_basis"] / max(abs(position["qty"]), 1),
+                "tax_status": "long_term" if abs(position["qty"]) > 0 else "n/a"  # Simplified
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting cost basis for {symbol}: {e}")
+            return {"symbol": symbol, "error": str(e)}
+    
+    def get_tax_lot_details(self, symbol: str) -> List[Dict]:
+        """
+        Get detailed tax lot information for a position.
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            List of tax lot dictionaries
+        """
+        try:
+            # Note: Alpaca paper trading doesn't provide lot-level detail
+            # In a real implementation, this would integrate with lot_tracking.py
+            position_info = self.get_cost_basis_information(symbol)
+            
+            if not position_info.get("has_position"):
+                return []
+            
+            # Simulate lot information for tax purposes
+            # In practice, this would come from the lot_tracking system
+            return [{
+                "lot_id": f"{symbol}_simulated_lot",
+                "symbol": symbol,
+                "quantity": position_info["quantity"],
+                "acquisition_date": datetime.now() - timedelta(days=180),  # Simulate 6 months ago
+                "cost_basis_per_share": position_info["avg_cost_per_share"],
+                "total_cost_basis": position_info["cost_basis"],
+                "current_price": position_info["current_price"],
+                "unrealized_pnl": position_info["unrealized_pnl"],
+                "is_long_term": True,  # Simulate long-term holding
+                "wash_sale_adjusted": False
+            }]
+            
+        except Exception as e:
+            logger.error(f"Error getting tax lot details for {symbol}: {e}")
+            return []
+    
+    def calculate_tax_impact(self, 
+                           symbol: str, 
+                           quantity: float,
+                           accounting_method: str = "HIFO") -> Dict:
+        """
+        Calculate tax impact of a potential sale.
+        
+        Args:
+            symbol: Stock symbol
+            quantity: Quantity to sell
+            accounting_method: Lot accounting method
+            
+        Returns:
+            Dict with tax impact analysis
+        """
+        try:
+            logger.info(f"📊 Calculating tax impact for {symbol}: sell {quantity} shares ({accounting_method})")
+            
+            position_info = self.get_cost_basis_information(symbol)
+            if not position_info.get("has_position"):
+                return {
+                    "symbol": symbol,
+                    "error": "No position found",
+                    "can_sell": False
+                }
+            
+            current_price = position_info["current_price"]
+            avg_cost = position_info["avg_cost_per_share"]
+            available_quantity = abs(position_info["quantity"])
+            
+            if quantity > available_quantity:
+                return {
+                    "symbol": symbol,
+                    "error": f"Insufficient shares: {quantity} requested, {available_quantity} available",
+                    "can_sell": False
+                }
+            
+            # Calculate gain/loss
+            proceeds = quantity * current_price
+            cost_basis = quantity * avg_cost
+            gain_loss = proceeds - cost_basis
+            
+            # Determine tax classification (simplified)
+            is_loss = gain_loss < 0
+            is_long_term = True  # Simplified assumption
+            
+            # Estimate tax impact (simplified calculation)
+            tax_rate = 0.20 if is_long_term else 0.32  # Long-term vs short-term rates
+            tax_impact = gain_loss * tax_rate if gain_loss > 0 else abs(gain_loss) * tax_rate
+            
+            return {
+                "symbol": symbol,
+                "quantity_to_sell": quantity,
+                "available_quantity": available_quantity,
+                "current_price": current_price,
+                "avg_cost_basis": avg_cost,
+                "proceeds": proceeds,
+                "cost_basis": cost_basis,
+                "gain_loss": gain_loss,
+                "is_gain": gain_loss > 0,
+                "is_loss": is_loss,
+                "is_long_term": is_long_term,
+                "estimated_tax_impact": tax_impact,
+                "tax_savings_if_loss": abs(tax_impact) if is_loss else 0,
+                "accounting_method": accounting_method,
+                "can_sell": True,
+                "recommendation": "harvest_loss" if is_loss and abs(gain_loss) > 100 else "hold"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating tax impact for {symbol}: {e}")
+            return {"symbol": symbol, "error": str(e), "can_sell": False}
+    
+    def get_wash_sale_status(self, symbol: str) -> Dict:
+        """
+        Check wash sale status for a symbol.
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            Dict with wash sale status information
+        """
+        try:
+            # In a real implementation, this would integrate with wash_sale_monitor.py
+            # For now, provide a simplified implementation
+            
+            # Check recent orders for wash sale risk
+            recent_orders = self.get_orders(status="filled", limit=50)
+            symbol_orders = [o for o in recent_orders if o["symbol"] == symbol]
+            
+            # Look for recent purchases within 30 days
+            thirty_days_ago = datetime.now() - timedelta(days=30)
+            recent_purchases = []
+            
+            for order in symbol_orders:
+                if (order["side"] == "buy" and 
+                    order["filled_at"] and 
+                    order["filled_at"] > thirty_days_ago):
+                    recent_purchases.append({
+                        "date": order["filled_at"],
+                        "quantity": order["filled_qty"],
+                        "price": order["filled_avg_price"]
+                    })
+            
+            has_wash_sale_risk = len(recent_purchases) > 0
+            days_until_clear = 0
+            
+            if has_wash_sale_risk:
+                # Find the most recent purchase
+                most_recent = max(recent_purchases, key=lambda x: x["date"])
+                days_since = (datetime.now() - most_recent["date"]).days
+                days_until_clear = max(0, 30 - days_since)
+            
+            return {
+                "symbol": symbol,
+                "has_wash_sale_risk": has_wash_sale_risk,
+                "days_until_clear": days_until_clear,
+                "recent_purchases": recent_purchases,
+                "can_sell_for_loss": not has_wash_sale_risk,
+                "recommendation": "wait" if has_wash_sale_risk else "proceed"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking wash sale status for {symbol}: {e}")
+            return {"symbol": symbol, "error": str(e)}
+    
+    def find_tax_loss_opportunities(self, min_loss_threshold: float = 100.0) -> List[Dict]:
+        """
+        Scan portfolio for tax-loss harvesting opportunities.
+        
+        Args:
+            min_loss_threshold: Minimum loss amount to consider
+            
+        Returns:
+            List of tax-loss harvesting opportunities
+        """
+        try:
+            logger.info(f"🔍 Scanning for tax-loss opportunities (min loss: ${min_loss_threshold})")
+            
+            positions = self.get_positions()
+            opportunities = []
+            
+            for position in positions:
+                symbol = position["symbol"]
+                unrealized_pl = position["unrealized_pl"]
+                
+                # Only consider positions with losses
+                if unrealized_pl >= -min_loss_threshold:
+                    continue
+                
+                # Calculate tax impact
+                quantity = abs(position["qty"])
+                tax_impact = self.calculate_tax_impact(symbol, quantity, "HIFO")
+                
+                if tax_impact.get("can_sell") and tax_impact.get("is_loss"):
+                    # Check wash sale status
+                    wash_sale_status = self.get_wash_sale_status(symbol)
+                    
+                    opportunity = {
+                        "symbol": symbol,
+                        "position_size": quantity,
+                        "unrealized_loss": abs(unrealized_pl),
+                        "estimated_tax_savings": tax_impact.get("tax_savings_if_loss", 0),
+                        "current_price": tax_impact["current_price"],
+                        "cost_basis": tax_impact["cost_basis"],
+                        "wash_sale_risk": wash_sale_status["has_wash_sale_risk"],
+                        "days_until_wash_sale_clear": wash_sale_status["days_until_clear"],
+                        "priority_score": abs(unrealized_pl) * (0.5 if wash_sale_status["has_wash_sale_risk"] else 1.0),
+                        "recommendation": "harvest" if not wash_sale_status["has_wash_sale_risk"] else "wait_for_clear"
+                    }
+                    
+                    opportunities.append(opportunity)
+            
+            # Sort by priority score (highest loss potential first)
+            opportunities.sort(key=lambda x: x["priority_score"], reverse=True)
+            
+            total_potential_savings = sum(opp["estimated_tax_savings"] for opp in opportunities)
+            logger.info(f"✅ Found {len(opportunities)} tax-loss opportunities")
+            logger.info(f"💰 Total potential tax savings: ${total_potential_savings:,.2f}")
+            
+            return opportunities
+            
+        except Exception as e:
+            logger.error(f"Error finding tax-loss opportunities: {e}")
+            return []
 
 # Global client instance
 alpaca_client = AlpacaClient()

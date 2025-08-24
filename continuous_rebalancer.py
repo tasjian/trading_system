@@ -51,6 +51,14 @@ from agents.state import create_initial_state
 from tools.alpaca_client import alpaca_client
 from config.settings import settings  # , get_crypto_pairs
 
+# Tax-Loss Harvesting Integration
+from core.tax_loss_harvesting import tax_loss_harvesting_engine, TaxLossOpportunity
+from core.tax_aware_portfolio_balancer import (
+    tax_aware_portfolio_balancer, TaxAwareRebalanceStrategy
+)
+from core.lot_tracking import lot_tracker
+from core.wash_sale_monitor import wash_sale_monitor
+
 # Import performance optimization modules
 from core.optimized_market_data_cache import optimized_cache
 from core.enhanced_sentiment_performance import sentiment_performance_manager
@@ -134,6 +142,13 @@ class ContinuousRebalancer:
         self.sentiment_interval_minutes = 90  # Run sentiment analysis every 90 minutes
         self.last_sentiment_run = None
         self.cached_sentiment_data = {}  # Cache sentiment data between runs
+        
+        # Tax-Loss Harvesting configuration
+        self.tlh_enabled = getattr(settings, 'tlh_enabled', True)
+        self.tlh_scan_interval_minutes = 120  # Scan for TLH opportunities every 2 hours
+        self.last_tlh_scan = None
+        self.cached_tlh_opportunities = []  # Cache TLH opportunities
+        self.tlh_strategy = TaxAwareRebalanceStrategy.BALANCED_APPROACH
         
         # Results history
         self.results_history: List[RebalanceResult] = []
@@ -414,6 +429,14 @@ class ContinuousRebalancer:
             state = await self._run_hybrid_portfolio_decision_layer(state, config)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
+            # Step 4.6: Tax-Loss Harvesting Analysis (if enabled)
+            if self.tlh_enabled:
+                pipeline_stage = "tax_loss_harvesting"
+                stage_start = time.time()
+                logger.info("💰 Scanning for Tax-Loss Harvesting Opportunities...")
+                await self._run_tax_loss_harvesting_analysis(state, config)
+                stage_timings[pipeline_stage] = time.time() - stage_start
+            
             # Step 5: Signal Generation (Convert Hybrid Portfolio Decisions to Trading Signals)
             pipeline_stage = "signal_generation"
             stage_start = time.time()
@@ -505,8 +528,14 @@ class ContinuousRebalancer:
                 # Convert to list format for portfolio balancer compatibility
                 current_positions = [{"symbol": symbol, **pos_data} for symbol, pos_data in current_positions_dict.items()]
                 
-                # Initialize portfolio balancer for intelligent buy/sell decisions
-                balancer = IntelligentPortfolioBalancer()
+                # Initialize tax-aware portfolio balancer for intelligent buy/sell decisions with tax optimization
+                if self.tlh_enabled:
+                    balancer = tax_aware_portfolio_balancer
+                    logger.info("🎯 Using tax-aware portfolio balancer for optimal after-tax returns")
+                else:
+                    from core.portfolio_balancer import IntelligentPortfolioBalancer
+                    balancer = IntelligentPortfolioBalancer()
+                    logger.info("📊 Using traditional portfolio balancer")
                 
                 # Build target allocation from RL recommendations
                 target_allocation = {}
@@ -543,18 +572,38 @@ class ContinuousRebalancer:
                 logger.info(f"📊 RL recommendations: {[symbol for symbol, weight in target_allocation.items() if weight > 0]}")
                 logger.info(f"📊 Positions to SELL: {[symbol for symbol, weight in target_allocation.items() if weight == 0.0]}")
                 
-                # Generate intelligent rebalancing decisions (includes buy/sell/short)
+                # Generate intelligent rebalancing decisions with tax awareness
                 try:
-                    position_analyses = await balancer.analyze_portfolio_balance(
-                        target_allocation=target_allocation
-                    )
-                    
-                    # Generate specific rebalancing orders with OCO support
-                    # Prioritize SELL orders by allowing more total orders and sorting by action type
-                    rebalancing_decisions = await balancer.generate_rebalancing_orders(
-                        position_analyses=position_analyses,
-                        max_orders=30  # Increased to ensure SELL orders are not limited
-                    )
+                    if self.tlh_enabled and hasattr(balancer, 'analyze_tax_aware_portfolio_balance'):
+                        # Use tax-aware analysis
+                        logger.info("🎯 Running tax-aware portfolio analysis...")
+                        tax_analysis = await balancer.analyze_tax_aware_portfolio_balance(
+                            target_allocation=target_allocation
+                        )
+                        
+                        # Generate tax-aware rebalancing orders
+                        rebalancing_decisions = await balancer.generate_tax_aware_rebalancing_orders(
+                            analysis=tax_analysis,
+                            max_orders=30
+                        )
+                        
+                        # Log tax benefits
+                        total_tax_benefits = sum(
+                            d.estimated_tax_benefit or 0 for d in rebalancing_decisions
+                        )
+                        logger.info(f"💰 Tax-aware rebalancing: ${total_tax_benefits:,.2f} estimated tax benefits")
+                        
+                    else:
+                        # Traditional portfolio analysis
+                        position_analyses = await balancer.analyze_portfolio_balance(
+                            target_allocation=target_allocation
+                        )
+                        
+                        # Generate traditional rebalancing orders
+                        rebalancing_decisions = await balancer.generate_rebalancing_orders(
+                            position_analyses=position_analyses,
+                            max_orders=30
+                        )
                     
                     logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
                     
@@ -1364,10 +1413,42 @@ class ContinuousRebalancer:
             from core.order_decision_engine import analyze_enhanced_short_opportunity
             from agents.state import TradingSignal, add_signal_to_state
             
-            # Analyze top symbols for short opportunities
-            # Focus on top candidates to avoid overanalysis
+            # Analyze symbols for short opportunities
+            # Include filtered symbols PLUS any with very negative sentiment
             max_symbols_to_analyze = min(20, len(filtered_symbols))
             symbols_to_analyze = filtered_symbols[:max_symbols_to_analyze]
+            
+            # Add any symbols with very negative sentiment (≤ -0.15) that weren't caught by universe filter
+            very_negative_symbols = []
+            for symbol, sentiment_info in sentiment_data.items():
+                if isinstance(sentiment_info, dict):
+                    sentiment_score = sentiment_info.get('overall_score', 0.0)
+                    if sentiment_score <= -0.15 and symbol not in symbols_to_analyze:
+                        very_negative_symbols.append(symbol)
+            
+            # Add very negative sentiment symbols to analysis (up to 10 additional)
+            symbols_to_analyze.extend(very_negative_symbols[:10])
+            
+            if very_negative_symbols:
+                logger.info(f"🎯 Added {len(very_negative_symbols[:10])} very negative sentiment symbols for short analysis: {very_negative_symbols[:10]}")
+            
+            # Debug: Show sentiment distribution
+            if sentiment_data:
+                sentiment_scores = []
+                for symbol, sentiment_info in sentiment_data.items():
+                    if isinstance(sentiment_info, dict):
+                        score = sentiment_info.get('overall_score', 0.0)
+                        sentiment_scores.append(score)
+                
+                if sentiment_scores:
+                    min_score = min(sentiment_scores)
+                    max_score = max(sentiment_scores)
+                    avg_score = sum(sentiment_scores) / len(sentiment_scores)
+                    negative_count = len([s for s in sentiment_scores if s < -0.05])
+                    very_negative_count = len([s for s in sentiment_scores if s <= -0.15])
+                    
+                    logger.info(f"📊 Sentiment distribution: min={min_score:.3f}, max={max_score:.3f}, avg={avg_score:.3f}")
+                    logger.info(f"📊 Negative sentiment stocks: {negative_count} (< -0.05), {very_negative_count} very negative (≤ -0.15)")
             
             logger.info(f"📊 Analyzing {len(symbols_to_analyze)} symbols for enhanced short opportunities...")
             
@@ -1385,7 +1466,8 @@ class ContinuousRebalancer:
                     if isinstance(symbol_sentiment, dict):
                         sentiment_score = symbol_sentiment.get('overall_score', 0.0)
                         # Focus on negative sentiment for short opportunities
-                        if sentiment_score > -0.05:  # Skip if not sufficiently negative
+                        # Allow more liberal analysis for enhanced short system
+                        if sentiment_score > 0.0:  # Only skip clearly positive sentiment
                             return None
                     
                     decision = await analyze_enhanced_short_opportunity(symbol, current_portfolio)
@@ -1467,6 +1549,119 @@ class ContinuousRebalancer:
             import traceback
             traceback.print_exc()
             return state
+    
+    async def _run_tax_loss_harvesting_analysis(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run tax-loss harvesting analysis and integrate opportunities into the trading pipeline.
+        """
+        try:
+            current_time = datetime.now()
+            
+            # Check if we should run TLH analysis now
+            should_run_tlh = False
+            
+            if not self.cached_tlh_opportunities:
+                should_run_tlh = True
+                reason = "no cached TLH opportunities available"
+            elif (self.last_tlh_scan is None or 
+                  (current_time - self.last_tlh_scan).total_seconds() >= (self.tlh_scan_interval_minutes * 60)):
+                should_run_tlh = True
+                reason = f"TLH scan interval reached (last scan: {self.last_tlh_scan})"
+            else:
+                next_tlh_time = self.last_tlh_scan + timedelta(minutes=self.tlh_scan_interval_minutes)
+                reason = f"using cached TLH data, next scan at {next_tlh_time.strftime('%H:%M:%S')}"
+            
+            if should_run_tlh:
+                logger.info(f"💰 Running Tax-Loss Harvesting Analysis - {reason}")
+                
+                # Get current portfolio positions
+                current_portfolio = state.get("portfolio", {})
+                portfolio_positions = current_portfolio.get("positions", {})
+                
+                if portfolio_positions:
+                    # Scan for TLH opportunities
+                    tlh_opportunities = await tax_loss_harvesting_engine.scan_for_opportunities(
+                        portfolio_positions
+                    )
+                    
+                    # Cache the results
+                    self.cached_tlh_opportunities = tlh_opportunities
+                    self.last_tlh_scan = current_time
+                    
+                    # Integrate TLH opportunities into state
+                    state["tlh_opportunities"] = tlh_opportunities
+                    state["tlh_scan_timestamp"] = current_time.isoformat()
+                    
+                    # Generate TLH-specific trading signals if opportunities exist
+                    if tlh_opportunities:
+                        await self._integrate_tlh_opportunities_into_signals(state, tlh_opportunities)
+                    
+                    total_potential_benefits = sum(opp.tax_benefit_estimate for opp in tlh_opportunities)
+                    logger.info(f"✅ TLH analysis complete: {len(tlh_opportunities)} opportunities, "
+                              f"${total_potential_benefits:,.2f} potential tax benefits")
+                else:
+                    logger.info("📊 No portfolio positions found for TLH analysis")
+                    state["tlh_opportunities"] = []
+            
+            else:
+                logger.info(f"📋 Using Cached TLH Data - {reason}")
+                
+                # Use cached TLH opportunities
+                state["tlh_opportunities"] = self.cached_tlh_opportunities
+                if self.cached_tlh_opportunities:
+                    await self._integrate_tlh_opportunities_into_signals(state, self.cached_tlh_opportunities)
+                
+                cached_benefits = sum(opp.tax_benefit_estimate for opp in self.cached_tlh_opportunities)
+                logger.info(f"📊 Loaded {len(self.cached_tlh_opportunities)} cached TLH opportunities, "
+                          f"${cached_benefits:,.2f} potential benefits")
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error in tax-loss harvesting analysis: {e}")
+            import traceback
+            traceback.print_exc()
+            return state
+    
+    async def _integrate_tlh_opportunities_into_signals(self, state: Dict[str, Any], tlh_opportunities: List[TaxLossOpportunity]):
+        """Integrate tax-loss harvesting opportunities into trading signals."""
+        try:
+            from agents.state import TradingSignal, add_signal_to_state
+            
+            # Convert high-priority TLH opportunities to trading signals
+            for opportunity in tlh_opportunities[:5]:  # Top 5 opportunities
+                if (opportunity.recommended_action == "harvest_now" and 
+                    opportunity.tax_benefit_estimate >= 50):  # Minimum $50 tax benefit
+                    
+                    # Create tax-loss harvesting signal
+                    tlh_signal = TradingSignal(
+                        symbol=opportunity.symbol,
+                        action="sell",  # TLH is primarily about selling at losses
+                        confidence=opportunity.harvest_confidence,
+                        quantity=float(opportunity.total_quantity),
+                        reasoning=f"Tax-Loss Harvesting: {opportunity.reasoning} (${opportunity.tax_benefit_estimate:,.2f} tax benefit)"
+                    )
+                    
+                    # Add TLH metadata if supported
+                    if hasattr(tlh_signal, 'metadata'):
+                        tlh_signal.metadata = {
+                            'is_tax_loss_harvest': True,
+                            'tax_benefit_estimate': float(opportunity.tax_benefit_estimate),
+                            'lot_ids': opportunity.lot_ids,
+                            'wash_sale_risk': opportunity.wash_sale_risk,
+                            'replacement_available': len(opportunity.replacement_candidates) > 0
+                        }
+                    
+                    # Add to state
+                    state = add_signal_to_state(state, tlh_signal)
+                    
+                    logger.info(f"💰 Added TLH signal: {opportunity.symbol} - "
+                              f"${opportunity.tax_benefit_estimate:,.2f} tax benefit")
+            
+        except Exception as e:
+            logger.error(f"Error integrating TLH opportunities into signals: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def _run_hybrid_portfolio_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
         """

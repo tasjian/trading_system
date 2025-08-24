@@ -182,6 +182,57 @@ class TradingSettings(BaseSettings):
     oco_position_check_interval: int = Field(default=30, env="OCO_POSITION_CHECK_INTERVAL")  # Seconds between position checks
     oco_status_check_interval: int = Field(default=60, env="OCO_STATUS_CHECK_INTERVAL")  # Seconds between OCO status checks
     
+    # Tax-Loss Harvesting Configuration
+    tlh_enabled: bool = Field(default=True, env="TLH_ENABLED")  # Enable tax-loss harvesting
+    tlh_strategy: str = Field(default="balanced_approach", env="TLH_STRATEGY")  # aggressive, moderate, conservative, balanced_approach, ignore_tax
+    
+    # Tax Situation Configuration
+    tax_situation: str = Field(default="medium_income", env="TAX_SITUATION")  # high_income, medium_income, low_income, retired
+    ordinary_income_tax_rate: float = Field(default=0.32, env="ORDINARY_INCOME_TAX_RATE")  # 32% marginal rate
+    capital_gains_tax_rate: float = Field(default=0.20, env="CAPITAL_GAINS_TAX_RATE")  # 20% long-term capital gains
+    net_investment_income_tax: float = Field(default=0.038, env="NET_INVESTMENT_INCOME_TAX")  # 3.8% NIIT
+    
+    # Loss Harvesting Thresholds
+    min_loss_threshold: float = Field(default=100.00, env="MIN_LOSS_THRESHOLD")  # Minimum $100 loss to harvest
+    min_loss_percentage: float = Field(default=0.05, env="MIN_LOSS_PERCENTAGE")  # Minimum 5% loss
+    significant_loss_threshold: float = Field(default=1000.00, env="SIGNIFICANT_LOSS_THRESHOLD")  # $1000+ is significant
+    
+    # Daily Harvesting Limits
+    max_daily_harvest_amount: float = Field(default=10000.00, env="MAX_DAILY_HARVEST_AMOUNT")  # Max $10K losses per day
+    max_positions_to_harvest: int = Field(default=10, env="MAX_POSITIONS_TO_HARVEST")  # Max positions to harvest per day
+    
+    # Replacement Asset Configuration
+    require_replacement: bool = Field(default=True, env="REQUIRE_REPLACEMENT")  # Require replacement assets for TLH
+    allow_direct_repurchase: bool = Field(default=False, env="ALLOW_DIRECT_REPURCHASE")  # Prevent wash sale violations
+    min_replacement_correlation: float = Field(default=0.70, env="MIN_REPLACEMENT_CORRELATION")  # 70% min correlation
+    
+    # Timing Preferences
+    prefer_long_term_harvesting: bool = Field(default=True, env="PREFER_LONG_TERM_HARVESTING")  # Prefer long-term losses
+    harvest_near_year_end: bool = Field(default=True, env="HARVEST_NEAR_YEAR_END")  # Harvest near year end
+    avoid_december_harvesting: bool = Field(default=False, env="AVOID_DECEMBER_HARVESTING")  # Some prefer to avoid December
+    
+    # Risk Management for TLH
+    max_portfolio_exposure_change: float = Field(default=0.05, env="MAX_PORTFOLIO_EXPOSURE_CHANGE")  # 5% max exposure change
+    max_tracking_error_tolerance: float = Field(default=0.02, env="MAX_TRACKING_ERROR_TOLERANCE")  # 2% tracking error
+    
+    # Wash Sale Monitoring
+    wash_sale_lookback_days: int = Field(default=30, env="WASH_SALE_LOOKBACK_DAYS")  # 30-day wash sale period
+    wash_sale_cooling_period_days: int = Field(default=31, env="WASH_SALE_COOLING_PERIOD_DAYS")  # 31-day cooling period
+    
+    # Lot Tracking Configuration
+    default_lot_accounting_method: str = Field(default="HIFO", env="DEFAULT_LOT_ACCOUNTING_METHOD")  # FIFO, LIFO, HIFO, LOFO, SPECIFIC_ID, AVERAGE_COST
+    enable_specific_lot_identification: bool = Field(default=True, env="ENABLE_SPECIFIC_LOT_IDENTIFICATION")  # Enable specific lot ID
+    
+    # Tax Reporting and Compliance
+    enable_tax_reporting: bool = Field(default=True, env="ENABLE_TAX_REPORTING")  # Enable tax reporting
+    tax_report_frequency: str = Field(default="monthly", env="TAX_REPORT_FREQUENCY")  # daily, weekly, monthly, quarterly
+    maintain_audit_trail: bool = Field(default=True, env="MAINTAIN_AUDIT_TRAIL")  # Maintain detailed audit trail
+    
+    # Advanced TLH Features
+    enable_loss_carryforward: bool = Field(default=True, env="ENABLE_LOSS_CARRYFORWARD")  # Enable loss carryforward tracking
+    enable_gain_harvesting: bool = Field(default=False, env="ENABLE_GAIN_HARVESTING")  # Enable strategic gain harvesting
+    tax_alpha_target: float = Field(default=0.01, env="TAX_ALPHA_TARGET")  # Target 1% tax alpha annually
+    
     # Enhanced Logging Configuration
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
     log_file: str = Field(default="logs/trading_system.log", env="LOG_FILE")
