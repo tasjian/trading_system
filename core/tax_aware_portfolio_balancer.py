@@ -565,7 +565,7 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
         try:
             # Calculate total portfolio value
             total_portfolio_value = sum(
-                abs(pa.current_quantity * pa.current_price) 
+                float(abs(pa.current_quantity * pa.current_price)) 
                 for pa in position_analyses 
                 if hasattr(pa, 'current_price') and pa.current_price
             )
@@ -574,12 +574,12 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
                 return 0.0
             
             # Calculate total tax benefits from TLH opportunities
-            total_tax_benefits = sum(opp.tax_benefit_estimate for opp in tlh_opportunities)
+            total_tax_benefits = sum(float(opp.tax_benefit_estimate) for opp in tlh_opportunities)
             
             # Estimate annual alpha improvement
             # Assume tax benefits translate to approximately 1:1 portfolio value improvement
             # and annualize based on typical holding periods
-            annual_alpha_improvement = float(total_tax_benefits) / total_portfolio_value
+            annual_alpha_improvement = total_tax_benefits / total_portfolio_value
             
             # Apply conservative factor (typically harvest 0.5-1.5% annually)
             conservative_factor = 0.75
