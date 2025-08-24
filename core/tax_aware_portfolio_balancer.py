@@ -549,6 +549,216 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
                 'replacement_failed': True
             }
     
+    async def _estimate_after_tax_alpha_improvement(self, 
+                                                  tlh_opportunities: List[TaxLossOpportunity],
+                                                  position_analyses: List[PositionAnalysis]) -> float:
+        """
+        Estimate the after-tax alpha improvement from tax-aware strategies.
+        
+        Args:
+            tlh_opportunities: List of tax-loss harvesting opportunities
+            position_analyses: List of position analyses
+            
+        Returns:
+            Estimated after-tax alpha improvement as percentage
+        """
+        try:
+            # Calculate total portfolio value
+            total_portfolio_value = sum(
+                abs(pa.current_quantity * pa.current_price) 
+                for pa in position_analyses 
+                if hasattr(pa, 'current_price') and pa.current_price
+            )
+            
+            if total_portfolio_value == 0:
+                return 0.0
+            
+            # Calculate total tax benefits from TLH opportunities
+            total_tax_benefits = sum(opp.tax_benefit_estimate for opp in tlh_opportunities)
+            
+            # Estimate annual alpha improvement
+            # Assume tax benefits translate to approximately 1:1 portfolio value improvement
+            # and annualize based on typical holding periods
+            annual_alpha_improvement = float(total_tax_benefits) / total_portfolio_value
+            
+            # Apply conservative factor (typically harvest 0.5-1.5% annually)
+            conservative_factor = 0.75
+            estimated_alpha = annual_alpha_improvement * conservative_factor
+            
+            # Cap at reasonable maximum (3% annual tax alpha is very high)
+            max_alpha = 0.03
+            estimated_alpha = min(estimated_alpha, max_alpha)
+            
+            logger.debug(f"After-tax alpha estimation: ${total_tax_benefits:,.2f} / ${total_portfolio_value:,.2f} = {estimated_alpha:.2%}")
+            
+            return estimated_alpha
+            
+        except Exception as e:
+            logger.error(f"Error estimating after-tax alpha improvement: {e}")
+            return 0.0
+    
+    async def _determine_optimal_strategy(self, 
+                                        position_analyses: List[PositionAnalysis],
+                                        tlh_opportunities: List[TaxLossOpportunity],
+                                        wash_sale_constraints: Dict[str, datetime]) -> TaxAwareRebalanceStrategy:
+        """Determine the optimal tax-aware rebalancing strategy."""
+        try:
+            # Calculate key metrics
+            high_value_tlh = len([opp for opp in tlh_opportunities if opp.tax_benefit_estimate >= self.min_tax_benefit_threshold])
+            total_wash_sale_risks = len(wash_sale_constraints)
+            urgent_rebalances = len([pa for pa in position_analyses if pa.urgency == OrderUrgency.HIGH])
+            
+            # Decision logic
+            if high_value_tlh >= 3 and total_wash_sale_risks <= 1:
+                return TaxAwareRebalanceStrategy.HARVEST_FIRST
+            elif urgent_rebalances >= 5:
+                return TaxAwareRebalanceStrategy.MINIMIZE_GAINS
+            elif total_wash_sale_risks >= 3:
+                return TaxAwareRebalanceStrategy.DEFER_GAINS
+            else:
+                return TaxAwareRebalanceStrategy.BALANCED_APPROACH
+                
+        except Exception as e:
+            logger.error(f"Error determining optimal strategy: {e}")
+            return TaxAwareRebalanceStrategy.BALANCED_APPROACH
+    
+    async def _generate_priority_actions(self, 
+                                       position_analyses: List[PositionAnalysis],
+                                       tlh_opportunities: List[TaxLossOpportunity],
+                                       wash_sale_constraints: Dict[str, datetime]) -> List[str]:
+        """Generate priority action recommendations."""
+        try:
+            actions = []
+            
+            # High-value TLH opportunities
+            high_value_tlh = [opp for opp in tlh_opportunities if opp.tax_benefit_estimate >= self.min_tax_benefit_threshold]
+            if high_value_tlh:
+                actions.append(f"🎯 Harvest {len(high_value_tlh)} high-value tax losses (${sum(opp.tax_benefit_estimate for opp in high_value_tlh):,.2f} benefit)")
+            
+            # Urgent rebalancing needs
+            urgent_positions = [pa for pa in position_analyses if pa.urgency == OrderUrgency.HIGH]
+            if urgent_positions:
+                actions.append(f"⚡ Address {len(urgent_positions)} urgent position imbalances")
+            
+            # Wash sale warnings
+            if wash_sale_constraints:
+                actions.append(f"⚠️ Monitor {len(wash_sale_constraints)} wash sale constraints")
+            
+            return actions
+            
+        except Exception as e:
+            logger.error(f"Error generating priority actions: {e}")
+            return ["Error generating recommendations"]
+    
+    async def _generate_deferral_recommendations(self, 
+                                               position_analyses: List[PositionAnalysis],
+                                               wash_sale_constraints: Dict[str, datetime]) -> List[str]:
+        """Generate deferral recommendations for tax optimization."""
+        try:
+            recommendations = []
+            
+            # Year-end considerations
+            current_date = datetime.now()
+            if current_date.month >= 11:  # November/December
+                recommendations.append("📅 Consider year-end tax planning - defer gains to next year if possible")
+            
+            # Wash sale deferrals
+            for symbol, clear_date in wash_sale_constraints.items():
+                days_to_clear = (clear_date - current_date).days
+                if days_to_clear <= self.max_wash_sale_deferral_days:
+                    recommendations.append(f"⏳ Defer {symbol} transactions {days_to_clear} days to avoid wash sale")
+            
+            return recommendations
+            
+        except Exception as e:
+            logger.error(f"Error generating deferral recommendations: {e}")
+            return []
+    
+    async def _generate_minimize_gains_orders(self, 
+                                            analysis: TaxAwarePortfolioAnalysis, 
+                                            max_orders: int) -> List[TaxAwareRebalanceDecision]:
+        """Generate orders with minimize gains strategy."""
+        # Placeholder - would implement minimize gains logic
+        return []
+    
+    async def _generate_defer_gains_orders(self, 
+                                         analysis: TaxAwarePortfolioAnalysis, 
+                                         max_orders: int) -> List[TaxAwareRebalanceDecision]:
+        """Generate orders with defer gains strategy."""
+        # Placeholder - would implement defer gains logic  
+        return []
+    
+    async def _generate_balanced_approach_orders(self, 
+                                               analysis: TaxAwarePortfolioAnalysis, 
+                                               max_orders: int) -> List[TaxAwareRebalanceDecision]:
+        """Generate orders with balanced approach strategy."""
+        # Placeholder - would implement balanced approach logic
+        return []
+    
+    async def _convert_to_tax_aware_decision(self, decision: RebalanceDecision) -> TaxAwareRebalanceDecision:
+        """Convert traditional RebalanceDecision to TaxAwareRebalanceDecision."""
+        try:
+            return TaxAwareRebalanceDecision(
+                symbol=decision.symbol,
+                action=decision.action,
+                quantity=decision.quantity,
+                order_type=decision.order_type,
+                urgency=decision.urgency,
+                reasoning=decision.reasoning,
+                confidence=getattr(decision, 'confidence', 0.5),
+                limit_price=getattr(decision, 'limit_price', None),
+                
+                # Default tax-aware fields
+                tax_efficiency_score=50.0,  # Neutral score
+                maintains_exposure=True
+            )
+        except Exception as e:
+            logger.error(f"Error converting to tax-aware decision: {e}")
+            return None
+    
+    async def _schedule_deferred_orders(self, deferred_orders: List[TaxAwareRebalanceDecision]):
+        """Schedule deferred orders for later execution."""
+        try:
+            logger.info(f"📅 Scheduling {len(deferred_orders)} deferred orders")
+            # Placeholder - would implement order scheduling logic
+            pass
+        except Exception as e:
+            logger.error(f"Error scheduling deferred orders: {e}")
+    
+    async def _calculate_tax_impact_for_analysis(self, analysis: PositionAnalysis) -> float:
+        """Calculate tax impact for a position analysis."""
+        try:
+            # Placeholder calculation - would implement proper tax impact calculation
+            if hasattr(analysis, 'unrealized_pnl') and analysis.unrealized_pnl:
+                return float(analysis.unrealized_pnl)
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error calculating tax impact: {e}")
+            return 0.0
+    
+    async def _calculate_tax_efficiency_score(self, analysis: PositionAnalysis, tax_impact: float) -> float:
+        """Calculate tax efficiency score for a decision."""
+        try:
+            # Loss harvesting gets high score, gain realization gets lower score
+            if tax_impact < 0:  # Loss
+                return 85.0
+            elif tax_impact > 0:  # Gain
+                return 25.0
+            else:  # Neutral
+                return 50.0
+        except Exception as e:
+            logger.error(f"Error calculating tax efficiency score: {e}")
+            return 50.0
+    
+    async def _get_current_price(self, symbol: str) -> Optional[Decimal]:
+        """Get current price for a symbol."""
+        try:
+            # Placeholder - would get actual current price
+            return Decimal("100.00")
+        except Exception as e:
+            logger.error(f"Error getting current price for {symbol}: {e}")
+            return None
+
     async def _create_tax_aware_decision_from_analysis(self, 
                                                      analysis: PositionAnalysis) -> Optional[TaxAwareRebalanceDecision]:
         """Convert a PositionAnalysis to a TaxAwareRebalanceDecision."""
@@ -557,7 +767,8 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
             tax_impact = await self._calculate_tax_impact_for_analysis(analysis)
             
             # Check for wash sale risk
-            wash_sale_risk = analysis.symbol in (await self.wash_sale_monitor.get_compliance_status(analysis.symbol))
+            compliance_status = await self.wash_sale_monitor.get_compliance_status(analysis.symbol)
+            wash_sale_risk = compliance_status.get('status') == 'restricted'
             
             # Determine if this is gain or loss realization
             is_loss_harvesting = tax_impact < 0 if tax_impact else False
