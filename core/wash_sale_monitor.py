@@ -599,6 +599,109 @@ class WashSaleComplianceMonitor:
                         identical_symbols.update(rule.identical_symbols)
         
         return identical_symbols
+    
+    async def _get_active_violations(self, symbol: str) -> List[WashSaleViolation]:
+        """Get active wash sale violations for a symbol."""
+        try:
+            active_violations = []
+            
+            # Get all violations for this symbol from database
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.execute('''
+                    SELECT * FROM wash_sale_violations 
+                    WHERE primary_symbol = ? AND status = 'active'
+                    ORDER BY loss_sale_date DESC
+                ''', (symbol,))
+                
+                for row in cursor.fetchall():
+                    violation = WashSaleViolation(
+                        violation_id=row[0],
+                        primary_symbol=row[1],
+                        violation_type=ViolationType(row[2]),
+                        loss_sale_transaction=row[3],
+                        offsetting_purchase_transaction=row[4],
+                        disallowed_loss=Decimal(str(row[5])),
+                        shares_affected=Decimal(str(row[6])),
+                        cost_basis_adjustment=Decimal(str(row[7])),
+                        loss_sale_date=datetime.fromisoformat(row[8]),
+                        offsetting_purchase_date=datetime.fromisoformat(row[9]),
+                        days_between_transactions=row[10],
+                        substantially_identical_reasoning=row[11],
+                        tax_impact=row[12],
+                        recommended_action=row[13]
+                    )
+                    active_violations.append(violation)
+            
+            return active_violations
+            
+        except Exception as e:
+            logger.error(f"Error getting active violations for {symbol}: {e}")
+            return []
+    
+    async def _get_cost_basis_affecting_violations(self, symbol: str) -> List[WashSaleViolation]:
+        """Get violations that affect cost basis calculations."""
+        try:
+            # Get all active violations that have cost basis adjustments
+            active_violations = await self._get_active_violations(symbol)
+            return [v for v in active_violations if v.cost_basis_adjustment > 0]
+        except Exception as e:
+            logger.error(f"Error getting cost basis affecting violations for {symbol}: {e}")
+            return []
+    
+    def _generate_compliance_recommendations(self, symbol: str, active_violations: List[WashSaleViolation], 
+                                           days_until_clear: int, related_symbols: Set[str]) -> List[str]:
+        """Generate compliance recommendations based on wash sale status."""
+        recommendations = []
+        
+        if active_violations:
+            recommendations.append(f"⚠️ Active wash sale violations: {len(active_violations)}")
+            recommendations.append(f"💰 Total disallowed losses: ${sum(v.disallowed_loss for v in active_violations):,.2f}")
+        
+        if days_until_clear > 0:
+            recommendations.append(f"⏳ Wait {days_until_clear} days before repurchasing {symbol}")
+            
+        if related_symbols and len(related_symbols) > 1:
+            other_symbols = related_symbols - {symbol}
+            recommendations.append(f"🔍 Also avoid: {', '.join(list(other_symbols)[:3])} (substantially identical)")
+        
+        if not active_violations and days_until_clear == 0:
+            recommendations.append(f"✅ {symbol} is clear for trading - no wash sale restrictions")
+        
+        return recommendations
+    
+    async def _get_transactions_since(self, symbol: str, cutoff_date: datetime) -> List[WashSaleTransaction]:
+        """Get all transactions for a symbol since cutoff date."""
+        try:
+            transactions = []
+            
+            # Get transactions from database
+            with sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.execute('''
+                    SELECT * FROM wash_sale_transactions 
+                    WHERE symbol = ? AND transaction_date >= ?
+                    ORDER BY transaction_date DESC
+                ''', (symbol, cutoff_date.isoformat()))
+                
+                for row in cursor.fetchall():
+                    transaction = WashSaleTransaction(
+                        transaction_id=row[0],
+                        symbol=row[1],
+                        direction=TransactionDirection(row[2]),
+                        quantity=Decimal(str(row[3])),
+                        price_per_share=Decimal(str(row[4])),
+                        transaction_date=datetime.fromisoformat(row[5]),
+                        order_id=row[6],
+                        is_loss_sale=bool(row[7]) if row[7] is not None else False,
+                        loss_amount=Decimal(str(row[8])) if row[8] else None,
+                        cost_basis_per_share=Decimal(str(row[9])) if row[9] else None
+                    )
+                    transactions.append(transaction)
+            
+            return transactions
+            
+        except Exception as e:
+            logger.error(f"Error getting transactions since {cutoff_date} for {symbol}: {e}")
+            return []
 
     # Additional implementation methods would continue here...
     # (truncated for space, but would include all necessary helper methods)
