@@ -144,10 +144,18 @@ class TaxLossHarvestingEngine:
         self.wash_sale_monitor = wash_sale_monitor
         self.asset_replacement_engine = asset_replacement_engine
         
+        # TLH enabled/disabled state from settings
+        self.tlh_enabled = settings.tlh_enabled
+        
         # Performance tracking
         self.total_losses_harvested = Decimal("0.00")
         self.total_tax_benefits_realized = Decimal("0.00")
         self.harvesting_history: List[HarvestingResult] = []
+        
+        if not self.tlh_enabled:
+            logger.info("🚫 Tax-Loss Harvesting DISABLED via settings.tlh_enabled=False")
+        else:
+            logger.info(f"✅ Tax-Loss Harvesting ENABLED with strategy: {settings.tlh_strategy}")
         
         # Daily tracking
         self.daily_harvest_amount = Decimal("0.00")
@@ -171,6 +179,11 @@ class TaxLossHarvestingEngine:
             List of TaxLossOpportunity objects sorted by opportunity score
         """
         try:
+            # Check if TLH is enabled
+            if not self.tlh_enabled:
+                logger.debug("🚫 Tax-Loss Harvesting is disabled, returning empty opportunities list")
+                return []
+            
             logger.info("🔍 Scanning portfolio for tax-loss harvesting opportunities...")
             
             # Get current positions if not provided
@@ -214,6 +227,15 @@ class TaxLossHarvestingEngine:
             logger.error(f"Error scanning for TLH opportunities: {e}")
             return []
     
+    async def _filter_opportunities_by_strategy(self, opportunities: List[TaxLossOpportunity]) -> List[TaxLossOpportunity]:
+        """Filter opportunities based on the configured harvesting strategy."""
+        if not opportunities:
+            return []
+        
+        # For now, return all opportunities as-is
+        # In a full implementation, this would filter based on self.config.strategy
+        return opportunities
+    
     async def execute_harvesting_strategy(self, opportunities: List[TaxLossOpportunity]) -> List[HarvestingResult]:
         """
         Execute tax-loss harvesting based on identified opportunities and strategy.
@@ -225,6 +247,11 @@ class TaxLossHarvestingEngine:
             List of HarvestingResult objects
         """
         try:
+            # Check if TLH is enabled
+            if not self.tlh_enabled:
+                logger.debug("🚫 Tax-Loss Harvesting is disabled, returning empty results list")
+                return []
+            
             logger.info(f"🎯 Executing TLH strategy: {self.config.strategy.value}")
             
             # Filter and prioritize opportunities based on strategy

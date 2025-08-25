@@ -147,22 +147,31 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
             # Start with traditional portfolio analysis
             position_analyses = await self.analyze_portfolio_balance(target_allocation, current_signals)
             
-            # Identify tax-loss harvesting opportunities
-            current_positions = await self._get_current_portfolio()
-            tlh_opportunities = await self.tlh_engine.scan_for_opportunities(
-                current_positions.get('positions', {})
-            )
+            # Initialize empty TLH data
+            tlh_opportunities = []
+            total_potential_tax_savings = Decimal("0")
             
-            # Check wash sale constraints
+            # Only identify tax-loss harvesting opportunities if TLH is enabled
+            if settings.tlh_enabled:
+                logger.debug("✅ TLH enabled - scanning for opportunities")
+                current_positions = await self._get_current_portfolio()
+                tlh_opportunities = await self.tlh_engine.scan_for_opportunities(
+                    current_positions.get('positions', {})
+                )
+                total_potential_tax_savings = sum(opp.tax_benefit_estimate for opp in tlh_opportunities)
+            else:
+                logger.debug("🚫 TLH disabled - skipping opportunity scan")
+            
+            # Check wash sale constraints (only if TLH is enabled)
             wash_sale_constraints = {}
-            for symbol in target_allocation.keys():
-                compliance_status = await self.wash_sale_monitor.get_compliance_status(symbol)
-                if compliance_status.get('days_until_clear', 0) > 0:
-                    clear_date = datetime.now() + timedelta(days=compliance_status['days_until_clear'])
-                    wash_sale_constraints[symbol] = clear_date
+            if settings.tlh_enabled:
+                for symbol in target_allocation.keys():
+                    compliance_status = await self.wash_sale_monitor.get_compliance_status(symbol)
+                    if compliance_status.get('days_until_clear', 0) > 0:
+                        clear_date = datetime.now() + timedelta(days=compliance_status['days_until_clear'])
+                        wash_sale_constraints[symbol] = clear_date
             
             # Calculate tax impact projections
-            total_potential_tax_savings = sum(opp.tax_benefit_estimate for opp in tlh_opportunities)
             total_wash_sale_risks = len(wash_sale_constraints)
             
             # Estimate after-tax alpha improvement
@@ -171,9 +180,12 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
             )
             
             # Determine optimal strategy based on current conditions
-            recommended_strategy = await self._determine_optimal_strategy(
-                position_analyses, tlh_opportunities, wash_sale_constraints
-            )
+            if settings.tlh_enabled:
+                recommended_strategy = await self._determine_optimal_strategy(
+                    position_analyses, tlh_opportunities, wash_sale_constraints
+                )
+            else:
+                recommended_strategy = TaxAwareRebalanceStrategy.IGNORE_TAX
             
             # Generate priority actions
             priority_actions = await self._generate_priority_actions(
@@ -199,10 +211,13 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
             )
             
             logger.info(f"✅ Tax-aware analysis complete:")
-            logger.info(f"   TLH opportunities: {len(tlh_opportunities)} (${total_potential_tax_savings:,.2f} potential benefit)")
-            logger.info(f"   Wash sale constraints: {total_wash_sale_risks}")
+            if settings.tlh_enabled:
+                logger.info(f"   TLH opportunities: {len(tlh_opportunities)} (${total_potential_tax_savings:,.2f} potential benefit)")
+                logger.info(f"   Wash sale constraints: {total_wash_sale_risks}")
+                logger.info(f"   Estimated after-tax alpha: {estimated_after_tax_alpha:+.2%}")
+            else:
+                logger.info(f"   TLH: DISABLED - using traditional portfolio balancing")
             logger.info(f"   Recommended strategy: {recommended_strategy.value}")
-            logger.info(f"   Estimated after-tax alpha: {estimated_after_tax_alpha:+.2%}")
             
             return analysis
             
@@ -630,19 +645,25 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
         try:
             actions = []
             
-            # High-value TLH opportunities
-            high_value_tlh = [opp for opp in tlh_opportunities if opp.tax_benefit_estimate >= self.min_tax_benefit_threshold]
-            if high_value_tlh:
-                actions.append(f"🎯 Harvest {len(high_value_tlh)} high-value tax losses (${sum(opp.tax_benefit_estimate for opp in high_value_tlh):,.2f} benefit)")
+            # Only include TLH actions if enabled
+            if settings.tlh_enabled:
+                # High-value TLH opportunities
+                high_value_tlh = [opp for opp in tlh_opportunities if opp.tax_benefit_estimate >= self.min_tax_benefit_threshold]
+                if high_value_tlh:
+                    actions.append(f"🎯 Harvest {len(high_value_tlh)} high-value tax losses (${sum(opp.tax_benefit_estimate for opp in high_value_tlh):,.2f} benefit)")
+                
+                # Wash sale warnings
+                if wash_sale_constraints:
+                    actions.append(f"⚠️ Monitor {len(wash_sale_constraints)} wash sale constraints")
             
-            # Urgent rebalancing needs
+            # Urgent rebalancing needs (always relevant)
             urgent_positions = [pa for pa in position_analyses if pa.urgency == OrderUrgency.HIGH]
             if urgent_positions:
                 actions.append(f"⚡ Address {len(urgent_positions)} urgent position imbalances")
             
-            # Wash sale warnings
-            if wash_sale_constraints:
-                actions.append(f"⚠️ Monitor {len(wash_sale_constraints)} wash sale constraints")
+            # Add note about TLH status
+            if not settings.tlh_enabled:
+                actions.append("ℹ️ Tax-Loss Harvesting is disabled - using traditional rebalancing only")
             
             return actions
             
@@ -657,16 +678,20 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
         try:
             recommendations = []
             
-            # Year-end considerations
-            current_date = datetime.now()
-            if current_date.month >= 11:  # November/December
-                recommendations.append("📅 Consider year-end tax planning - defer gains to next year if possible")
-            
-            # Wash sale deferrals
-            for symbol, clear_date in wash_sale_constraints.items():
-                days_to_clear = (clear_date - current_date).days
-                if days_to_clear <= self.max_wash_sale_deferral_days:
-                    recommendations.append(f"⏳ Defer {symbol} transactions {days_to_clear} days to avoid wash sale")
+            # Only include tax-specific recommendations if TLH is enabled
+            if settings.tlh_enabled:
+                # Year-end considerations
+                current_date = datetime.now()
+                if current_date.month >= 11:  # November/December
+                    recommendations.append("📅 Consider year-end tax planning - defer gains to next year if possible")
+                
+                # Wash sale deferrals
+                for symbol, clear_date in wash_sale_constraints.items():
+                    days_to_clear = (clear_date - current_date).days
+                    if days_to_clear <= self.max_wash_sale_deferral_days:
+                        recommendations.append(f"⏳ Defer {symbol} transactions {days_to_clear} days to avoid wash sale")
+            else:
+                recommendations.append("ℹ️ No tax-specific deferral recommendations - TLH disabled")
             
             return recommendations
             
