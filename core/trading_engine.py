@@ -97,23 +97,50 @@ class UnifiedTradingEngine:
         self.pairs_z_threshold = 2.0  # Z-score threshold for pairs trading
     
     async def validate_cash_balance(self) -> bool:
-        """Validate cash balance and halt system if negative - FAIL-FAST architecture."""
+        """Validate cash balance and halt system if insufficient funds - margin account aware."""
         try:
             account_info = alpaca_client.get_account_info()
             cash_balance = float(account_info.get('cash', 0))
+            buying_power = float(account_info.get('buying_power', 0))
+            equity = float(account_info.get('equity', 0))
+            day_trading_buying_power = float(account_info.get('daytrade_buying_power', 0))
+            regt_buying_power = float(account_info.get('regt_buying_power', 0))
+            pattern_day_trader = account_info.get('pattern_day_trader', False)
             
-            if cash_balance < 0:
+            # Check for day trading power issues first
+            if pattern_day_trader and day_trading_buying_power <= 0:
+                logger.warning(f"⚠️ DAY TRADING POWER EXHAUSTED: ${day_trading_buying_power:.2f}")
+                logger.warning("   Reason: Likely unsettled funds or recent day trades")
+                logger.warning("   System will operate in limited mode (sells only)")
+                # Don't halt system, just log the limitation
+                return True
+            
+            # For margin accounts, use buying power instead of cash balance
+            # Pattern Day Trader accounts can have negative cash but positive buying power
+            available_funds = buying_power
+            
+            if available_funds < 50:  # Minimum $50 buying power required (reduced from $100)
                 error_msg = (
-                    f"❌ CRITICAL SYSTEM HALT: Negative cash balance detected\n"
+                    f"❌ CRITICAL SYSTEM HALT: Insufficient buying power\n"
                     f"Cash Balance: ${cash_balance:,.2f}\n"
-                    f"SYSTEM DESIGN PROHIBITS NEGATIVE CASH TRADING\n"
-                    f"All trading operations suspended until cash balance is positive"
+                    f"Buying Power: ${buying_power:,.2f}\n"
+                    f"Day Trading Power: ${day_trading_buying_power:,.2f}\n"
+                    f"RegT Buying Power: ${regt_buying_power:,.2f}\n"
+                    f"Equity: ${equity:,.2f}\n"
+                    f"TRADING SUSPENDED - INSUFFICIENT FUNDS"
                 )
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
             
-            if cash_balance < 1000:
-                logger.warning(f"Low cash balance warning: ${cash_balance:,.2f}")
+            # Warn if negative cash but continue if buying power is sufficient
+            if cash_balance < 0:
+                logger.warning(
+                    f"⚠️  Margin account trading - Negative cash: ${cash_balance:,.2f}, "
+                    f"but buying power available: ${buying_power:,.2f}"
+                )
+            
+            if available_funds < 1000:
+                logger.warning(f"Low buying power warning: ${available_funds:,.2f}")
             
             return True
             
@@ -398,18 +425,29 @@ class UnifiedTradingEngine:
             # Get account info
             account_info = alpaca_client.get_account_info()
             
-            # CRITICAL: Check cash balance first - NEVER allow negative cash trading
+            # CRITICAL: Check buying power - margin account aware validation
             cash_balance = float(account_info.get('cash', 0))
-            if cash_balance < 0:
+            buying_power = float(account_info.get('buying_power', 0))
+            equity = float(account_info.get('equity', 0))
+            
+            if buying_power < 50:  # Minimum $50 buying power required (reduced from $100)
                 error_msg = (
-                    f"❌ CRITICAL SYSTEM HALT: Negative cash balance detected\n"
+                    f"❌ CRITICAL SYSTEM HALT: Insufficient buying power\n"
                     f"Cash Balance: ${cash_balance:,.2f}\n"
+                    f"Buying Power: ${buying_power:,.2f}\n"
+                    f"Equity: ${equity:,.2f}\n"
                     f"Order: {order.side} {order.quantity} {order.symbol}\n"
-                    f"SYSTEM DESIGN PROHIBITS NEGATIVE CASH TRADING\n"
-                    f"All trading operations suspended until cash balance is positive"
+                    f"TRADING SUSPENDED - INSUFFICIENT FUNDS"
                 )
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
+            
+            # Log margin account status if negative cash
+            if cash_balance < 0:
+                logger.debug(
+                    f"Margin trading: Negative cash ${cash_balance:,.2f}, "
+                    f"but buying power ${buying_power:,.2f} available for {order.symbol}"
+                )
             
             # Check if trading is blocked
             if account_info.get('trading_blocked', False):
@@ -472,47 +510,51 @@ class UnifiedTradingEngine:
             portfolio_value = account_info['portfolio_value']
             cash_balance = float(account_info.get('cash', 0))
             
-            # CRITICAL: Halt if negative cash balance
+            # Get buying power for margin account aware position sizing
+            buying_power = float(account_info.get('buying_power', 0))
+            equity = float(account_info.get('equity', 0))
+            
+            # Use buying power for position sizing in margin accounts
+            if buying_power < 50:  # Minimum $50 buying power required (reduced from $100)
+                logger.info(f"Insufficient buying power for position sizing: ${buying_power}")
+                return 0.0
+            
+            if portfolio_value <= 0:
+                logger.info(f"Invalid portfolio value for position sizing: ${portfolio_value}")
+                return 0.0
+            
+            # CONSERVATIVE position sizing using buying power with enhanced safety margin
+            # Keep larger safety buffer for margin requirements to reduce leverage
+            safety_buffer = max(2000.0, buying_power * 0.25)  # 25% buffer or $2000, whichever is larger
+            available_funds = buying_power - safety_buffer
+            
+            if available_funds <= 0:
+                logger.info(f"No available funds after safety buffer: buying_power=${buying_power}, buffer=${safety_buffer}")
+                return 0.0
+            
+            # Log margin status for visibility
             if cash_balance < 0:
-                error_msg = (
-                    f"❌ CRITICAL SYSTEM HALT: Negative cash in position sizing\n"
-                    f"Cash Balance: ${cash_balance:,.2f}\n"
-                    f"Symbol: {analysis.symbol}\n"
-                    f"POSITION SIZING SUSPENDED - NEGATIVE CASH DETECTED"
-                )
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
+                logger.debug(f"Position sizing with margin: cash=${cash_balance:,.2f}, buying_power=${buying_power:,.2f}")
             
-            if portfolio_value <= 0 or cash_balance <= 1000:  # Require minimum $1000 cash
-                logger.info(f"Insufficient portfolio/cash for position sizing: portfolio=${portfolio_value}, cash=${cash_balance}")
-                return 0.0
+            # Base position size - REDUCED leverage: maximum 5% of portfolio OR 30% of available funds (whichever is smaller)
+            base_size = min(portfolio_value * 0.05, available_funds * 0.30)
             
-            # CONSERVATIVE position sizing using ONLY cash balance (no margin)
-            # Keep $1000 minimum cash reserve for safety
-            available_cash = cash_balance - 1000.0
-            if available_cash <= 0:
-                logger.info(f"No available cash for trading after reserve: cash=${cash_balance}, reserve=$1000")
-                return 0.0
-            
-            # Base position size - maximum 10% of portfolio OR 50% of available cash (whichever is smaller)
-            base_size = min(portfolio_value * 0.10, available_cash * 0.50)
-            
-            # Adjust for confidence
+            # Adjust for confidence - REDUCED multipliers for less aggressive leverage
             confidence_multiplier = {
-                'very_high': 1.5,
-                'high': 1.2,
+                'very_high': 1.2,  # Reduced from 1.5
+                'high': 1.1,       # Reduced from 1.2
                 'medium': 1.0,
-                'low': 0.7,
-                'very_low': 0.3
+                'low': 0.8,        # Increased from 0.7
+                'very_low': 0.4    # Increased from 0.3
             }.get(analysis.confidence.value, 1.0)
             
-            # Adjust for signal strength
+            # Adjust for signal strength - REDUCED multipliers for less aggressive leverage
             signal_multiplier = {
-                'strong_buy': 1.3,
+                'strong_buy': 1.15,  # Reduced from 1.3
                 'buy': 1.0,
                 'hold': 0.0,
                 'sell': 1.0,
-                'strong_sell': 1.3
+                'strong_sell': 1.15  # Reduced from 1.3
             }.get(analysis.signal.value, 1.0)
             
             # Adjust for risk

@@ -325,6 +325,16 @@ class ContinuousRebalancer:
             state = create_initial_state()
             config = {"thread_id": f"continuous_rebalancer_{int(start_time.timestamp())}"}
             
+            # CRITICAL: Validate cash balance before ANY trading operations
+            from core.trading_engine import trading_engine
+            try:
+                await trading_engine.validate_cash_balance()
+                logger.debug("✅ Cash balance validation passed")
+            except RuntimeError as e:
+                # Critical system halt - insufficient buying power
+                logger.error(f"🚨 TRADING HALTED: {e}")
+                raise e
+            
             # CRYPTO TRADING DISABLED - Comment out for later implementation
             # Initialize watchlist - let universe filter discover stocks dynamically
             watchlist_symbols = []
@@ -349,6 +359,7 @@ class ContinuousRebalancer:
             #         except Exception as e:
             #             logger.warning(f"Failed to start crypto streams: {e}")
             
+            # Initialize variables for exception handling
             initial_portfolio_value = 0.0
             signals_generated = 0
             orders_executed = 0
@@ -809,7 +820,7 @@ class ContinuousRebalancer:
                 pre_orders = len(state.get("executed_orders", []))
                 state = await self.workflow.order_management_agent(state, config)
                 post_orders = len(state.get("executed_orders", []))
-                orders_executed = post_orders - pre_orders
+                orders_executed = max(0, post_orders - pre_orders)  # Ensure non-negative count
                 
                 # Record trades in daily summary tracker
                 for _ in range(orders_executed):
@@ -872,6 +883,10 @@ class ContinuousRebalancer:
             error_msg = f"Pipeline failed at {pipeline_stage}: {str(e)}"
             logger.error(error_msg)
             traceback.print_exc()
+            
+            # Ensure variables are defined for performance monitoring
+            signals_generated = locals().get('signals_generated', 0)
+            orders_executed = locals().get('orders_executed', 0)
             
             # Record failed pipeline run for performance analysis
             try:

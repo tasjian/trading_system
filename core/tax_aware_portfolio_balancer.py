@@ -530,8 +530,8 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
                 }
             
             # Calculate replacement quantity based on dollar amount
-            dollar_amount = decision.quantity * (decision.limit_price or current_price)
-            replacement_quantity = dollar_amount / current_price
+            dollar_amount = float(decision.quantity) * float(decision.limit_price or current_price)
+            replacement_quantity = dollar_amount / float(current_price)
             
             buy_order_params = {
                 'symbol': replacement_symbol,
@@ -589,12 +589,16 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
                 return 0.0
             
             # Calculate total tax benefits from TLH opportunities
-            total_tax_benefits = sum(float(opp.tax_benefit_estimate) for opp in tlh_opportunities)
+            total_tax_benefits = sum(
+                float(opp.tax_benefit_estimate) if isinstance(opp.tax_benefit_estimate, Decimal) 
+                else opp.tax_benefit_estimate 
+                for opp in tlh_opportunities
+            )
             
             # Estimate annual alpha improvement
             # Assume tax benefits translate to approximately 1:1 portfolio value improvement
             # and annualize based on typical holding periods
-            annual_alpha_improvement = total_tax_benefits / total_portfolio_value
+            annual_alpha_improvement = float(total_tax_benefits) / float(total_portfolio_value)
             
             # Apply conservative factor (typically harvest 0.5-1.5% annually)
             conservative_factor = 0.75
@@ -619,7 +623,10 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
         """Determine the optimal tax-aware rebalancing strategy."""
         try:
             # Calculate key metrics
-            high_value_tlh = len([opp for opp in tlh_opportunities if opp.tax_benefit_estimate >= self.min_tax_benefit_threshold])
+            high_value_tlh = len([
+                opp for opp in tlh_opportunities 
+                if float(opp.tax_benefit_estimate) >= float(self.min_tax_benefit_threshold)
+            ])
             total_wash_sale_risks = len(wash_sale_constraints)
             urgent_rebalances = len([pa for pa in position_analyses if pa.urgency == OrderUrgency.HIGH])
             
@@ -648,9 +655,13 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
             # Only include TLH actions if enabled
             if settings.tlh_enabled:
                 # High-value TLH opportunities
-                high_value_tlh = [opp for opp in tlh_opportunities if opp.tax_benefit_estimate >= self.min_tax_benefit_threshold]
+                high_value_tlh = [
+                    opp for opp in tlh_opportunities 
+                    if float(opp.tax_benefit_estimate) >= float(self.min_tax_benefit_threshold)
+                ]
                 if high_value_tlh:
-                    actions.append(f"🎯 Harvest {len(high_value_tlh)} high-value tax losses (${sum(opp.tax_benefit_estimate for opp in high_value_tlh):,.2f} benefit)")
+                    total_benefit = sum(float(opp.tax_benefit_estimate) for opp in high_value_tlh)
+                    actions.append(f"🎯 Harvest {len(high_value_tlh)} high-value tax losses (${total_benefit:,.2f} benefit)")
                 
                 # Wash sale warnings
                 if wash_sale_constraints:

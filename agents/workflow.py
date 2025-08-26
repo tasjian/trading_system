@@ -907,14 +907,41 @@ class TradingWorkflow:
                 logger.info("No existing positions to evaluate")
                 return []
             
-            # Risk management thresholds - more aggressive for better diversification and loss control
-            STOP_LOSS_THRESHOLD = -0.03    # Sell if down 3% or more (more aggressive)
-            EXTREME_LOSS_THRESHOLD = -0.06  # Short if down 6% or more (more aggressive)
-            CONCENTRATION_RISK_THRESHOLD = 0.12  # Sell if position > 12% of portfolio (more diversification)
-            MOMENTUM_LOSS_THRESHOLD = -0.02  # Sell if down 2% with negative momentum (more aggressive)
-            REBALANCE_THRESHOLD = 0.05       # Rebalance if position deviates >5% from target weight
-            
+            # Get cash management info for dynamic threshold adjustment
+            current_cash = portfolio.get("cash", 0)
+            buying_power = portfolio.get("buying_power", 0)
             portfolio_value = portfolio.get("equity", 100000)
+            
+            # Calculate cash urgency (0-1 scale) - higher when cash is more urgently needed
+            target_cash_buffer = max(10000, portfolio_value * 0.1)  # 10% of portfolio or $10k minimum
+            if buying_power > 0:
+                cash_urgency = max(0.0, min(1.0, 1.0 - (buying_power / target_cash_buffer)))
+            else:
+                cash_urgency = 1.0  # Maximum urgency when buying power is zero or negative
+            
+            logger.info(f"💰 Cash Management: ${current_cash:.2f} cash, ${buying_power:.2f} buying power, urgency: {cash_urgency:.2f}")
+            
+            # Dynamic thresholds based on cash urgency - more aggressive when cash is needed
+            base_stop_loss = -0.03
+            base_extreme_loss = -0.06
+            base_momentum_loss = -0.02
+            base_concentration = 0.12
+            
+            # Make thresholds more aggressive when cash is urgently needed
+            urgency_factor = 1.0 + (cash_urgency * 0.5)  # Up to 50% more aggressive
+            STOP_LOSS_THRESHOLD = base_stop_loss / urgency_factor      # More aggressive when cash needed
+            EXTREME_LOSS_THRESHOLD = base_extreme_loss / urgency_factor
+            MOMENTUM_LOSS_THRESHOLD = base_momentum_loss / urgency_factor  
+            CONCENTRATION_RISK_THRESHOLD = base_concentration / urgency_factor  # Lower concentration tolerance
+            REBALANCE_THRESHOLD = 0.05 / urgency_factor    # More frequent rebalancing when cash needed
+            
+            # Emergency selling thresholds when cash is critically needed
+            if cash_urgency > 0.8:
+                STOP_LOSS_THRESHOLD = -0.015   # Sell if down just 1.5%
+                MOMENTUM_LOSS_THRESHOLD = -0.01 # Sell if down just 1% with bad sentiment
+                CONCENTRATION_RISK_THRESHOLD = 0.08  # Reduce concentration to 8%
+                logger.warning(f"🚨 EMERGENCY CASH MODE: Using aggressive selling thresholds due to high cash urgency ({cash_urgency:.2f})")
+            
             total_signals = 0
             
             for symbol, position_info in positions.items():
@@ -982,6 +1009,22 @@ class TradingWorkflow:
                         except Exception:
                             pass
                     
+                    # 4. Cash urgency check - sell underperformers when cash is urgently needed
+                    elif cash_urgency > 0.6 and unrealized_plpc < 0:  # Any loss when cash urgent
+                        try:
+                            sentiment_data = state.get("sentiment_data", {}).get(symbol, {})
+                            sentiment_score = sentiment_data.get("overall_score", 0)
+                            
+                            # More aggressive selling when cash is urgently needed
+                            if sentiment_score < 0.1 or unrealized_plpc < -0.005:  # Slightly negative sentiment OR tiny loss
+                                action = "sell"
+                                risk_factors.append(f"cash_urgency_{cash_urgency:.2f}_loss_{unrealized_plpc:.1%}")
+                                reasoning.append(f"CASH URGENCY: {unrealized_plpc:.1%} loss with urgent cash need ({cash_urgency:.2f})")
+                                confidence = 0.7 + (cash_urgency * 0.2)  # Higher confidence when more urgent
+                                logger.info(f"💰 CASH URGENCY SELL: {symbol} down {unrealized_plpc:.1%} - selling for cash (urgency: {cash_urgency:.2f})")
+                        except Exception:
+                            pass
+                    
                     # Generate signal if action determined
                     if action:
                         # Calculate quantity to sell
@@ -997,13 +1040,30 @@ class TradingWorkflow:
                             # For stop-loss, sell entire position
                             sell_quantity = abs(quantity)
                         
+                        # Add cash management context to reasoning
+                        cash_context = []
+                        if cash_urgency > 0.5:
+                            cash_context.append(f"Cash urgency: {cash_urgency:.2f} (URGENT)")
+                        elif cash_urgency > 0.3:
+                            cash_context.append(f"Cash urgency: {cash_urgency:.2f} (moderate)")
+                            
+                        if buying_power <= 0:
+                            cash_context.append("ZERO buying power - emergency liquidation")
+                        elif buying_power < target_cash_buffer * 0.5:
+                            cash_context.append(f"Low buying power: ${buying_power:.0f}")
+                        
+                        # Combine all reasoning
+                        full_reasoning = f"Position Risk Management: {'; '.join(reasoning)}"
+                        if cash_context:
+                            full_reasoning += f" | Cash Management: {'; '.join(cash_context)}"
+                        
                         # Create trading signal
                         signal = TradingSignal(
                             symbol=symbol,
                             action=action,
                             quantity=sell_quantity,
                             confidence=confidence,
-                            reasoning=f"Position Risk Management: {'; '.join(reasoning)}",
+                            reasoning=full_reasoning,
                             price_target=current_price * (0.95 if action == "sell" else 0.90),  # Conservative target
                             stop_loss=current_price * (1.02 if action == "sell" else 1.05),   # Tight stop for sells
                             timestamp=datetime.now()
@@ -2260,8 +2320,9 @@ class TradingWorkflow:
                         
                     except Exception as api_error:
                         logger.error(f"❌ Alpaca API error for {symbol}: {api_error}")
-                        # Fall back to simulation for this order
-                        order = {
+                        # DO NOT add failed orders to executed_orders - they should not count as executed
+                        # Store failed orders separately for retry logic if needed
+                        failed_order = {
                             "symbol": symbol,
                             "action": action,
                             "quantity": quantity,
@@ -2269,7 +2330,10 @@ class TradingWorkflow:
                             "error": str(api_error),
                             "timestamp": datetime.now()
                         }
-                        executed_orders.append(order)
+                        # Add failed orders to separate tracking (not executed_orders)
+                        if "failed_orders" not in state:
+                            state["failed_orders"] = []
+                        state["failed_orders"].append(failed_order)
                         logger.info(f"⚠️ Order failed, logged for retry: {action} {quantity} {symbol}")
                         continue  # Skip to next signal
                 except Exception as e:

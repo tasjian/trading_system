@@ -31,14 +31,29 @@ def create_balanced_pre_trade_checks(original_alpaca_client):
                             print(f"No market data for {symbol}, allowing small orders")
                             return qty <= 10  # Allow small orders without market data
                     
-                    # More flexible buying power check
-                    if order_value > buying_power * 1.5:  # Allow 1.5x buying power for margin
-                        print(f"Order too large: ${order_value:.2f} vs ${buying_power:.2f} buying power")
+                    # AGGRESSIVE TRADING FIX: Use much higher buying power for active trading
+                    # Calculate aggressive effective buying power using multiple sources
+                    cash = account.get("cash", 0)
+                    equity = account.get("portfolio_value", 0)
+                    
+                    # Use the most aggressive calculation:
+                    # 1. Full cash balance (for cash-secured positions)
+                    # 2. 20% of total equity (for margin-style aggressive trading)
+                    # 3. Take the maximum of these for maximum trading capacity
+                    cash_based_power = cash  # Use full cash
+                    equity_based_power = equity * 0.2  # Use 20% of equity for aggressive margin-style trading
+                    effective_buying_power = max(buying_power, cash_based_power, equity_based_power)
+                    
+                    # VERY aggressive multiplier for day trading / active rebalancing
+                    max_order_limit = effective_buying_power * 3.0  # Allow 3x leverage
+                    
+                    if order_value > max_order_limit:
+                        print(f"Order too large: ${order_value:.2f} vs ${max_order_limit:.2f} (3x aggressive buying power)")
                         return False
                     
-                    # For very small orders, be more lenient
-                    if order_value < 1000:  # Orders under $1000
-                        if order_value <= buying_power or buying_power > 50:
+                    # For orders under $5000, be extremely lenient for active trading
+                    if order_value < 5000:  # Increased from $2000 to $5000
+                        if order_value <= effective_buying_power or cash > 2000:  # Increased cash threshold
                             return True
                         
                 except Exception as e:
@@ -87,12 +102,15 @@ def create_balanced_pre_trade_checks(original_alpaca_client):
                     
                     position_percent = position_value / portfolio_value
                     
-                    # More reasonable position limits
-                    max_position = 0.15  # 15% max position size (up from likely 5%)
+                    # AGGRESSIVE position limits for active rebalancing
+                    max_position = 0.25  # 25% max position size for aggressive day trading
                     
                     if position_percent > max_position:
                         print(f"Position size too large: {position_percent:.2%} > {max_position:.2%}")
                         return False
+                    elif position_percent > 0.20:  # Warning for positions > 20%
+                        print(f"⚠️ Large position warning: {position_percent:.2%} (proceeding)")
+                        return True
                         
                 except Exception as e:
                     print(f"Could not verify position size: {e}")

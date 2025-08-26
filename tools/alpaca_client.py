@@ -75,6 +75,8 @@ class AlpacaClient:
                 "equity": current_equity,
                 "cash": float(account.cash),
                 "buying_power": float(account.buying_power),
+                "daytrade_buying_power": float(getattr(account, 'daytrade_buying_power', 0)),
+                "regt_buying_power": float(getattr(account, 'regt_buying_power', 0)),
                 "portfolio_value": float(account.portfolio_value),
                 "last_equity": last_equity,
                 "day_change": day_change,
@@ -314,7 +316,6 @@ class AlpacaClient:
                     
                     # Step 2: Enhanced short selling validation
                     try:
-                        import asyncio
                         enhanced_validation_passed = asyncio.run(self._validate_enhanced_short_selling(
                             symbol, qty, current_price, account
                         ))
@@ -344,6 +345,37 @@ class AlpacaClient:
             
             if stop_price is not None:
                 order_params["stop_price"] = str(stop_price)
+            
+            # CRITICAL FIX: Validate buying power before placing buy orders
+            if side.lower() == "buy":
+                account = self.get_account_info()
+                day_trading_power = account.get('daytrade_buying_power', 0)
+                regt_buying_power = account.get('regt_buying_power', 0)
+                
+                # Estimate order value
+                if order_type.lower() == "market":
+                    current_price = self.get_current_price(symbol)
+                    estimated_order_value = float(qty) * current_price if current_price else 0
+                else:
+                    estimated_order_value = float(qty) * (limit_price or 0)
+                
+                # Check if we have sufficient buying power
+                if day_trading_power > 0:
+                    # Use day trading buying power
+                    available_power = day_trading_power
+                    power_type = "day trading"
+                elif regt_buying_power > 0:
+                    # Fall back to RegT buying power
+                    available_power = regt_buying_power
+                    power_type = "RegT"
+                else:
+                    # No buying power available
+                    raise ValueError(f"Insufficient buying power for {symbol}: day trading=${day_trading_power:.2f}, RegT=${regt_buying_power:.2f}")
+                
+                if estimated_order_value > available_power:
+                    raise ValueError(f"Insufficient {power_type} buying power for {symbol}: need ${estimated_order_value:.2f}, have ${available_power:.2f}")
+                
+                logger.info(f"Buying power validated: using ${available_power:.2f} {power_type} power for ${estimated_order_value:.2f} order")
             
             # Place the order
             order = self.api.submit_order(**order_params)
@@ -744,14 +776,29 @@ class AlpacaClient:
                             logger.warning(f"No market data for {symbol}, skipping buying power check")
                             return True
                     
-                    # More flexible buying power check for balanced trading
-                    if order_value > account["buying_power"] * 1.5:  # Allow 1.5x buying power for margin trading
-                        logger.error(f"Order too large: ${order_value:.2f} > ${account['buying_power'] * 1.5:.2f} (1.5x buying power)")
+                    # AGGRESSIVE TRADING FIX: Use much higher buying power for active trading
+                    # Calculate aggressive effective buying power using multiple sources
+                    cash = account.get("cash", 0)
+                    equity = account.get("portfolio_value", 0)
+                    
+                    # Use the most aggressive calculation:
+                    # 1. Full cash balance (for cash-secured positions)
+                    # 2. 20% of total equity (for margin-style aggressive trading)
+                    # 3. Take the maximum of these for maximum trading capacity
+                    cash_based_power = cash  # Use full cash
+                    equity_based_power = equity * 0.2  # Use 20% of equity for aggressive margin-style trading
+                    effective_buying_power = max(account["buying_power"], cash_based_power, equity_based_power)
+                    
+                    # VERY aggressive multiplier for day trading / active rebalancing
+                    max_order_limit = effective_buying_power * 3.0  # Allow 3x leverage
+                    
+                    if order_value > max_order_limit:
+                        logger.error(f"Order too large: ${order_value:.2f} > ${max_order_limit:.2f} (3x aggressive buying power)")
                         return False
                     
-                    # For small orders under $1000, be more lenient
-                    if order_value < 1000 and (order_value <= account["buying_power"] or account["buying_power"] > 50):
-                        logger.info(f"Allowing small order: ${order_value:.2f} with ${account['buying_power']:.2f} buying power")
+                    # For orders under $5000, be extremely lenient for active trading
+                    if order_value < 5000 and (order_value <= effective_buying_power or cash > 2000):
+                        logger.info(f"Allowing aggressive order: ${order_value:.2f} with effective buying power ${effective_buying_power:.2f}")
                         return True
                         
                 except Exception as e:
