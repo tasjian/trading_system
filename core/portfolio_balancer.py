@@ -220,7 +220,7 @@ class IntelligentPortfolioBalancer:
             logger.warning(f"Could not get valid price for {symbol}")
             current_price = current_value / max(abs(current_quantity), 1)
         
-        target_quantity = target_value / current_price if current_price > 0 else 0
+        target_quantity = target_value / float(current_price) if current_price > 0 else 0
         
         # Calculate deviation
         weight_deviation = target_weight - current_weight

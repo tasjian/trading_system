@@ -149,7 +149,7 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
             
             # Initialize empty TLH data
             tlh_opportunities = []
-            total_potential_tax_savings = Decimal("0")
+            total_potential_tax_savings = 0.0
             
             # Only identify tax-loss harvesting opportunities if TLH is enabled
             if settings.tlh_enabled:
@@ -158,7 +158,7 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
                 tlh_opportunities = await self.tlh_engine.scan_for_opportunities(
                     current_positions.get('positions', {})
                 )
-                total_potential_tax_savings = sum(opp.tax_benefit_estimate for opp in tlh_opportunities)
+                total_potential_tax_savings = sum(float(opp.tax_benefit_estimate) for opp in tlh_opportunities)
             else:
                 logger.debug("🚫 TLH disabled - skipping opportunity scan")
             
@@ -713,23 +713,41 @@ class TaxAwarePortfolioBalancer(IntelligentPortfolioBalancer):
     async def _generate_minimize_gains_orders(self, 
                                             analysis: TaxAwarePortfolioAnalysis, 
                                             max_orders: int) -> List[TaxAwareRebalanceDecision]:
-        """Generate orders with minimize gains strategy."""
-        # Placeholder - would implement minimize gains logic
-        return []
+        """Generate orders with minimize gains strategy - simplified to use traditional rebalancing."""
+        # Simplified: fall back to traditional rebalancing
+        traditional_decisions = await self.generate_rebalancing_orders(
+            analysis.position_analyses, max_orders
+        )
+        return [
+            await self._convert_to_tax_aware_decision(decision) 
+            for decision in traditional_decisions
+        ]
     
     async def _generate_defer_gains_orders(self, 
                                          analysis: TaxAwarePortfolioAnalysis, 
                                          max_orders: int) -> List[TaxAwareRebalanceDecision]:
-        """Generate orders with defer gains strategy."""
-        # Placeholder - would implement defer gains logic  
-        return []
+        """Generate orders with defer gains strategy - simplified to use traditional rebalancing."""
+        # Simplified: fall back to traditional rebalancing
+        traditional_decisions = await self.generate_rebalancing_orders(
+            analysis.position_analyses, max_orders
+        )
+        return [
+            await self._convert_to_tax_aware_decision(decision) 
+            for decision in traditional_decisions
+        ]
     
     async def _generate_balanced_approach_orders(self, 
                                                analysis: TaxAwarePortfolioAnalysis, 
                                                max_orders: int) -> List[TaxAwareRebalanceDecision]:
-        """Generate orders with balanced approach strategy."""
-        # Placeholder - would implement balanced approach logic
-        return []
+        """Generate orders with balanced approach strategy - simplified to use traditional rebalancing."""
+        # Simplified: fall back to traditional rebalancing
+        traditional_decisions = await self.generate_rebalancing_orders(
+            analysis.position_analyses, max_orders
+        )
+        return [
+            await self._convert_to_tax_aware_decision(decision) 
+            for decision in traditional_decisions
+        ]
     
     async def _convert_to_tax_aware_decision(self, decision: RebalanceDecision) -> TaxAwareRebalanceDecision:
         """Convert traditional RebalanceDecision to TaxAwareRebalanceDecision."""

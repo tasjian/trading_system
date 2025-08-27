@@ -2,7 +2,8 @@
 """
 Daily Summary Email Scheduler
 
-Handles scheduling and sending daily trading summary emails at market close.
+Sends daily trading summary emails once per day at market close (4:15-5:30 PM EST).
+Only sends when market is actually closed and within the designated time window.
 Integrates with the existing email notification system and Alpaca trading client.
 """
 
@@ -79,18 +80,24 @@ class DailySummaryScheduler:
         
         current_time = now.time()
         
-        # Expanded window: Send anytime after 3:30 PM or if market is closed
-        send_window_start = time(15, 30)   # 3:30 PM EST (expanded window)
-        send_window_end = time(23, 59)     # End of day
+        # Send daily summary only once per day at market close
+        # Market typically closes at 4:00 PM EST, so check after 4:15 PM to ensure market is closed
+        market_close_window_start = time(16, 15)  # 4:15 PM EST (after market close)
+        market_close_window_end = time(17, 30)    # 5:30 PM EST (reasonable window)
         
-        # Send if: 1) In expanded time window, OR 2) Market is closed (regardless of time)
-        time_window_ok = send_window_start <= current_time <= send_window_end
+        # Only send if: 1) In market close window AND 2) Market is actually closed
+        time_window_ok = market_close_window_start <= current_time <= market_close_window_end
         market_closed_ok = email_notifier.is_market_closed()
         
-        should_send = time_window_ok or market_closed_ok
+        # Both conditions must be met to send (not OR, but AND)
+        should_send = time_window_ok and market_closed_ok
         
         if should_send:
-            logger.info(f"📧 Daily summary criteria met: time_window={time_window_ok}, market_closed={market_closed_ok}")
+            logger.info(f"📧 Daily summary criteria met: market close window={time_window_ok}, market_closed={market_closed_ok}")
+        elif time_window_ok and not market_closed_ok:
+            logger.debug(f"📧 In time window but market still open - waiting for market close")
+        elif not time_window_ok and market_closed_ok:
+            logger.debug(f"📧 Market closed but outside daily summary window (4:15-5:30 PM EST)")
         
         return should_send
     

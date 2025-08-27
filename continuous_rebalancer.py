@@ -143,8 +143,8 @@ class ContinuousRebalancer:
         self.last_sentiment_run = None
         self.cached_sentiment_data = {}  # Cache sentiment data between runs
         
-        # Tax-Loss Harvesting configuration
-        self.tlh_enabled = getattr(settings, 'tlh_enabled', True)
+        # Tax-Loss Harvesting configuration - DISABLED for simplicity
+        self.tlh_enabled = False  # Simplified: disable TLH functionality
         self.tlh_scan_interval_minutes = 120  # Scan for TLH opportunities every 2 hours
         self.last_tlh_scan = None
         self.cached_tlh_opportunities = []  # Cache TLH opportunities

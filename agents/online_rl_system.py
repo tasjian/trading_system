@@ -470,7 +470,39 @@ class DualAgentSystem:
             return False
         
     def _load_compatible_models(self):
-        """Load compatible models using version manager."""
+        """Load compatible models using version manager or curriculum model."""
+        
+        # Check for curriculum model first (highest priority)
+        curriculum_marker = Path(".curriculum_model_enabled")
+        if curriculum_marker.exists():
+            curriculum_model_path = Path("models/latest_curriculum_model.pt")
+            if curriculum_model_path.exists():
+                try:
+                    logger.info("🎓 Loading curriculum-trained model...")
+                    curriculum_checkpoint = torch.load(curriculum_model_path, map_location=self.device)
+                    
+                    if 'stable_policy' in curriculum_checkpoint and 'learner_policy' in curriculum_checkpoint:
+                        # Load curriculum model
+                        self.stable_policy.load_state_dict(curriculum_checkpoint['stable_policy'])
+                        self.learner_policy.load_state_dict(curriculum_checkpoint['learner_policy'])
+                        
+                        # Load optimizers if available
+                        if 'stable_optimizer' in curriculum_checkpoint:
+                            self.stable_optimizer.load_state_dict(curriculum_checkpoint['stable_optimizer'])
+                        if 'learner_optimizer' in curriculum_checkpoint:
+                            self.learner_optimizer.load_state_dict(curriculum_checkpoint['learner_optimizer'])
+                        
+                        reward_weights = curriculum_checkpoint.get('reward_weights', {})
+                        logger.info("🎉 Successfully loaded curriculum-trained model!")
+                        logger.info(f"📊 Reward weights: α={reward_weights.get('alpha', 1.0):.2f}, β={reward_weights.get('beta', 0.5):.2f}, γ={reward_weights.get('gamma', 0.3):.2f}, δ={reward_weights.get('delta', 0.2):.2f}")
+                        
+                        return
+                    else:
+                        logger.warning("⚠️ Curriculum model missing required keys, falling back to version manager")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to load curriculum model: {e}, falling back to version manager")
+        
         if not VERSION_MANAGER_AVAILABLE or not self.symbols:
             logger.info("📝 Using fresh models (no version manager or symbols)")
             return
