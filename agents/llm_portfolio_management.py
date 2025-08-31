@@ -698,6 +698,14 @@ class LLMPortfolioManager:
             industry = allocation.industry
             industries[industry] = industries.get(industry, 0) + 1
         
+        # Calculate diversification score (Herfindahl-Hirschman Index inverse)
+        if allocations:
+            weights = [a.target_weight for a in allocations]
+            hhi = sum(w**2 for w in weights)
+            diversification_score = 1 - hhi if hhi < 1 else 0
+        else:
+            diversification_score = 0.0
+        
         # Create rationale using LLM
         analysis_data = {
             "portfolio_summary": {
