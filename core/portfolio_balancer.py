@@ -101,7 +101,7 @@ class IntelligentPortfolioBalancer:
         }
         
         # Rebalancing thresholds - made more sensitive for better trading
-        self.rebalance_threshold = 0.02  # Lowered from settings default - 2% threshold for action
+        self.rebalance_threshold = 0.015  # Lowered to 1.5% threshold for action (was 2%)
         self.significant_deviation_threshold = 0.05  # Lowered from 10% - 5% for high urgency
         self.critical_deviation_threshold = 0.10     # Lowered from 20% - 10% for critical urgency
         

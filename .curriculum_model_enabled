@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "deployment_time": "unknown",
-  "model_type": "curriculum_trained_2500_epochs",
+  "deployment_time": "1756565109",
+  "model_type": "curriculum_trained_200_episodes",
   "reward_policy": "mathematical_enhanced"
 }

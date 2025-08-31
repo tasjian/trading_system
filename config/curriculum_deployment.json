@@ -1,6 +1,6 @@
 {
   "use_curriculum_model": true,
   "curriculum_model_path": "/Users/zac/Desktop/02_PROJECTS/01_ML4T/trading_system/models/latest_curriculum_model.pt",
-  "curriculum_deployment_epoch": 2500,
+  "curriculum_deployment_episodes": 200,
   "reward_formulation": "mathematical_curriculum_trained"
 }
