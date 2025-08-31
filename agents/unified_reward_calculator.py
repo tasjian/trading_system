@@ -204,6 +204,23 @@ class UnifiedRewardCalculator:
             self.lambda_risk * risk_management_component
         )
         
+        # Final validation and clipping with detailed debugging
+        if np.isnan(total_reward) or np.isinf(total_reward):
+            logger.warning(f"NaN/Inf total reward detected: {total_reward}")
+            logger.warning(f"Component breakdown:")
+            logger.warning(f"  alpha * profit_component: {self.alpha} * {profit_component} = {self.alpha * profit_component}")
+            logger.warning(f"  beta * loss_cutting: {self.beta} * {loss_cutting_component} = {self.beta * loss_cutting_component}")
+            logger.warning(f"  gamma * signal_alignment: {self.gamma} * {signal_alignment_component} = {self.gamma * signal_alignment_component}")
+            logger.warning(f"  delta * transaction_cost: {self.delta} * {transaction_cost_component} = {self.delta * transaction_cost_component}")
+            logger.warning(f"  lambda_cash * cash_mgmt: {self.lambda_cash} * {cash_management_component} = {self.lambda_cash * cash_management_component}")
+            logger.warning(f"  lambda_regime * regime: {self.lambda_regime} * {regime_alignment_component} = {self.lambda_regime * regime_alignment_component}")
+            logger.warning(f"  lambda_risk * risk_mgmt: {self.lambda_risk} * {risk_management_component} = {self.lambda_risk * risk_management_component}")
+            logger.warning(f"Input metrics: realized_return={metrics.realized_return}, volatility={metrics.volatility}")
+            total_reward = np.clip(metrics.realized_return, -1.0, 1.0)
+        else:
+            # Clip to reasonable bounds to prevent extreme rewards
+            total_reward = np.clip(total_reward, -10.0, 10.0)
+        
         return RewardComponents(
             # Core mathematical components
             profit_component=profit_component,
@@ -235,9 +252,16 @@ class UnifiedRewardCalculator:
         # Get volatility (σ) for normalization
         volatility = max(metrics.volatility, self.min_volatility)  # Avoid division by zero
         
-        # Calculate risk-adjusted profit: r_t / σ
-        if volatility > 0:
+        # Calculate risk-adjusted profit: r_t / σ with validation
+        if volatility > 0 and not np.isnan(realized_return) and not np.isinf(realized_return):
             risk_adjusted_profit = realized_return / volatility
+            # Validate result and clip extreme values
+            if np.isnan(risk_adjusted_profit) or np.isinf(risk_adjusted_profit):
+                logger.warning(f"NaN/Inf in profit calculation: {realized_return}/{volatility} = {risk_adjusted_profit}")
+                risk_adjusted_profit = 0.0
+            else:
+                # Clip to prevent extreme rewards from very low volatility
+                risk_adjusted_profit = np.clip(risk_adjusted_profit, -50.0, 50.0)
         else:
             risk_adjusted_profit = 0.0
             
@@ -274,7 +298,13 @@ class UnifiedRewardCalculator:
         
         if is_loss_cutting:
             # Reward scales with how much unrealized loss was avoided, normalized by volatility
-            loss_cutting_reward = min(1.0, abs(unrealized_return) / volatility)
+            if volatility > 0 and not np.isnan(unrealized_return) and not np.isinf(unrealized_return):
+                loss_cutting_reward = min(1.0, abs(unrealized_return) / volatility)
+                if np.isnan(loss_cutting_reward) or np.isinf(loss_cutting_reward):
+                    logger.warning(f"NaN/Inf in loss cutting: {abs(unrealized_return)}/{volatility}")
+                    loss_cutting_reward = 0.0
+            else:
+                loss_cutting_reward = 0.0
             return loss_cutting_reward
         else:
             return 0.0
