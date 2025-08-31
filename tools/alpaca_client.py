@@ -160,6 +160,39 @@ class AlpacaClient:
             logger.error(f"Failed to get orders: {e}")
             raise
     
+    def get_pending_orders(self) -> Dict[str, List[Dict]]:
+        """Get pending orders grouped by symbol to prevent duplicates."""
+        try:
+            pending_orders = self.get_orders(status="open", limit=500)
+            
+            # Group by symbol
+            orders_by_symbol = {}
+            for order in pending_orders:
+                symbol = order["symbol"]
+                if symbol not in orders_by_symbol:
+                    orders_by_symbol[symbol] = []
+                orders_by_symbol[symbol].append(order)
+            
+            return orders_by_symbol
+        except Exception as e:
+            logger.error(f"Failed to get pending orders: {e}")
+            return {}
+    
+    def has_pending_buy_order(self, symbol: str) -> bool:
+        """Check if there's already a pending buy order for this symbol."""
+        try:
+            pending_orders = self.get_pending_orders()
+            symbol_orders = pending_orders.get(symbol, [])
+            
+            # Check for any pending buy orders
+            for order in symbol_orders:
+                if order["side"].lower() == "buy" and order["status"] in ["new", "accepted", "pending_new"]:
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to check pending buy orders for {symbol}: {e}")
+            return False
+    
     def get_market_data(self, symbol: str, timeframe: str = "1Day", 
                        limit: int = 100) -> pd.DataFrame:
         """Get market data for a symbol - CRYPTO TRADING DISABLED."""

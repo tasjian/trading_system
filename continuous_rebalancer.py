@@ -214,6 +214,9 @@ class ContinuousRebalancer:
                 
         except KeyboardInterrupt:
             logger.info("Received interrupt signal, shutting down gracefully...")
+        except BrokenPipeError as e:
+            logger.warning(f"Broken pipe error in main operation (network disconnection): {e}")
+            logger.info("System will attempt graceful shutdown due to connection loss")
         except Exception as e:
             logger.error(f"Fatal error in continuous operation: {e}")
             traceback.print_exc()
@@ -257,6 +260,11 @@ class ContinuousRebalancer:
             # Sleep until next run
             await asyncio.sleep(next_run_delay * 60)
             
+        except BrokenPipeError as e:
+            logger.warning(f"Broken pipe error in continuous loop (likely due to external disconnection): {e}")
+            logger.info("Continuing operation - this is typically a transient network issue")
+            # Shorter retry delay for network issues
+            await asyncio.sleep(60)  # 1 minute
         except Exception as e:
             logger.error(f"Error in continuous loop iteration: {e}")
             traceback.print_exc()
@@ -569,6 +577,34 @@ class ContinuousRebalancer:
                         logger.info(f"🔴 SELL TARGET ADDED: {symbol} = 0% (current position not in RL recommendations)")
                 
                 logger.info(f"✅ Added {sell_targets_added} SELL targets for positions not in RL recommendations")
+                
+                # Check for pending orders to prevent duplicates when market is closed
+                try:
+                    pending_orders = alpaca_client.get_pending_orders()
+                    pending_buy_symbols = set()
+                    
+                    for symbol, orders in pending_orders.items():
+                        for order in orders:
+                            if order["side"].lower() == "buy" and order["status"] in ["new", "accepted", "pending_new"]:
+                                pending_buy_symbols.add(symbol)
+                    
+                    if pending_buy_symbols:
+                        logger.info(f"🚫 Found {len(pending_buy_symbols)} symbols with pending buy orders: {sorted(list(pending_buy_symbols))}")
+                        
+                        # Remove symbols with pending buy orders from target allocation to prevent duplicates
+                        symbols_removed = 0
+                        for symbol in list(target_allocation.keys()):
+                            if symbol in pending_buy_symbols and target_allocation[symbol] > 0:
+                                logger.info(f"   ⏳ Skipping {symbol} - pending buy order exists")
+                                del target_allocation[symbol]
+                                symbols_removed += 1
+                        
+                        logger.info(f"✅ Removed {symbols_removed} symbols with pending buy orders to prevent duplicates")
+                    else:
+                        logger.info("✅ No pending buy orders found - proceeding with all RL recommendations")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to check pending orders: {e} - proceeding without duplicate checking")
                 
                 # DEBUG: Log detailed target allocation
                 logger.info(f"🎯 Target allocation: {len(target_allocation)} positions with total weight: {sum(target_allocation.values()):.2%}")
@@ -1333,6 +1369,14 @@ class ContinuousRebalancer:
     async def _shutdown(self):
         """Perform graceful shutdown."""
         logger.info("🛑 SHUTTING DOWN CONTINUOUS REBALANCER")
+        
+        # Clean up aiohttp sessions
+        try:
+            from utils.session_cleanup import global_session_manager
+            await global_session_manager.cleanup_all()
+            logger.info("✅ All HTTP sessions cleaned up")
+        except Exception as e:
+            logger.warning(f"Session cleanup error: {e}")
         
         # Save final state
         self._save_state()
