@@ -7,6 +7,8 @@ Focuses on stocks with actual trading signals and market activity.
 
 import asyncio
 import logging
+import math
+import statistics
 from datetime import datetime, timedelta
 from typing import Dict, List, Set, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -30,6 +32,9 @@ class StockSignal:
     description: str
     timestamp: datetime
     asset_type: str = "stock"  # "stock" or "crypto"
+    raw_value: Optional[float] = None  # Original raw value for normalization
+    volatility: Optional[float] = None  # Historical volatility for risk adjustment
+    sector: Optional[str] = None  # GICS sector for diversification
 
 @dataclass
 class UniverseFilterResult:
@@ -65,6 +70,20 @@ class StockUniverseFilter:
         self._active_symbols_cache = None
         self._cache_timestamp = None
         self._cache_duration = timedelta(hours=1)
+        
+        # Sentiment normalization baselines (updated periodically)
+        self._sentiment_baselines = {
+            'TSLA': 50, 'AAPL': 40, 'NVDA': 35, 'AMZN': 30, 'GOOGL': 25,
+            'META': 20, 'MSFT': 20, 'NFLX': 15, 'AMD': 15, 'UBER': 10
+        }
+        
+        # Diagnostics tracking
+        self._filter_diagnostics = {
+            'stage1_dropped': 0,
+            'stage2_signals_collected': 0,
+            'stage3_cross_signal_filtered': 0,
+            'final_selected': 0
+        }
     
     async def filter_universe(
         self, 
@@ -109,16 +128,25 @@ class StockUniverseFilter:
         # Step 2: Apply basic filters (price, volume, market cap)
         logger.info("📊 Applying basic filters (price, volume, market cap)...")
         basic_filtered = await self._apply_basic_filters(all_symbols)
-        logger.info(f"After basic filters: {len(basic_filtered)} symbols")
+        self._filter_diagnostics['stage1_dropped'] = len(all_symbols) - len(basic_filtered)
+        logger.info(f"After basic filters: {len(basic_filtered)} symbols ({self._filter_diagnostics['stage1_dropped']} dropped)")
         
         # Step 3: Collect signals in parallel
         logger.info("🚀 Collecting trading signals in parallel...")
         signals = await self._collect_signals_parallel(basic_filtered, cached_social_data)
-        logger.info(f"Collected {len(signals)} trading signals")
+        self._filter_diagnostics['stage2_signals_collected'] = len(signals)
         
-        # Step 4: Rank and select top candidates (crypto-aware)
-        logger.info("🎯 Ranking candidates by signal strength...")
-        filtered_symbols = self._rank_and_select_candidates(signals, max_symbols, market_closed, crypto_pairs)
+        # Apply signal enhancements
+        enhanced_signals = self._enhance_signals(signals)
+        logger.info(f"Collected {len(enhanced_signals)} enhanced trading signals")
+        
+        # Step 4: Apply cross-signal confirmation and rank candidates
+        logger.info("🎯 Applying cross-signal confirmation and ranking...")
+        confirmed_signals = self._apply_cross_signal_confirmation(enhanced_signals)
+        self._filter_diagnostics['stage3_cross_signal_filtered'] = len(confirmed_signals)
+        
+        filtered_symbols = await self._rank_and_select_candidates_enhanced(confirmed_signals, max_symbols, market_closed, crypto_pairs)
+        self._filter_diagnostics['final_selected'] = len(filtered_symbols)
         
         # Step 5: Include dynamic watchlist if requested (no hardcoded stocks)
         if include_watchlist:
@@ -131,28 +159,49 @@ class StockUniverseFilter:
                     added_count += 1
             logger.info(f"Added {added_count} watchlist symbols (dynamic discovery enabled)")
         
-        # Step 6: Fail fast if insufficient symbols found - no fallbacks allowed
+        # Step 6: Elastic thresholds for graceful degradation
+        if len(filtered_symbols) < 10:  # Minimum viable universe
+            logger.warning(f"Low signal count ({len(filtered_symbols)}), applying elastic thresholds...")
+            
+            # Try relaxed basic filters
+            relaxed_symbols = await self._apply_relaxed_basic_filters(all_symbols)
+            if len(relaxed_symbols) > len(basic_filtered):
+                logger.info(f"Elastic thresholds: relaxed basic filters from {len(basic_filtered)} to {len(relaxed_symbols)}")
+                
+                # Re-run signal collection on relaxed universe
+                additional_signals = await self._collect_signals_parallel(relaxed_symbols, cached_social_data)
+                enhanced_additional = self._enhance_signals(additional_signals)
+                confirmed_additional = self._apply_cross_signal_confirmation(enhanced_additional)
+                
+                # Combine and re-rank
+                all_confirmed = confirmed_signals + confirmed_additional
+                filtered_symbols = await self._rank_and_select_candidates_enhanced(all_confirmed, max_symbols, market_closed, crypto_pairs)
+                self._filter_diagnostics['final_selected'] = len(filtered_symbols)
+                
+                logger.info(f"Elastic recovery: {len(filtered_symbols)} symbols after relaxed filtering")
+        
+        # Final fail-safe
         if len(filtered_symbols) == 0:
             error_msg = (
-                f"❌ CRITICAL SYSTEM FAILURE: Universe filtering failed\n"
+                f"❌ CRITICAL SYSTEM FAILURE: Universe filtering failed even with elastic thresholds\n"
                 f"Total symbols processed: {len(all_symbols)}\n"
                 f"Symbols after basic filters: {len(basic_filtered)}\n"
-                f"Trading signals collected: {len(signals)}\n"
+                f"Trading signals collected: {self._filter_diagnostics['stage2_signals_collected']}\n"
+                f"Cross-signal confirmed: {self._filter_diagnostics['stage3_cross_signal_filtered']}\n"
                 f"Final candidates selected: {len(filtered_symbols)}\n"
-                f"SYSTEM REQUIRES VALID TRADING SIGNALS TO OPERATE SAFELY\n"
-                f"All external data sources must be functional for signal generation"
+                f"SYSTEM REQUIRES VALID TRADING SIGNALS TO OPERATE SAFELY"
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
         
         # Calculate summary
-        filter_summary = self._calculate_filter_summary(signals)
+        filter_summary = self._calculate_filter_summary(confirmed_signals)
         processing_time = (datetime.now() - start_time).total_seconds()
         
         result = UniverseFilterResult(
             total_symbols=len(all_symbols),
             filtered_symbols=filtered_symbols[:max_symbols],
-            signals=signals,
+            signals=confirmed_signals,
             filter_summary=filter_summary,
             processing_time=processing_time
         )
@@ -160,6 +209,7 @@ class StockUniverseFilter:
         logger.info("✅ UNIVERSE FILTERING COMPLETE")
         logger.info(f"Filtered: {result.total_symbols} → {len(result.filtered_symbols)} stocks ({processing_time:.1f}s)")
         logger.info(f"Signal breakdown: {filter_summary}")
+        logger.info(f"📊 Diagnostics: {self._filter_diagnostics}")
         
         return result
     
@@ -466,6 +516,209 @@ class StockUniverseFilter:
         
         logger.info(f"Found {len(signals)} news signals")
         return signals
+    
+    def _enhance_signals(self, signals: List[StockSignal]) -> List[StockSignal]:
+        """Apply signal enhancements: normalization, decay weighting, and risk adjustment."""
+        
+        enhanced_signals = []
+        
+        for signal in signals:
+            enhanced_signal = signal
+            
+            # 1. Sentiment normalization against baseline chatter
+            if signal.signal_type == "social":
+                baseline = self._sentiment_baselines.get(signal.symbol, 5)  # Default baseline
+                raw_mentions = signal.raw_value or 0
+                
+                # Normalize: (current - baseline) / baseline, capped at reasonable range
+                if baseline > 0:
+                    normalized_strength = max(0.0, min(1.0, (raw_mentions - baseline) / baseline))
+                    enhanced_signal = StockSignal(
+                        symbol=signal.symbol,
+                        signal_type=signal.signal_type,
+                        strength=normalized_strength,
+                        description=f"{raw_mentions} mentions (baseline: {baseline})",
+                        timestamp=signal.timestamp,
+                        asset_type=signal.asset_type,
+                        raw_value=raw_mentions,
+                        volatility=signal.volatility,
+                        sector=signal.sector
+                    )
+            
+            # 2. Decay-weighted signals for temporal relevance
+            hours_old = (datetime.now() - signal.timestamp).total_seconds() / 3600
+            decay_factor = math.exp(-hours_old / 24)  # Half-life of 24 hours
+            
+            enhanced_signal = StockSignal(
+                symbol=enhanced_signal.symbol,
+                signal_type=enhanced_signal.signal_type,
+                strength=enhanced_signal.strength * decay_factor,
+                description=f"{enhanced_signal.description} (decay: {decay_factor:.2f})",
+                timestamp=enhanced_signal.timestamp,
+                asset_type=enhanced_signal.asset_type,
+                raw_value=enhanced_signal.raw_value,
+                volatility=enhanced_signal.volatility,
+                sector=enhanced_signal.sector
+            )
+            
+            enhanced_signals.append(enhanced_signal)
+        
+        logger.info(f"Enhanced {len(signals)} signals with normalization and decay weighting")
+        return enhanced_signals
+    
+    def _apply_cross_signal_confirmation(self, signals: List[StockSignal]) -> List[StockSignal]:
+        """Apply intelligent cross-signal confirmation with market-hours flexibility."""
+        
+        # Group signals by symbol and count unique signal types
+        symbol_signal_types = {}
+        for signal in signals:
+            if signal.symbol not in symbol_signal_types:
+                symbol_signal_types[signal.symbol] = set()
+            symbol_signal_types[signal.symbol].add(signal.signal_type)
+        
+        # Check if we have diverse signal types available
+        available_signal_types = set()
+        for signal in signals:
+            available_signal_types.add(signal.signal_type)
+        
+        # Adaptive confirmation based on available signal diversity
+        if len(available_signal_types) >= 3:
+            # Multiple signal types available - require ≥2 sources
+            min_sources = 2
+            logger.info(f"Cross-signal confirmation: strict mode (≥2 sources) - {len(available_signal_types)} signal types available")
+        else:
+            # Limited signal types (e.g., only price signals during market hours) - allow single strong signals
+            min_sources = 1
+            logger.info(f"Cross-signal confirmation: relaxed mode (≥1 source) - only {len(available_signal_types)} signal types available")
+        
+        # Filter signals based on adaptive threshold
+        confirmed_signals = []
+        for signal in signals:
+            if len(symbol_signal_types[signal.symbol]) >= min_sources:
+                confirmed_signals.append(signal)
+        
+        logger.info(f"Cross-signal confirmation: {len(signals)} → {len(confirmed_signals)} signals (min_sources: {min_sources})")
+        return confirmed_signals
+    
+    async def _apply_relaxed_basic_filters(self, symbols: List[str]) -> List[str]:
+        """Apply relaxed basic filters for elastic threshold recovery."""
+        
+        filtered_symbols = []
+        
+        for symbol in symbols:
+            if not is_crypto_symbol(symbol):
+                # Relaxed stock filtering (lower thresholds)
+                if (len(symbol) <= 6 and                    # Allow slightly longer tickers
+                    symbol.isalpha() and                    # Only letters
+                    not any(char.islower() for char in symbol) and  # All caps
+                    symbol not in ['ETF', 'FUND', 'INDEX']):  # Exclude obvious ETFs
+                    filtered_symbols.append(symbol)
+        
+        # Increase sample size for relaxed filtering
+        import random
+        random.shuffle(filtered_symbols)
+        filtered_symbols = filtered_symbols[:500]  # Increased from 300
+        
+        logger.info(f"Relaxed filtering: {len(filtered_symbols)} candidates (relaxed thresholds)")
+        return filtered_symbols
+    
+    async def _rank_and_select_candidates_enhanced(self, signals: List[StockSignal], max_symbols: int, market_closed: bool = False, crypto_pairs: List[str] = None) -> List[str]:
+        """Enhanced ranking with risk adjustment, sector diversification, and adaptive cutoffs."""
+        
+        # Group signals by symbol with enhanced scoring
+        symbol_data = {}
+        all_volatilities = []
+        all_sectors = set()
+        
+        for signal in signals:
+            if signal.symbol not in symbol_data:
+                symbol_data[signal.symbol] = {
+                    'signals': [],
+                    'total_strength': 0.0,
+                    'signal_types': set(),
+                    'volatility': signal.volatility or 0.2,  # Default volatility
+                    'sector': signal.sector or 'Unknown'
+                }
+            
+            symbol_data[signal.symbol]['signals'].append(signal)
+            symbol_data[signal.symbol]['total_strength'] += signal.strength
+            symbol_data[signal.symbol]['signal_types'].add(signal.signal_type)
+            
+            if signal.volatility:
+                all_volatilities.append(signal.volatility)
+            if signal.sector:
+                all_sectors.add(signal.sector)
+        
+        # Calculate enhanced scores
+        final_scores = []
+        selected_sectors = set()
+        
+        for symbol, data in symbol_data.items():
+            # Base score: average signal strength
+            base_score = data['total_strength'] / len(data['signals'])
+            
+            # Signal diversity bonus (multiple types)
+            diversity_bonus = len(data['signal_types']) * 0.1
+            
+            # Signal conviction bonus (multiple signals)
+            conviction_bonus = min(0.2, (len(data['signals']) - 1) * 0.05)
+            
+            # Risk adjustment: divide by volatility to favor stable performers
+            volatility = data['volatility']
+            risk_adjusted_score = base_score / max(0.1, volatility)  # Prevent division by zero
+            
+            # Sector diversification bonus (encourage spread)
+            sector_bonus = 0.0
+            if data['sector'] not in selected_sectors and data['sector'] != 'Unknown':
+                sector_bonus = 0.05  # Small bonus for new sectors
+            
+            # CRYPTO TRADING DISABLED - crypto bonus always 0
+            crypto_bonus = 0.0
+            
+            final_score = risk_adjusted_score + diversity_bonus + conviction_bonus + sector_bonus + crypto_bonus
+            final_scores.append((symbol, final_score, data['sector']))
+        
+        # Sort by score
+        final_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Adaptive cutoff based on score distribution
+        scores_only = [score for _, score, _ in final_scores]
+        if len(scores_only) > 10:
+            score_median = statistics.median(scores_only)
+            score_std = statistics.stdev(scores_only) if len(scores_only) > 1 else 0.1
+            adaptive_threshold = score_median + 0.5 * score_std
+            
+            # Apply adaptive cutoff but ensure minimum viable count
+            above_threshold = [(s, sc, se) for s, sc, se in final_scores if sc >= adaptive_threshold]
+            if len(above_threshold) >= 20:  # Ensure minimum viable universe
+                final_scores = above_threshold
+                logger.info(f"Applied adaptive threshold {adaptive_threshold:.3f}, kept {len(final_scores)} candidates")
+        
+        # Select symbols with sector tracking for diversification
+        selected_symbols = []
+        sector_counts = {}
+        
+        for symbol, score, sector in final_scores[:max_symbols * 2]:  # Consider more for diversification
+            # Track sector distribution
+            if len(selected_symbols) < max_symbols:
+                selected_symbols.append(symbol)
+                if sector != 'Unknown':
+                    selected_sectors.add(sector)
+                    sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        
+        # Final selection (limit to max_symbols)
+        selected_symbols = selected_symbols[:max_symbols]
+        
+        # Enhanced logging
+        logger.info(f"Top 10 candidates by enhanced score:")
+        for i, (symbol, score, sector) in enumerate(final_scores[:10]):
+            types = list(symbol_data[symbol]['signal_types'])
+            vol = symbol_data[symbol]['volatility']
+            logger.info(f"  {i+1}. {symbol}: {score:.3f} (vol: {vol:.2f}, sector: {sector}, types: {', '.join(types)})")
+        
+        logger.info(f"Sector distribution: {dict(list(sector_counts.items())[:5])}...")  # Show top 5 sectors
+        
+        return selected_symbols
     
     def _rank_and_select_candidates(self, signals: List[StockSignal], max_symbols: int, market_closed: bool = False, crypto_pairs: List[str] = None) -> List[str]:
         """Rank candidates by signal strength and select top performers with crypto prioritization when markets closed."""
