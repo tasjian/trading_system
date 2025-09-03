@@ -50,6 +50,8 @@ from agents.workflow import TradingWorkflow
 from agents.state import create_initial_state
 from tools.alpaca_client import alpaca_client
 from config.settings import settings  # , get_crypto_pairs
+from utils.market_open_scheduler import market_open_scheduler
+from utils.cache_manager import cache_manager
 
 # Tax-Loss Harvesting Integration
 from core.tax_loss_harvesting import tax_loss_harvesting_engine, TaxLossOpportunity
@@ -112,6 +114,11 @@ class ContinuousRebalancer:
         self.running = False
         self.start_time = None
         
+        # Market open scheduler integration
+        self.market_open_scheduler = market_open_scheduler
+        self.cache_manager = cache_manager
+        self._setup_market_open_callback()
+        
         # Rate limiting and timing
         self.min_interval_minutes = 2       # Minimum time between runs (safety buffer)
         self.standard_interval_minutes = 5   # Standard interval during market hours (RL trading)
@@ -149,6 +156,53 @@ class ContinuousRebalancer:
         self.last_tlh_scan = None
         self.cached_tlh_opportunities = []  # Cache TLH opportunities
         self.tlh_strategy = TaxAwareRebalanceStrategy.BALANCED_APPROACH
+    
+    def _setup_market_open_callback(self):
+        """Setup callback for market open pipeline refresh."""
+        async def market_open_pipeline_refresh():
+            """Full pipeline refresh triggered by market open."""
+            logger.info("🌅 Market open triggered - running full pipeline refresh...")
+            
+            try:
+                # Step 1: Warm up key caches
+                logger.info("🔥 Warming critical caches...")
+                
+                # Get current universe for cache warming
+                from core.universe_filter import UniverseFilter
+                universe_filter = UniverseFilter()
+                universe_signals = await universe_filter.filter_universe()
+                symbol_list = [signal.symbol for signal in universe_signals[:50]]  # Top 50 symbols
+                
+                # Warm market data cache
+                await self.cache_manager.warm_cache_category('market_data', symbol_list)
+                
+                # Warm technical indicators cache
+                await self.cache_manager.warm_cache_category('technical_indicators', symbol_list)
+                
+                # Step 2: Run full pipeline with fresh data
+                logger.info("🚀 Running complete pipeline refresh...")
+                
+                # Create fresh state
+                config = ContinuousRebalancerConfig()
+                state = create_initial_state(config.max_positions)
+                
+                # Run complete pipeline
+                await self.run_complete_pipeline(state, config)
+                
+                # Update health stats
+                self.health.total_runs += 1
+                self.health.successful_runs += 1
+                
+                logger.info("✅ Market open pipeline refresh completed successfully")
+                
+            except Exception as e:
+                logger.error(f"❌ Market open pipeline refresh failed: {e}")
+                self.health.failed_runs += 1
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # Register the callback
+        self.market_open_scheduler.set_pipeline_callback(market_open_pipeline_refresh)
         
         # Results history
         self.results_history: List[RebalanceResult] = []
@@ -175,6 +229,14 @@ class ContinuousRebalancer:
         
         logger.info(f"Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Min Interval: {self.min_interval_minutes} minutes")
+        
+        # Start market open scheduler in background
+        logger.info("🕐 Starting market open scheduler...")
+        market_open_task = asyncio.create_task(self.market_open_scheduler.start_scheduler())
+        
+        # Start cache maintenance in background  
+        logger.info("🧹 Starting cache maintenance...")
+        cache_maintenance_task = asyncio.create_task(self.cache_manager.schedule_cache_maintenance())
         
         # CRYPTO TRADING DISABLED - Comment out for later implementation
         # # Check crypto status for logging
@@ -1389,6 +1451,19 @@ class ContinuousRebalancer:
         logger.info(f"Total runs: {self.health.total_runs}")
         logger.info(f"Successful runs: {self.health.successful_runs}")
         logger.info(f"Failed runs: {self.health.failed_runs}")
+        
+        # Print market open scheduler status
+        scheduler_status = self.market_open_scheduler.get_status()
+        if scheduler_status.get('last_flush_date'):
+            logger.info(f"Last market open refresh: {scheduler_status['last_flush_date']}")
+        
+        # Print cache health
+        try:
+            cache_health = await self.cache_manager.get_cache_health()
+            if cache_health.get('redis_available'):
+                logger.info(f"Cache health: {cache_health.get('total_keys', 0)} keys, {cache_health.get('memory_usage_mb', 0):.1f}MB")
+        except:
+            pass
         
         if self.health.total_runs > 0:
             success_rate = (self.health.successful_runs / self.health.total_runs) * 100

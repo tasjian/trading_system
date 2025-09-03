@@ -30,6 +30,7 @@ from config.settings import settings, is_crypto_symbol
 from .llm_sentiment_analyzer import LLMSentimentAnalyzer, SentimentAnalysis
 from .earnings_scraper import EarningsCallScraper
 from tools.alpaca_market_data import fetch_stock_prices, fetch_stock_history, get_technical_indicators
+from utils.connection_pool import connection_pool
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,8 @@ class UnifiedMarketIntelligence:
                 url = f"https://finnhub.io/api/v1/quote"
                 params = {'symbol': symbol, 'token': self.finnhub_key}
                 
-                async with self.session.get(url, params=params) as response:
+                session = await self._ensure_session()
+                async with session.get(url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
                         if 'c' in data and data['c'] > 0:
@@ -172,7 +174,8 @@ class UnifiedMarketIntelligence:
                 url = f"https://financialmodelingprep.com/api/v3/quote/{symbol}"
                 params = {'apikey': self.fmp_key}
                 
-                async with self.session.get(url, params=params) as response:
+                session = await self._ensure_session()
+                async with session.get(url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
                         if data and isinstance(data, list) and data[0].get('price'):
@@ -386,7 +389,8 @@ class UnifiedMarketIntelligence:
                     url = f"https://financialmodelingprep.com/api/v3/key-metrics/{symbol}"
                     params = {'apikey': self.fmp_key}
                     
-                    async with self.session.get(url, params=params) as response:
+                    session = await self._ensure_session()
+                    async with session.get(url, params=params) as response:
                         if response.status == 200:
                             data = await response.json()
                             if data and isinstance(data, list) and data:
@@ -516,8 +520,19 @@ class UnifiedMarketIntelligence:
             
             async with self.session.get(url, params=params) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    return data.get('articles', [])
+                    try:
+                        data = await response.json()
+                        if data and isinstance(data, dict) and 'articles' in data:
+                            return data.get('articles', [])
+                        else:
+                            logger.debug(f"Invalid response format for {symbol}: {type(data)} - {data}")
+                            return []
+                    except Exception as json_error:
+                        logger.warning(f"Failed to parse JSON response for {symbol}: {json_error}")
+                        return []
+                else:
+                    logger.debug(f"News API returned status {response.status} for {symbol}")
+                    return []
             
             return []
             
@@ -777,9 +792,7 @@ class UnifiedMarketIntelligence:
     
     async def close(self):
         """Clean up resources."""
-        if self.session:
-            await self.session.close()
-            self.session = None
+        await connection_pool.close_session("market_intelligence")
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -790,12 +803,12 @@ class UnifiedMarketIntelligence:
         await self.close()
     
     async def _ensure_session(self):
-        """Ensure aiohttp session exists with proper configuration."""
-        if not self.session:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10),  # Reduced timeout
-                connector=aiohttp.TCPConnector(limit=20, limit_per_host=10)
-            )
+        """Get session from connection pool."""
+        return await connection_pool.get_async_session(
+            name="market_intelligence",
+            timeout=aiohttp.ClientTimeout(total=20),
+            connector_limit=20
+        )
 
 # Global instance
 market_intelligence = UnifiedMarketIntelligence()

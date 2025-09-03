@@ -20,14 +20,27 @@ logger = logging.getLogger(__name__)
 class AlpacaMarketData:
     """Real-time market data using Alpaca API - replacement for yfinance."""
     
+    # Shared client instance to prevent connection pool overflow
+    _shared_client = None
+    _client_lock = None
+    
     def __init__(self):
-        """Initialize Alpaca market data client."""
-        self.api = REST(
-            key_id=settings.alpaca_api_key,
-            secret_key=settings.alpaca_secret_key,
-            base_url=settings.alpaca_base_url
-        )
-        logger.info("🔗 Alpaca Market Data client initialized")
+        """Initialize Alpaca market data client with connection pooling."""
+        import threading
+        
+        if AlpacaMarketData._client_lock is None:
+            AlpacaMarketData._client_lock = threading.Lock()
+        
+        with AlpacaMarketData._client_lock:
+            if AlpacaMarketData._shared_client is None:
+                AlpacaMarketData._shared_client = REST(
+                    key_id=settings.alpaca_api_key,
+                    secret_key=settings.alpaca_secret_key,
+                    base_url=settings.alpaca_base_url
+                )
+                logger.info("🔗 Alpaca Market Data shared client initialized")
+        
+        self.api = AlpacaMarketData._shared_client
     
     def fetch_stock_prices(self, tickers: List[str]) -> Dict[str, float]:
         """

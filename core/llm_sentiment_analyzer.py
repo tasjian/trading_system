@@ -286,45 +286,41 @@ Respond only with valid JSON."""
             logger.error(f"Failed to parse LLM response: {e}")
             return None
     
-    # REMOVED: Fallback sentiment analysis method - fail-fast architecture only
-    # def _fallback_sentiment_analysis(self, text: str) -> Dict:
-    #     DISABLED: No fallback sentiment analysis allowed per fail-fast design
-    #     System must halt when LLM sentiment analysis fails
-            score = (pos_count - neg_count) / max(total_sentiment_words, 1)
-            confidence = min(0.8, total_sentiment_words / 10)  # Max 80% confidence
-            
-            if score > 0.5:
-                sentiment = "positive"
-            elif score > 0.2:
-                sentiment = "neutral"
-            elif score > -0.2:
-                sentiment = "neutral"
-            elif score > -0.5:
-                sentiment = "negative"
-            else:
-                sentiment = "very_negative"
-        
-        # REMOVED: Fallback sentiment analysis method - fail-fast architecture only
-        # System must halt when LLM sentiment analysis fails
     
     async def analyze_text(self, text: str, context: str = "financial_news") -> SentimentAnalysis:
         """
-        Analyze sentiment using GPT-5-nano - FAIL-FAST, NO FALLBACKS.
-        
-        Uses GPT-5-nano for reliable, cost-effective sentiment analysis.
+        Analyze sentiment using GPT-4o-mini with proper error handling and retries.
         """
         
         # Truncate very long texts to avoid token limits
         if len(text) > 4000:
             text = text[:4000] + "... [truncated]"
         
-        try:
-            # Use GPT-5-nano via real-time API for immediate results
-            return await self.gpt_analyzer.analyze_text(text, context)
-            
-        except Exception as e:
-            logger.error(f"GPT-5-nano sentiment analysis failed: {e} - system halting")
-            raise RuntimeError(f"Sentiment analysis failed: {e}")
+        # Add retry logic with exponential backoff for API issues
+        max_retries = 3
+        base_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Add small delay to avoid rate limiting
+                if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    await asyncio.sleep(delay)
+                    logger.info(f"Retrying sentiment analysis, attempt {attempt + 1}/{max_retries}")
+                
+                # Use GPT-4o-mini via real-time API
+                return await self.gpt_analyzer.analyze_text(text, context)
+                
+            except asyncio.CancelledError:
+                logger.warning("Sentiment analysis was cancelled")
+                raise  # Re-raise CancelledError to propagate cancellation
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"GPT-4o-mini sentiment analysis failed after {max_retries} attempts: {e}")
+                    raise RuntimeError(f"Sentiment analysis failed after retries: {e}")
+                else:
+                    logger.warning(f"GPT-4o-mini attempt {attempt + 1} failed: {e}, retrying...")
         
         # LEGACY OLLAMA CODE (COMMENTED OUT - KEEP FOR POTENTIAL RESTORATION)
         """

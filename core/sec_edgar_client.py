@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 import aiohttp
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
+from utils.connection_pool import connection_pool
 
 logger = logging.getLogger(__name__)
 
@@ -105,20 +106,12 @@ class SECEdgarClient:
         }
     
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create HTTP session."""
-        if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(
-                limit=10, 
-                limit_per_host=5,
-                ttl_dns_cache=300,  # DNS cache
-                use_dns_cache=True
-            )
-            # Don't set default timeout to avoid conflicts
-            self._session = aiohttp.ClientSession(
-                headers=self.headers,
-                connector=connector
-            )
-        return self._session
+        """Get session from connection pool."""
+        return await connection_pool.get_async_session(
+            name="sec_edgar_client",
+            headers=self.headers,
+            connector_limit=10
+        )
     
     async def _make_request(self, url: str, **kwargs) -> Optional[Dict]:
         """Make rate-limited request to SEC API."""
@@ -126,7 +119,7 @@ class SECEdgarClient:
         
         try:
             session = await self._get_session()
-            timeout = aiohttp.ClientTimeout(total=15)
+            timeout = aiohttp.ClientTimeout(total=60)  # Increased timeout for slower SEC responses
             async with session.get(url, timeout=timeout, **kwargs) as response:
                 if response.status == 200:
                     content_type = response.headers.get('content-type', '')
@@ -658,9 +651,8 @@ class SECEdgarClient:
             return {}
     
     async def cleanup(self):
-        """Clean up resources."""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Clean up resources via connection pool."""
+        await connection_pool.close_session("sec_edgar_client")
     
     async def __aenter__(self):
         """Async context manager entry."""

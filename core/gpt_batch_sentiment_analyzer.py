@@ -428,32 +428,54 @@ class LegacySentimentInterface:
         if not settings.openai_api_key:
             raise RuntimeError("OpenAI API key required for sentiment analysis")
         
-        try:
-            # Initialize OpenAI client with minimal configuration
-            client = OpenAI(api_key=settings.openai_api_key)
-            
-            system_prompt = gpt_sentiment_analyzer._create_financial_system_prompt(context)
-            
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",  # Use faster model for real-time requests
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
-                ],
-                max_tokens=300,
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
-            
-            content = response.choices[0].message.content
-            sentiment_data = json.loads(content)
-            
-            return SentimentAnalysis(**sentiment_data)
-            
-        except Exception as e:
-            error_msg = f"Real-time sentiment analysis failed: {e}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+        # Add retry logic with exponential backoff
+        max_retries = 3
+        base_delay = 2.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Add delay between retries to handle rate limiting
+                if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    await asyncio.sleep(delay)
+                    logger.info(f"Retrying OpenAI API call, attempt {attempt + 1}/{max_retries}")
+                
+                # Initialize OpenAI client with proper configuration
+                client = OpenAI(
+                    api_key=settings.openai_api_key,
+                    timeout=30.0  # Add explicit timeout
+                )
+                
+                system_prompt = gpt_sentiment_analyzer._create_financial_system_prompt(context)
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": text}
+                    ],
+                    max_tokens=300,
+                    temperature=0.1,
+                    response_format={"type": "json_object"}
+                )
+                
+                content = response.choices[0].message.content
+                sentiment_data = json.loads(content)
+                
+                return SentimentAnalysis(**sentiment_data)
+                
+            except asyncio.CancelledError:
+                logger.warning("OpenAI sentiment analysis was cancelled")
+                raise  # Re-raise CancelledError to propagate cancellation
+                
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    error_msg = f"Real-time sentiment analysis failed after {max_retries} attempts: {e}"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+                else:
+                    logger.warning(f"OpenAI API attempt {attempt + 1} failed: {e}, retrying...")
+    
 
 
 # Legacy compatibility instance

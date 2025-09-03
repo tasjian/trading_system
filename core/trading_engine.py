@@ -107,13 +107,18 @@ class UnifiedTradingEngine:
             regt_buying_power = float(account_info.get('regt_buying_power', 0))
             pattern_day_trader = account_info.get('pattern_day_trader', False)
             
-            # Check for day trading power issues first
-            if pattern_day_trader and day_trading_buying_power <= 0:
+            # Check for day trading power issues (skip for paper accounts)
+            is_paper_account = 'paper' in account_info.get('id', '').lower() or buying_power > equity * 2.5
+            
+            if pattern_day_trader and not is_paper_account and day_trading_buying_power <= 0:
                 logger.warning(f"⚠️ DAY TRADING POWER EXHAUSTED: ${day_trading_buying_power:.2f}")
                 logger.warning("   Reason: Likely unsettled funds or recent day trades")
                 logger.warning("   System will operate in limited mode (sells only)")
                 # Don't halt system, just log the limitation
                 return True
+            elif is_paper_account:
+                logger.debug(f"📝 Paper trading account detected - using buying power: ${buying_power:,.2f}")
+                # Paper accounts don't have real day trading power restrictions
             
             # For margin accounts, use buying power instead of cash balance
             # Pattern Day Trader accounts can have negative cash but positive buying power

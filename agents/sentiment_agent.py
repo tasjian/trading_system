@@ -118,19 +118,33 @@ class SentimentAgent:
             logger.info(f"🚀 Using crypto-specialized sentiment analysis for {symbol}")
             return await self._analyze_crypto_sentiment(symbol)
         
-        # Collect data from all sources in parallel with performance-tested timeouts
-        # Based on llama3:8b performance test: ~17s average, setting 25s buffer
-        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=120.0)  # Increased for CPU Ollama
-        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=150.0)  # Increased for CPU Ollama
-        earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=180.0)  # Increased for CPU Ollama
-        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=60.0)  # Reduced due to optimizations (fewer filings, shorter lookback)
-        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=90.0)  # Increased for CPU Ollama
+        # Collect data from all sources with staggered execution to prevent API overload
+        # Add small delays between task creation to stagger API calls
+        news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=180.0)
         
-        # Execute all tasks with graceful failure handling
-        results = await asyncio.gather(
-            news_task, social_task, earnings_task, sec_task, market_task,
-            return_exceptions=True
-        )
+        await asyncio.sleep(0.5)  # Small delay to stagger API calls
+        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=240.0)
+        
+        await asyncio.sleep(0.5)  # Small delay to stagger API calls  
+        earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=300.0)
+        
+        await asyncio.sleep(0.5)  # Small delay to stagger API calls
+        sec_task = asyncio.wait_for(self._analyze_sec_filings_sentiment(symbol), timeout=120.0)
+        
+        await asyncio.sleep(0.5)  # Small delay to stagger API calls
+        market_task = asyncio.wait_for(self._analyze_market_sentiment(symbol), timeout=150.0)
+        
+        # Execute all tasks with proper exception handling
+        # Use asyncio.gather with return_exceptions=True to prevent one failure from cancelling others
+        try:
+            results = await asyncio.gather(
+                news_task, social_task, earnings_task, sec_task, market_task,
+                return_exceptions=True
+            )
+        except asyncio.CancelledError:
+            logger.warning(f"Comprehensive sentiment analysis was cancelled for {symbol}")
+            # Clean cancellation - re-raise to properly propagate
+            raise
         
         news_sentiment, social_sentiment, earnings_sentiment, sec_sentiment, market_sentiment = results
         
@@ -140,6 +154,8 @@ class SentimentAgent:
         if isinstance(news_sentiment, Exception):
             if isinstance(news_sentiment, asyncio.TimeoutError):
                 logger.warning(f"News sentiment analysis timed out for {symbol} - continuing without news data")
+            elif isinstance(news_sentiment, asyncio.CancelledError):
+                logger.warning(f"News sentiment analysis was cancelled for {symbol} - continuing without news data")
             else:
                 logger.warning(f"News sentiment analysis failed for {symbol}: {type(news_sentiment).__name__} - continuing without news data")
             news_sentiment = None
@@ -272,10 +288,10 @@ class SentimentAgent:
     async def _analyze_social_sentiment(self, symbol: str) -> Dict[str, SentimentAnalysis]:
         """Analyze sentiment from social media platforms."""
         try:
-            # Collect posts from all platforms with timeout
+            # Collect posts from all platforms with generous timeout
             platform_results = await asyncio.wait_for(
                 self.social_collector.collect_all_platforms(symbol), 
-                timeout=15.0
+                timeout=45.0  # Increased timeout for social media collection
             )
             
             sentiment_results = {}
@@ -428,9 +444,9 @@ class SentimentAgent:
             weights.append(self.source_weights['news'])
         
         # Add social sentiment (average across platforms)
-        if social_sentiment:
-            social_scores = [s.score for s in social_sentiment.values()]
-            social_confidences = [s.confidence for s in social_sentiment.values()]
+        if social_sentiment and isinstance(social_sentiment, dict) and social_sentiment:
+            social_scores = [s.score for s in social_sentiment.values() if isinstance(s, SentimentAnalysis)]
+            social_confidences = [s.confidence for s in social_sentiment.values() if isinstance(s, SentimentAnalysis)]
             if social_scores:
                 avg_social_score = sum(social_scores) / len(social_scores)
                 avg_social_confidence = sum(social_confidences) / len(social_confidences)
@@ -439,9 +455,9 @@ class SentimentAgent:
                 weights.append(self.source_weights['social'])
         
         # Add earnings sentiment (average across sections)
-        if earnings_sentiment:
-            earnings_scores = [s.score for s in earnings_sentiment.values()]
-            earnings_confidences = [s.confidence for s in earnings_sentiment.values()]
+        if earnings_sentiment and isinstance(earnings_sentiment, dict) and earnings_sentiment:
+            earnings_scores = [s.score for s in earnings_sentiment.values() if isinstance(s, SentimentAnalysis)]
+            earnings_confidences = [s.confidence for s in earnings_sentiment.values() if isinstance(s, SentimentAnalysis)]
             if earnings_scores:
                 avg_earnings_score = sum(earnings_scores) / len(earnings_scores)
                 avg_earnings_confidence = sum(earnings_confidences) / len(earnings_confidences)
@@ -450,9 +466,9 @@ class SentimentAgent:
                 weights.append(self.source_weights['earnings'])
         
         # Add SEC filings sentiment (average across filings)
-        if sec_sentiment:
-            sec_scores = [s.score for s in sec_sentiment.values()]
-            sec_confidences = [s.confidence for s in sec_sentiment.values()]
+        if sec_sentiment and isinstance(sec_sentiment, dict) and sec_sentiment:
+            sec_scores = [s.score for s in sec_sentiment.values() if isinstance(s, SentimentAnalysis)]
+            sec_confidences = [s.confidence for s in sec_sentiment.values() if isinstance(s, SentimentAnalysis)]
             if sec_scores:
                 avg_sec_score = sum(sec_scores) / len(sec_scores)
                 avg_sec_confidence = sum(sec_confidences) / len(sec_confidences)
@@ -513,22 +529,28 @@ class SentimentAgent:
             all_opportunities.update(news_sentiment.opportunities)
         
         # Extract from social sentiment
-        for sentiment in social_sentiment.values():
-            all_themes.update(sentiment.key_phrases)
-            all_risks.update(sentiment.risk_factors)
-            all_opportunities.update(sentiment.opportunities)
+        if isinstance(social_sentiment, dict):
+            for sentiment in social_sentiment.values():
+                if isinstance(sentiment, SentimentAnalysis):
+                    all_themes.update(sentiment.key_phrases)
+                    all_risks.update(sentiment.risk_factors)
+                    all_opportunities.update(sentiment.opportunities)
         
         # Extract from earnings sentiment
-        for sentiment in earnings_sentiment.values():
-            all_themes.update(sentiment.key_phrases)
-            all_risks.update(sentiment.risk_factors)
-            all_opportunities.update(sentiment.opportunities)
+        if isinstance(earnings_sentiment, dict):
+            for sentiment in earnings_sentiment.values():
+                if isinstance(sentiment, SentimentAnalysis):
+                    all_themes.update(sentiment.key_phrases)
+                    all_risks.update(sentiment.risk_factors)
+                    all_opportunities.update(sentiment.opportunities)
         
         # Extract from SEC filings sentiment
-        for sentiment in sec_sentiment.values():
-            all_themes.update(sentiment.key_phrases)
-            all_risks.update(sentiment.risk_factors)
-            all_opportunities.update(sentiment.opportunities)
+        if isinstance(sec_sentiment, dict):
+            for sentiment in sec_sentiment.values():
+                if isinstance(sentiment, SentimentAnalysis):
+                    all_themes.update(sentiment.key_phrases)
+                    all_risks.update(sentiment.risk_factors)
+                    all_opportunities.update(sentiment.opportunities)
         
         # Extract from market sentiment
         if market_sentiment:
