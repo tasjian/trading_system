@@ -128,13 +128,25 @@ class EarningsCallScraper:
             return []
     
     async def get_latest_transcript(self, symbol: str) -> Optional[EarningsTranscript]:
-        """Get the latest earnings transcript for a symbol."""
+        """Get the latest earnings transcript for a symbol with enhanced caching."""
         try:
-            transcripts = await self.search_transcripts(symbol, days_back=90)
-            if transcripts:
-                # Return the most recent transcript
-                return transcripts[0]
-            return None
+            # Import enhanced cache
+            from utils.enhanced_api_cache import get_enhanced_cache, CacheType
+            cache = await get_enhanced_cache()
+            
+            # Define the API call function
+            async def fetch_earnings_transcript():
+                transcripts = await self.search_transcripts(symbol, days_back=90)
+                if transcripts:
+                    # Return the most recent transcript
+                    return transcripts[0]
+                return None
+            
+            # Use cached API call with buffer and error handling
+            cache_key = f"earnings_transcript_{symbol}"
+            result = await cache.cached_api_call(CacheType.EARNINGS, cache_key, fetch_earnings_transcript)
+            return result
+            
         except Exception as e:
             logger.error(f"Error getting latest transcript for {symbol}: {e}")
             return None

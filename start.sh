@@ -61,6 +61,18 @@ fi
 # Change to script directory
 cd "$SCRIPT_DIR"
 
+# Load environment variables from .env file
+echo -e "${BLUE}🔑 Loading environment variables...${NC}"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    # Export all variables from .env file
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+    echo -e "${GREEN}   ✅ Environment variables loaded from .env${NC}"
+else
+    echo -e "${YELLOW}   ⚠️ .env file not found - using system environment${NC}"
+fi
+
 # Check Python environment
 echo -e "${BLUE}🔍 Checking Python environment...${NC}"
 PYTHON_CMD=$(which python3 2>/dev/null || which python 2>/dev/null || echo "")

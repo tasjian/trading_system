@@ -40,6 +40,15 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Import curriculum policy for trained models
+try:
+    from models.long_short_regime_policy import RegimeAwarePolicy as CurriculumPolicy
+    CURRICULUM_POLICY_AVAILABLE = True
+    logger.info("✅ Curriculum policy architecture available")
+except ImportError:
+    CURRICULUM_POLICY_AVAILABLE = False
+    logger.warning("⚠️ Curriculum policy architecture not available - using local policy")
+
 Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done', 'info'])
 
 class MarketRegime(Enum):
@@ -344,13 +353,18 @@ class DualAgentSystem:
         
         logger.info(f"🤖 Initializing DualAgentSystem: {state_dim} state features → {action_dim} actions")
         
-        # Initialize policies with correct dimensions
-        self.stable_policy = RegimeAwarePolicy(state_dim, action_dim).to(device)
+        # Initialize policies with correct dimensions - use curriculum policy if available
+        if CURRICULUM_POLICY_AVAILABLE:
+            logger.info("🎓 Using trained curriculum policy architecture")
+            self.stable_policy = CurriculumPolicy(state_dim, action_dim).to(device)
+            self.learner_policy = CurriculumPolicy(state_dim, action_dim).to(device)
+        else:
+            logger.info("🔄 Using local RegimeAwarePolicy architecture")
+            self.stable_policy = RegimeAwarePolicy(state_dim, action_dim).to(device)
+            self.learner_policy = RegimeAwarePolicy(state_dim, action_dim).to(device)
+            
         self.stable_optimizer = optim.Adam(self.stable_policy.parameters(), lr=0.0001)
         self.last_stable_update = datetime.now()
-        
-        # Learning agent (experimental, updated frequently)
-        self.learner_policy = RegimeAwarePolicy(state_dim, action_dim).to(device)
         self.learner_optimizer = optim.Adam(self.learner_policy.parameters(), lr=0.0003)
         
         # Try to load compatible models
@@ -468,6 +482,96 @@ class DualAgentSystem:
         except Exception as e:
             logger.error(f"❌ Model adaptation failed: {e}")
             return False
+    
+    def _load_curriculum_with_adaptation(self, checkpoint: Dict, orig_state_dim: int, orig_action_dim: int) -> bool:
+        """Load curriculum model with dimension adaptation for current symbol universe."""
+        try:
+            stable_state_dict = checkpoint['stable_policy']
+            learner_state_dict = checkpoint['learner_policy']
+            
+            # Adapt state dimensions (input layers)
+            adapted_stable = self._adapt_state_dict_dimensions(
+                stable_state_dict, orig_state_dim, self.state_dim, orig_action_dim, self.action_dim
+            )
+            adapted_learner = self._adapt_state_dict_dimensions(
+                learner_state_dict, orig_state_dim, self.state_dim, orig_action_dim, self.action_dim
+            )
+            
+            # Load adapted weights
+            self.stable_policy.load_state_dict(adapted_stable, strict=False)
+            self.learner_policy.load_state_dict(adapted_learner, strict=False)
+            
+            logger.info(f"✅ Successfully adapted curriculum model: {orig_state_dim}→{self.state_dim} state, {orig_action_dim}→{self.action_dim} actions")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Curriculum adaptation failed: {e}")
+            return False
+    
+    def _adapt_state_dict_dimensions(self, state_dict: Dict, orig_state: int, new_state: int, orig_action: int, new_action: int) -> Dict:
+        """Adapt state dict dimensions for current symbol universe."""
+        adapted = {}
+        
+        for key, tensor in state_dict.items():
+            if 'actor_backbone.0.weight' in key and tensor.shape[1] == orig_state:
+                # Input layer adaptation - map actor_backbone to actor
+                if new_state <= orig_state:
+                    adapted[key.replace('actor_backbone.0', 'actor.0')] = tensor[:, :new_state]
+                else:
+                    padding = torch.zeros(tensor.shape[0], new_state - orig_state)
+                    adapted[key.replace('actor_backbone.0', 'actor.0')] = torch.cat([tensor, padding], dim=1)
+                    
+            elif 'actor_backbone.0.bias' in key:
+                adapted[key.replace('actor_backbone.0', 'actor.0')] = tensor
+                
+            elif 'actor_backbone.2.weight' in key:
+                adapted[key.replace('actor_backbone.2', 'actor.2')] = tensor
+                
+            elif 'actor_backbone.2.bias' in key:
+                adapted[key.replace('actor_backbone.2', 'actor.2')] = tensor
+                    
+            elif 'mu_head.weight' in key and tensor.shape[0] == orig_action:
+                # Output layer adaptation
+                if new_action <= orig_action:
+                    adapted[key] = tensor[:new_action, :]
+                else:
+                    padding = torch.randn(new_action - orig_action, tensor.shape[1]) * 0.01
+                    adapted[key] = torch.cat([tensor, padding], dim=0)
+                    
+            elif 'mu_head.bias' in key and tensor.shape[0] == orig_action:
+                if new_action <= orig_action:
+                    adapted[key] = tensor[:new_action]
+                else:
+                    padding = torch.zeros(new_action - orig_action)
+                    adapted[key] = torch.cat([tensor, padding], dim=0)
+                    
+            elif 'log_std' in key and tensor.shape[0] == orig_action:
+                # Adapt log_std parameter
+                if new_action <= orig_action:
+                    adapted[key] = tensor[:new_action]
+                else:
+                    padding = torch.zeros(new_action - orig_action)
+                    adapted[key] = torch.cat([tensor, padding], dim=0)
+                    
+            elif 'critic.0.weight' in key:
+                # Critic input layer adaptation 
+                # Saved model has regime embedding (352 = 336 + 16), current model doesn't (just state_dim)
+                critic_input_dim = tensor.shape[1]  # 352 = 336 state + 16 regime
+                
+                if new_state <= orig_state:
+                    # Truncate to new state dimension only (ignore regime embedding part)
+                    adapted[key] = tensor[:, :new_state]
+                else:
+                    # Use original state features + pad for additional features
+                    state_part = tensor[:, :orig_state]  # Take first 336 features (ignore regime embedding)
+                    padding = torch.zeros(tensor.shape[0], new_state - orig_state)
+                    adapted[key] = torch.cat([state_part, padding], dim=1)
+                    
+            else:
+                # Keep other layers as-is (critic hidden layers, biases, etc.)
+                adapted[key] = tensor
+        
+        return adapted
         
     def _load_compatible_models(self):
         """Load compatible models using version manager or curriculum model."""
@@ -482,9 +586,25 @@ class DualAgentSystem:
                     curriculum_checkpoint = torch.load(curriculum_model_path, map_location=self.device)
                     
                     if 'stable_policy' in curriculum_checkpoint and 'learner_policy' in curriculum_checkpoint:
-                        # Load curriculum model
-                        self.stable_policy.load_state_dict(curriculum_checkpoint['stable_policy'])
-                        self.learner_policy.load_state_dict(curriculum_checkpoint['learner_policy'])
+                        # Check if dimensions match current system
+                        curriculum_metadata = curriculum_checkpoint.get('metadata', {})
+                        curriculum_state_dim = curriculum_metadata.get('state_dim', self.state_dim)
+                        curriculum_action_dim = curriculum_metadata.get('action_dim', self.action_dim)
+                        
+                        if curriculum_state_dim != self.state_dim or curriculum_action_dim != self.action_dim:
+                            logger.warning(f"🔄 Curriculum model dimension mismatch: trained({curriculum_state_dim}→{curriculum_action_dim}) vs current({self.state_dim}→{self.action_dim})")
+                            logger.info("🎯 Adapting curriculum model to current symbol universe...")
+                            
+                            # Load curriculum model with dimension adaptation
+                            success = self._load_curriculum_with_adaptation(
+                                curriculum_checkpoint, curriculum_state_dim, curriculum_action_dim
+                            )
+                            if not success:
+                                raise Exception("Curriculum model adaptation failed")
+                        else:
+                            # Direct loading when dimensions match
+                            self.stable_policy.load_state_dict(curriculum_checkpoint['stable_policy'])
+                            self.learner_policy.load_state_dict(curriculum_checkpoint['learner_policy'])
                         
                         # Load optimizers if available
                         if 'stable_optimizer' in curriculum_checkpoint:
@@ -955,10 +1075,39 @@ class OnlineRLTradingSystem:
         if any(violations.values()):
             logger.warning(f"🚨 Safety violations detected: {violations}")
             self.training_stats['safety_violations'] += 1
+            
             # Switch to stable policy in case of violations
             if self.dual_agent.active_agent != "stable":
                 self.dual_agent.active_agent = "stable"
                 logger.info("🛡️ Switched to stable policy due to safety violations")
+            
+            # Apply aggressive loss mitigation for specific violations
+            if violations.get('min_sharpe', False):
+                logger.warning("🚨 CRITICAL: Low Sharpe ratio detected - implementing loss mitigation")
+                # Signal to reduce all positions by 20% to cut losses
+                market_data['loss_mitigation_signal'] = {
+                    'action': 'reduce_positions',
+                    'reduction_factor': 0.2,
+                    'reason': 'low_sharpe_ratio'
+                }
+            
+            if violations.get('max_drawdown', False):
+                logger.warning("🚨 CRITICAL: Maximum drawdown exceeded - emergency position reduction")
+                # Signal to reduce all positions by 50% in emergency
+                market_data['loss_mitigation_signal'] = {
+                    'action': 'emergency_reduction',
+                    'reduction_factor': 0.5,
+                    'reason': 'max_drawdown'
+                }
+            
+            if violations.get('daily_loss', False):
+                logger.warning("🚨 CRITICAL: Daily loss limit exceeded - halt new purchases")
+                # Signal to halt all buying, only allow selling
+                market_data['loss_mitigation_signal'] = {
+                    'action': 'halt_buying',
+                    'reduction_factor': 0.0,
+                    'reason': 'daily_loss_limit'
+                }
         
         # Trigger background training if needed
         await self._maybe_trigger_training()

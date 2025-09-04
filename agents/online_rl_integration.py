@@ -48,12 +48,15 @@ class OnlineRLAgent:
         
         # Initialize unified reward calculator
         self.reward_calculator = UnifiedRewardCalculator(
-            lambda_c=1.2,    # Higher cost penalty weight
-            lambda_r=1.5,    # Higher risk penalty weight
-            lambda_e=0.8,    # Moderate execution penalty weight
-            lambda_s=0.6,    # Moderate sentiment alignment weight
-            lambda_reg=0.4,  # Lower regime alignment weight
-            lambda_div=0.3   # Lower diversification bonus weight
+            lambda_cash=0.4,    # Cash management weight
+            lambda_regime=0.1,  # Regime alignment weight  
+            lambda_risk=0.2,    # Risk management weight
+            # Enhanced loss management for live trading
+            loss_penalty_factor=2.0,            # Strong asymmetric loss penalty
+            stop_loss_threshold=0.02,           # 2% stop-loss threshold
+            stop_loss_penalty=1.0,              # Full stop-loss penalty
+            drawdown_penalty_factor=1.5,        # Portfolio drawdown penalty
+            consecutive_loss_penalty=0.1        # Consecutive loss penalty
         )
         
         # Performance tracking

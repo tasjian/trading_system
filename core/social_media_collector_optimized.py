@@ -94,8 +94,8 @@ class OptimizedTickerDetector:
 class FastSessionManager:
     """Efficient HTTP session manager with cleanup."""
     
-    def __init__(self, timeout: int = 15):
-        self.timeout = aiohttp.ClientTimeout(total=timeout)
+    def __init__(self, timeout: int = 30):
+        self.timeout = aiohttp.ClientTimeout(total=timeout, connect=10)
         self._session_name = f"reddit_collector_{id(self)}"
         self._closed = False
     
@@ -107,11 +107,11 @@ class FastSessionManager:
         )
     
     async def get(self, url: str, **kwargs):
-        """Make GET request with automatic cleanup."""
+        """Make GET request with proper connection pool usage."""
         try:
-            session = await self.get_session()
-            async with session.get(url, **kwargs) as response:
-                return await response.json() if response.status == 200 else None
+            async with connection_pool.get_temp_session(timeout=self.timeout) as session:
+                async with session.get(url, **kwargs) as response:
+                    return await response.json() if response.status == 200 else None
         except Exception as e:
             logger.debug(f"Request failed: {e}")
             return None
@@ -356,42 +356,58 @@ class OptimizedSocialMediaCollector:
         self.twitter_collector = OptimizedTwitterCollector()
     
     async def collect_all_platforms(self, symbol: str, limit_per_platform: int = 10) -> Dict[str, List]:
-        """Collect from all platforms with strict timeouts."""
-        results = {'reddit': [], 'twitter': []}
-        
-        # Collect Reddit posts with timeout
+        """Collect from all platforms with enhanced caching and reduced timeouts."""
         try:
-            reddit_task = asyncio.create_task(
-                self.reddit_collector.collect_posts_fast(symbol, limit_per_platform)
-            )
-            reddit_posts = await asyncio.wait_for(reddit_task, timeout=15.0)
-            results['reddit'] = reddit_posts
-            logger.info(f"✅ Collected {len(reddit_posts)} Reddit posts for {symbol}")
+            # Import enhanced cache
+            from utils.enhanced_api_cache import get_enhanced_cache, CacheType
+            cache = await get_enhanced_cache()
             
-        except asyncio.TimeoutError:
-            logger.debug(f"Reddit collection timeout for {symbol}")
-            results['reddit'] = []
-        except Exception as e:
-            logger.debug(f"Reddit collection error for {symbol}: {e}")
-            results['reddit'] = []
-        
-        # Collect Twitter posts with timeout
-        try:
-            twitter_task = asyncio.create_task(
-                self.twitter_collector.collect_posts_fast(symbol, limit_per_platform)
-            )
-            twitter_posts = await asyncio.wait_for(twitter_task, timeout=10.0)
-            results['twitter'] = twitter_posts
-            logger.info(f"✅ Collected {len(twitter_posts)} Twitter posts for {symbol}")
+            # Define collection function for caching
+            async def collect_social_media():
+                results = {'reddit': [], 'twitter': []}
+                
+                # Collect Reddit posts with reduced timeout (was 25s, now 15s)
+                try:
+                    reddit_task = asyncio.create_task(
+                        self.reddit_collector.collect_posts_fast(symbol, limit_per_platform)
+                    )
+                    reddit_posts = await asyncio.wait_for(reddit_task, timeout=15.0)
+                    results['reddit'] = reddit_posts
+                    logger.info(f"✅ Collected {len(reddit_posts)} Reddit posts for {symbol}")
+                    
+                except asyncio.TimeoutError:
+                    logger.debug(f"Reddit collection timeout for {symbol}")
+                    results['reddit'] = []
+                except Exception as e:
+                    logger.debug(f"Reddit collection error for {symbol}: {e}")
+                    results['reddit'] = []
+                
+                # Collect Twitter posts with reduced timeout (was 20s, now 10s)
+                try:
+                    twitter_task = asyncio.create_task(
+                        self.twitter_collector.collect_posts_fast(symbol, limit_per_platform)
+                    )
+                    twitter_posts = await asyncio.wait_for(twitter_task, timeout=10.0)
+                    results['twitter'] = twitter_posts
+                    logger.info(f"✅ Collected {len(twitter_posts)} Twitter posts for {symbol}")
+                    
+                except asyncio.TimeoutError:
+                    logger.debug(f"Twitter collection timeout for {symbol}")
+                    results['twitter'] = []
+                except Exception as e:
+                    logger.debug(f"Twitter collection error for {symbol}: {e}")
+                    results['twitter'] = []
+                
+                return results
             
-        except asyncio.TimeoutError:
-            logger.debug(f"Twitter collection timeout for {symbol}")
-            results['twitter'] = []
+            # Use cached API call with buffer and error handling
+            cache_key = f"social_media_{symbol}"
+            result = await cache.cached_api_call(CacheType.SOCIAL_MEDIA, cache_key, collect_social_media)
+            return result if result is not None else {'reddit': [], 'twitter': []}
+            
         except Exception as e:
-            logger.debug(f"Twitter collection error for {symbol}: {e}")
-            results['twitter'] = []
-        
-        return results
+            logger.warning(f"Enhanced social media collection error for {symbol}: {e}")
+            return {'reddit': [], 'twitter': []}
     
     async def cleanup(self):
         """Clean up all resources."""

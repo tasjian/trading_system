@@ -100,10 +100,16 @@ class IntelligentPortfolioBalancer:
             'stop_loss_percent': settings.stop_loss_percent
         }
         
-        # Rebalancing thresholds - made more sensitive for better trading
-        self.rebalance_threshold = 0.015  # Lowered to 1.5% threshold for action (was 2%)
-        self.significant_deviation_threshold = 0.05  # Lowered from 10% - 5% for high urgency
-        self.critical_deviation_threshold = 0.10     # Lowered from 20% - 10% for critical urgency
+        # Rebalancing thresholds - BALANCED to prevent churning while capturing opportunities  
+        self.rebalance_threshold = 0.025  # 2.5% threshold (balanced: prevents churning but allows opportunities)
+        self.significant_deviation_threshold = 0.06  # 6% for high urgency (balanced approach)
+        self.critical_deviation_threshold = 0.12     # 12% for critical urgency (balanced approach)
+        
+        # Anti-churning controls
+        self.last_trade_time = {}  # symbol -> datetime of last trade
+        self.min_trade_interval_minutes = 30  # Minimum 30 minutes between trades per symbol
+        self.trade_count_today = {}  # symbol -> count of trades today
+        self.max_trades_per_symbol_per_day = 4  # Maximum 4 trades per symbol per day
         
         # Order execution preferences
         self.prefer_limit_orders = True
@@ -265,6 +271,15 @@ class IntelligentPortfolioBalancer:
                                  symbol: str,
                                  signals: List[Dict] = None) -> Tuple[PositionAction, OrderUrgency]:
         """Determine what action is needed for a position."""
+        
+        # Anti-churning check: Prevent excessive trading of the same symbol
+        if self._is_recent_trade(symbol):
+            logger.info(f"🔒 Anti-churning: Skipping {symbol} (traded within {self.min_trade_interval_minutes} min)")
+            return PositionAction.HOLD, OrderUrgency.LOW
+        
+        if self._exceeds_daily_trade_limit(symbol):
+            logger.info(f"🔒 Anti-churning: {symbol} exceeded daily trade limit ({self.max_trades_per_symbol_per_day})")
+            return PositionAction.HOLD, OrderUrgency.LOW
         
         # Check if deviation is significant enough
         abs_deviation = abs(weight_deviation)
@@ -460,8 +475,8 @@ class IntelligentPortfolioBalancer:
         elif risk_score > 0.5:  # Medium risk
             adjusted_quantity *= 0.85  # Reduce position size by 15%
         
-        # Ensure minimum trade size
-        min_trade_value = 100  # $100 minimum trade
+        # Ensure minimum trade size - BALANCED for meaningful trades
+        min_trade_value = 200  # $200 minimum trade (balanced: prevents micro-trades but allows small positions)
         if current_price > 0 and adjusted_quantity * current_price < min_trade_value:
             adjusted_quantity = min_trade_value / current_price
         
@@ -627,6 +642,49 @@ class IntelligentPortfolioBalancer:
             risk_score=risk_score,
             sector=sector
         )
+    
+    def _is_recent_trade(self, symbol: str) -> bool:
+        """Check if symbol was traded recently to prevent churning."""
+        if symbol not in self.last_trade_time:
+            return False
+        
+        from datetime import datetime, timedelta
+        time_since_last_trade = datetime.now() - self.last_trade_time[symbol]
+        return time_since_last_trade < timedelta(minutes=self.min_trade_interval_minutes)
+    
+    def _exceeds_daily_trade_limit(self, symbol: str) -> bool:
+        """Check if symbol has exceeded daily trade limit."""
+        from datetime import datetime
+        today = datetime.now().date()
+        
+        # Reset counter if it's a new day
+        for sym, (trade_date, count) in list(self.trade_count_today.items()):
+            if trade_date != today:
+                del self.trade_count_today[sym]
+        
+        if symbol not in self.trade_count_today:
+            return False
+        
+        trade_date, count = self.trade_count_today[symbol]
+        return count >= self.max_trades_per_symbol_per_day
+    
+    def _record_trade(self, symbol: str):
+        """Record that a trade was executed for anti-churning tracking."""
+        from datetime import datetime
+        
+        # Update last trade time
+        self.last_trade_time[symbol] = datetime.now()
+        
+        # Update daily trade count
+        today = datetime.now().date()
+        if symbol not in self.trade_count_today:
+            self.trade_count_today[symbol] = (today, 1)
+        else:
+            trade_date, count = self.trade_count_today[symbol]
+            if trade_date == today:
+                self.trade_count_today[symbol] = (today, count + 1)
+            else:
+                self.trade_count_today[symbol] = (today, 1)
     
     async def _get_current_portfolio(self) -> Dict:
         """Get current portfolio data from Alpaca."""

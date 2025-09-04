@@ -714,5 +714,107 @@
       }
     },
     "action_space": "full_range"
+  },
+  "a3927db577b6": {
+    "version_id": "a3927db577b6",
+    "timestamp": "2025-09-04 16:32:38.598844",
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "GOOGL",
+      "TSLA",
+      "NVDA",
+      "QQQ",
+      "SPY",
+      "IWM"
+    ],
+    "state_dim": 96,
+    "action_dim": 8,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 1,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 1,
+      "average_return": 0.0,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0,
+      "force_training": true,
+      "last_update_trigger": "manual_reset",
+      "training_active": true
+    },
+    "file_path": "models/model_a3927db577b6.pt"
+  },
+  "a4dba3c23d04": {
+    "version_id": "a4dba3c23d04",
+    "timestamp": "2025-09-04 17:13:28.085850",
+    "symbols": [
+      "AAPL",
+      "AFBI",
+      "AIPO",
+      "AMID",
+      "ARMH",
+      "ATI",
+      "CDLR",
+      "CFLT",
+      "CHSCP",
+      "COPP",
+      "CRSP",
+      "CXW",
+      "DNN",
+      "EAOR",
+      "EMPD",
+      "ENPH",
+      "EQRR",
+      "FAI",
+      "FC",
+      "FEDM"
+    ],
+    "state_dim": 240,
+    "action_dim": 20,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 1,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 1,
+      "average_return": 0.0,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0,
+      "force_training": true,
+      "last_update_trigger": "manual_reset",
+      "training_active": true
+    },
+    "file_path": "models/model_a4dba3c23d04.pt"
+  },
+  "150a863234e0": {
+    "version_id": "150a863234e0",
+    "timestamp": "2025-09-04 17:15:19.639528",
+    "symbols": [
+      "AAPL",
+      "MSFT",
+      "GOOGL",
+      "TSLA",
+      "NVDA"
+    ],
+    "state_dim": 60,
+    "action_dim": 5,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 1,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 1,
+      "average_return": 0.0,
+      "average_sharpe": 3.4713320972195914,
+      "consecutive_losses": 0,
+      "force_training": true,
+      "last_update_trigger": "manual_reset",
+      "training_active": true
+    },
+    "file_path": "models/model_150a863234e0.pt"
   }
 }

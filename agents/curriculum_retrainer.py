@@ -181,7 +181,12 @@ class CurriculumRetrainer:
             delta=0.0,                          # Still no transaction costs
             lambda_cash=0.2,                    # Light cash management
             lambda_regime=0.0,
-            lambda_risk=0.0
+            lambda_risk=0.0,
+            # Enhanced loss management - moderate penalties
+            loss_penalty_factor=1.5,            # Moderate asymmetric loss penalty
+            stop_loss_threshold=0.03,           # 3% stop-loss threshold
+            stop_loss_penalty=0.5,              # Light stop-loss penalty
+            consecutive_loss_penalty=0.05       # Light consecutive loss penalty
         )
         
         # Phase 3: Full reward integration (R_t = α·(r_t/σ) + β·L_t + γ·S_t - δ·C_t)
@@ -192,7 +197,13 @@ class CurriculumRetrainer:
             delta=self.config.phase_3_delta,    # Add transaction cost awareness
             lambda_cash=0.4,                    # Full cash management
             lambda_regime=0.1,                  # Add regime awareness
-            lambda_risk=0.2                     # Add risk management
+            lambda_risk=0.2,                    # Add risk management
+            # Enhanced loss management - full penalties
+            loss_penalty_factor=2.0,            # Strong asymmetric loss penalty
+            stop_loss_threshold=0.02,           # 2% stop-loss threshold
+            stop_loss_penalty=1.0,              # Full stop-loss penalty
+            drawdown_penalty_factor=1.5,        # Portfolio drawdown penalty
+            consecutive_loss_penalty=0.1        # Full consecutive loss penalty
         )
         
         # Phase 4: Production (same as Phase 3 but with production settings)
@@ -203,7 +214,13 @@ class CurriculumRetrainer:
             delta=self.config.phase_3_delta,
             lambda_cash=0.4,
             lambda_regime=0.1,
-            lambda_risk=0.2
+            lambda_risk=0.2,
+            # Production-ready enhanced loss management
+            loss_penalty_factor=2.5,            # Stronger asymmetric loss penalty for production
+            stop_loss_threshold=0.015,          # 1.5% stop-loss threshold (tighter)
+            stop_loss_penalty=1.5,              # Higher stop-loss penalty for production
+            drawdown_penalty_factor=2.0,        # Higher drawdown penalty for production
+            consecutive_loss_penalty=0.15       # Higher consecutive loss penalty for production
         )
         
         return calculators

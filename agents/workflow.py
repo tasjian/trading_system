@@ -388,10 +388,10 @@ class TradingWorkflow:
                             *[analyze_symbol_sentiment(symbol) for symbol in batch],
                             return_exceptions=True
                         ),
-                        timeout=120.0  # 2 minute timeout for batch with GPT-5-nano
+                        timeout=300.0  # 5 minute timeout for batch with comprehensive sentiment analysis
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Batch {i//batch_size + 1} timed out after 60 seconds")
+                    logger.warning(f"Batch {i//batch_size + 1} timed out after 300 seconds")
                     batch_results = [(symbol, None) for symbol in batch]
                 
                 # Process batch results
@@ -2077,6 +2077,17 @@ class TradingWorkflow:
                 else:
                     logger.warning(f"❌ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): FILTERED OUT with confidence={confidence} <= 0.15")
             
+            # Sort signals by confidence to prioritize highest confidence trades
+            def get_signal_confidence(signal):
+                if hasattr(signal, 'confidence'):
+                    return float(getattr(signal, 'confidence', 0.5))
+                elif isinstance(signal, dict):
+                    return float(signal.get('confidence', 0.5))
+                return 0.5
+            
+            optimized_signals.sort(key=get_signal_confidence, reverse=True)
+            logger.info(f"📈 Sorted {len(optimized_signals)} signals by confidence (highest first)")
+            
             # Update both signals keys to ensure compatibility
             state["signals"] = optimized_signals
             state["trading_signals"] = optimized_signals
@@ -2111,6 +2122,13 @@ class TradingWorkflow:
         """Execute trading orders with COMPREHENSIVE DATA QUALITY VALIDATION."""
         try:
             logger.info("Order Management Agent: FAIL-FAST order execution with quality validation")
+            
+            # STEP 0: Check for loss mitigation signals from RL safety monitor
+            if 'loss_mitigation_signal' in state:
+                mitigation = state['loss_mitigation_signal']
+                logger.warning(f"🚨 LOSS MITIGATION TRIGGERED: {mitigation['action']} due to {mitigation['reason']}")
+                await self._apply_loss_mitigation(state, mitigation)
+                # Continue with modified/reduced signals
             
             # Get signals from multiple possible state keys
             signals = (state.get("optimized_signals", []) or 
@@ -2148,17 +2166,82 @@ class TradingWorkflow:
             logger.info(f"Order Management Agent processing {len(signals)} signals")
             
             executed_orders = []
-            for signal in signals[:5]:  # Execute top 5 signals
+            
+            # STEP 1: Pre-process signals into order format for net calculation
+            from tools.alpaca_client import alpaca_client
+            
+            # Convert all signals to order format first
+            raw_orders = []
+            for signal in signals:
+                symbol = self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')
+                action = self._get_signal_attribute(signal, 'action', None)
+                
+                # Handle dictionary signals that use 'direction' instead of 'action'
+                if not action:
+                    direction = self._get_signal_attribute(signal, 'direction', 'up')
+                    action = 'buy' if direction == 'up' else 'sell'
+                
+                quantity = self._get_signal_attribute(signal, 'quantity', 0.0)
+                confidence = self._get_signal_attribute(signal, 'confidence', 0.5)
+                
+                if symbol != 'UNKNOWN' and quantity > 0 and action.lower() != 'hold':
+                    raw_orders.append({
+                        "symbol": symbol,
+                        "side": action.lower(),
+                        "qty": quantity,
+                        "confidence": confidence,
+                        "original_signal": signal
+                    })
+            
+            logger.info(f"📋 Converted {len(signals)} signals to {len(raw_orders)} raw orders")
+            
+            # STEP 2: Calculate net orders to avoid wash trades
+            net_orders = alpaca_client.calculate_net_orders_batch(raw_orders)
+            
+            logger.info(f"⚖️ Net order calculation: {len(raw_orders)} raw orders -> {len(net_orders)} net orders")
+            
+            # STEP 3: Execute net orders (replaces individual signal processing)
+            signals_to_execute = []
+            for net_order in net_orders[:6]:  # Limit to 6 orders total
+                # Convert net order back to signal format for existing execution logic
+                signals_to_execute.append({
+                    "symbol": net_order["symbol"],
+                    "action": net_order["side"],
+                    "quantity": net_order["qty"],
+                    "confidence": 0.8,  # High confidence for net orders
+                    "net_order_data": net_order  # Include net order data for logging
+                })
+            
+            logger.info(f"📊 Executing {len(signals_to_execute)} net orders (wash trade compliant)")
+            
+            for signal in signals_to_execute:
                 try:
                     # Execute actual order through Alpaca API
-                    from tools.alpaca_client import alpaca_client
                     
                     try:
-                        # ALGO AGENT ENHANCEMENT: Advanced order types based on market conditions
-                        from tools.alpaca_client import alpaca_client
+                        # Extract signal data (now using net order data if available)
+                        if isinstance(signal, dict) and "net_order_data" in signal:
+                            # This is a net order - use the aggregated data
+                            net_data = signal["net_order_data"]
+                            symbol = net_data["symbol"]
+                            action = net_data["side"] 
+                            quantity = net_data["qty"]
+                            
+                            logger.info(f"📊 Processing net order for {symbol}: {action} {quantity:.2f} (aggregated from {len(net_data.get('original_orders', []))} signals)")
+                            logger.info(f"   Original: {net_data.get('buy_qty_aggregated', 0):.2f} buy + {net_data.get('sell_qty_aggregated', 0):.2f} sell = {net_data.get('net_change', 0):+.2f}")
+                        else:
+                            # Regular signal processing
+                            symbol = self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')
+                            action = self._get_signal_attribute(signal, 'action', None)
+                            
+                            # Handle dictionary signals that use 'direction' instead of 'action'
+                            if not action:
+                                direction = self._get_signal_attribute(signal, 'direction', 'up')
+                                action = 'buy' if direction == 'up' else 'sell'
+                            
+                            quantity = self._get_signal_attribute(signal, 'quantity', 0.0)
                         
-                        # Determine optimal order type based on volatility and market conditions
-                        symbol = self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')
+                        # Get market data for order type determination
                         current_price = alpaca_client.get_current_price(symbol)
                         volatility = self._get_signal_attribute(signal, 'volatility', 0.02)  # Default 2% volatility
                         
@@ -2189,16 +2272,6 @@ class TradingWorkflow:
                             limit_price = None
                             logger.info(f"📈 Using MARKET order for stable {symbol}: volatility={volatility:.1%}")
                         
-                        # Extract signal attributes safely first
-                        symbol = self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')
-                        action = self._get_signal_attribute(signal, 'action', None)
-                        
-                        # Handle dictionary signals that use 'direction' instead of 'action'
-                        if not action:
-                            direction = self._get_signal_attribute(signal, 'direction', 'up')
-                            action = 'buy' if direction == 'up' else 'sell'
-                            logger.debug(f"Converted direction '{direction}' to action '{action}' for {symbol}")
-                        
                         # Calculate stop loss and take profit levels (ALGO AGENT RECOMMENDATION)
                         if action.lower() == "buy":
                             stop_loss_price = current_price * 0.92   # 8% stop loss
@@ -2207,48 +2280,8 @@ class TradingWorkflow:
                             stop_loss_price = current_price * 1.08   # 8% stop loss for shorts
                             take_profit_price = current_price * 0.85  # 15% take profit for shorts
                         
-                        quantity = self._get_signal_attribute(signal, 'quantity', 0.0)
-                        
-                        # ALWAYS recalculate position size for safety (ignore signal quantity)
-                        # This prevents oversized positions that trigger Alpaca safety checks
-                        original_quantity = quantity
-                        logger.info(f"🔒 Recalculating safe position size for {symbol} (original quantity: {original_quantity})")
-                        
-                        if symbol == 'UNKNOWN':
-                            logger.warning(f"Skipping invalid signal: symbol={symbol}")
-                            continue
-                        
-                        # Get portfolio info for safe position sizing
-                        portfolio = state.get("portfolio", {})
-                        portfolio_value = float(portfolio.get("equity", 50000))
-                        
-                        # Calculate position size based on signal strength and confidence
-                        strength = self._get_signal_attribute(signal, 'strength', 0.5)
-                        confidence = self._get_signal_attribute(signal, 'confidence', 0.5)
-                        signal_score = min(1.0, strength * confidence)
-                        
-                        # Base position size: 0.5-2% of portfolio (very conservative for safety)
-                        base_position_pct = 0.005 + (signal_score * 0.015)  # 0.5% to 2%
-                        target_dollar_amount = portfolio_value * base_position_pct
-                        
-                        # Calculate safe quantity based on current price (whole shares only)
-                        if current_price and current_price > 0:
-                            quantity = int(target_dollar_amount / current_price)
-                            # Ensure minimum position size but cap at reasonable amount
-                            if quantity < 1 and target_dollar_amount >= current_price:
-                                quantity = 1
-                            # Safety cap: never exceed $1000 position
-                            max_quantity = int(1000 / current_price)
-                            if quantity > max_quantity:
-                                quantity = max_quantity
-                                logger.warning(f"⚠️ Capped {symbol} position at {quantity} shares (${quantity * current_price:.2f}) for safety")
-                            
-                            logger.info(f"💰 {symbol}: {base_position_pct:.1%} position = ${target_dollar_amount:.2f} = {quantity} shares @ ${current_price:.2f}")
-                        else:
-                            logger.warning(f"Cannot calculate quantity for {symbol}: no price data")
-                            continue
-                        
-                        if quantity <= 0 or symbol == 'UNKNOWN':
+                        # Validate signal data
+                        if symbol == 'UNKNOWN' or quantity <= 0:
                             logger.warning(f"Skipping invalid signal: symbol={symbol}, quantity={quantity}")
                             continue
                         
@@ -2278,8 +2311,46 @@ class TradingWorkflow:
                         }
                         if limit_price:
                             order_params["limit_price"] = limit_price
-                            
+                        
+                        # Check if this order might trigger wash trade detection
                         alpaca_order = alpaca_client.place_order(**order_params)
+                        
+                        # Handle OCO orders if wash trade was detected
+                        if alpaca_order.get("status") == "skipped_net_zero":
+                            logger.info(f"⚖️ {symbol} order skipped due to zero net change - no wash trade risk")
+                            order = {
+                                "symbol": symbol,
+                                "action": action,
+                                "quantity": 0,
+                                "status": "skipped",
+                                "order_type": "net_zero",
+                                "timestamp": datetime.now(),
+                                "message": "Order skipped - zero net position change"
+                            }
+                            executed_orders.append(order)
+                            continue
+                        
+                        # Check if we need to use OCO order for wash trade compliance
+                        elif isinstance(alpaca_order.get("side"), str) and alpaca_order["side"].startswith("oco_"):
+                            # OCO order needed - use bracket order with tight stops
+                            original_action = alpaca_order["side"].replace("oco_", "")
+                            logger.info(f"🔄 Using OCO bracket order for {symbol} to comply with wash trade rules")
+                            
+                            try:
+                                # Place OCO order instead of simple order
+                                oco_order = alpaca_client.place_oco_order(
+                                    symbol=symbol,
+                                    qty=quantity,
+                                    side=original_action,
+                                    take_profit_price=take_profit_price,
+                                    stop_loss_price=stop_loss_price
+                                )
+                                alpaca_order = oco_order
+                                order_type = "oco_bracket"
+                                logger.info(f"✅ OCO bracket order placed for {symbol}: {original_action} {quantity}")
+                            except Exception as oco_error:
+                                logger.error(f"❌ OCO order failed for {symbol}: {oco_error}")
+                                raise
                         
                         # ALGO AGENT ENHANCEMENT: Place bracket orders (stop-loss + take-profit) for risk management
                         bracket_orders = []
@@ -2333,7 +2404,52 @@ class TradingWorkflow:
                         
                     except Exception as api_error:
                         logger.error(f"❌ Alpaca API error for {symbol}: {api_error}")
-                        # DO NOT add failed orders to executed_orders - they should not count as executed
+                        
+                        # POSITION RESYNC: Update our position tracking with current Alpaca positions
+                        try:
+                            logger.info(f"🔄 Resyncing positions after order failure for {symbol}")
+                            
+                            # Get fresh position data from Alpaca
+                            current_positions = alpaca_client.get_positions()
+                            
+                            # Update portfolio state with actual positions
+                            portfolio = state.get("portfolio", {})
+                            portfolio_positions = portfolio.get("positions", {})
+                            
+                            # Sync each position
+                            for alpaca_pos in current_positions:
+                                pos_symbol = alpaca_pos["symbol"]
+                                actual_qty = float(alpaca_pos["qty"])
+                                actual_value = float(alpaca_pos.get("market_value", 0))
+                                
+                                # Update our tracking to match Alpaca
+                                portfolio_positions[pos_symbol] = {
+                                    "quantity": actual_qty,
+                                    "market_value": actual_value,
+                                    "last_sync": datetime.now(),
+                                    "source": "alpaca_resync"
+                                }
+                            
+                            # Remove positions we don't actually have
+                            symbols_in_alpaca = {pos["symbol"] for pos in current_positions}
+                            symbols_to_remove = []
+                            for tracked_symbol in portfolio_positions.keys():
+                                if tracked_symbol not in symbols_in_alpaca:
+                                    symbols_to_remove.append(tracked_symbol)
+                            
+                            for symbol_to_remove in symbols_to_remove:
+                                del portfolio_positions[symbol_to_remove]
+                                logger.info(f"🗑️ Removed {symbol_to_remove} from tracking (not in Alpaca)")
+                            
+                            # Update state with resynced positions
+                            portfolio["positions"] = portfolio_positions
+                            state["portfolio"] = portfolio
+                            
+                            logger.info(f"✅ Position resync complete: {len(current_positions)} positions synced from Alpaca")
+                            
+                        except Exception as resync_error:
+                            logger.error(f"❌ Position resync failed for {symbol}: {resync_error}")
+                        
                         # Store failed orders separately for retry logic if needed
                         failed_order = {
                             "symbol": symbol,
@@ -2341,13 +2457,14 @@ class TradingWorkflow:
                             "quantity": quantity,
                             "status": "failed",
                             "error": str(api_error),
-                            "timestamp": datetime.now()
+                            "timestamp": datetime.now(),
+                            "position_resynced": True
                         }
                         # Add failed orders to separate tracking (not executed_orders)
                         if "failed_orders" not in state:
                             state["failed_orders"] = []
                         state["failed_orders"].append(failed_order)
-                        logger.info(f"⚠️ Order failed, logged for retry: {action} {quantity} {symbol}")
+                        logger.info(f"⚠️ Order failed, logged for retry with position resync: {action} {quantity} {symbol}")
                         continue  # Skip to next signal
                 except Exception as e:
                     logger.warning(f"Failed to execute order for {symbol}: {e}")
@@ -2536,3 +2653,67 @@ class TradingWorkflow:
         state["optimized_signals"] = []
         state["current_agent"] = "signal_generator"
         return update_state_timestamp(state)
+    
+    async def _apply_loss_mitigation(self, state: TradingState, mitigation_signal: Dict[str, Any]):
+        """Apply aggressive loss mitigation actions based on safety violations."""
+        from tools.alpaca_client import alpaca_client
+        
+        action = mitigation_signal['action']
+        reduction_factor = mitigation_signal['reduction_factor']
+        reason = mitigation_signal['reason']
+        
+        try:
+            if action == 'reduce_positions':
+                logger.warning(f"🚨 REDUCING ALL POSITIONS by {reduction_factor*100}% due to {reason}")
+                # Get current positions
+                positions = alpaca_client.list_positions()
+                
+                for position in positions:
+                    if float(position.qty) > 0:  # Only reduce long positions
+                        reduction_qty = float(position.qty) * reduction_factor
+                        if reduction_qty >= 1:  # Only sell if reduction is at least 1 share
+                            logger.warning(f"🚨 LOSS MITIGATION: Selling {reduction_qty:.0f} shares of {position.symbol}")
+                            alpaca_client.submit_order(
+                                symbol=position.symbol,
+                                qty=int(reduction_qty),
+                                side='sell',
+                                type='market',
+                                time_in_force='day'
+                            )
+            
+            elif action == 'emergency_reduction':
+                logger.warning(f"🚨 EMERGENCY POSITION REDUCTION by {reduction_factor*100}% due to {reason}")
+                # Get current positions and sell larger amounts
+                positions = alpaca_client.list_positions()
+                
+                for position in positions:
+                    if float(position.qty) > 0:
+                        reduction_qty = float(position.qty) * reduction_factor
+                        if reduction_qty >= 1:
+                            logger.warning(f"🚨 EMERGENCY SALE: Selling {reduction_qty:.0f} shares of {position.symbol}")
+                            alpaca_client.submit_order(
+                                symbol=position.symbol,
+                                qty=int(reduction_qty),
+                                side='sell',
+                                type='market',
+                                time_in_force='day'
+                            )
+            
+            elif action == 'halt_buying':
+                logger.warning(f"🚨 HALTING ALL BUY ORDERS due to {reason}")
+                # Remove all buy signals from the signals list
+                current_signals = state.get("optimized_signals", [])
+                sell_only_signals = []
+                for signal in current_signals:
+                    signal_action = self._get_signal_attribute(signal, 'action', None)
+                    if signal_action in ['sell', 'short']:
+                        sell_only_signals.append(signal)
+                    else:
+                        logger.warning(f"🚨 BLOCKED BUY ORDER for {self._get_signal_attribute(signal, 'symbol', 'UNKNOWN')}")
+                
+                state["optimized_signals"] = sell_only_signals
+                logger.warning(f"🚨 Buy orders halted: {len(current_signals)} → {len(sell_only_signals)} signals")
+        
+        except Exception as e:
+            logger.error(f"❌ Loss mitigation failed: {e}")
+            # Don't let loss mitigation errors break the system

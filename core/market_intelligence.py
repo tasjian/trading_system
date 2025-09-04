@@ -384,7 +384,7 @@ class UnifiedMarketIntelligence:
             if self.fmp_key and await self._check_rate_limit('fmp'):
                 try:
                     if not self.session:
-                        await self._ensure_session()
+                        self.session = await self._ensure_session()
                     
                     url = f"https://financialmodelingprep.com/api/v3/key-metrics/{symbol}"
                     params = {'apikey': self.fmp_key}
@@ -393,14 +393,14 @@ class UnifiedMarketIntelligence:
                     async with session.get(url, params=params) as response:
                         if response.status == 200:
                             data = await response.json()
-                            if data and isinstance(data, list) and data:
+                            if data and isinstance(data, list) and data and data[0]:
                                 return self._score_fundamentals(data[0])
                 except Exception as e:
                     logger.debug(f"FMP fundamental error: {e}")
             
             # Fallback to Yahoo Finance using utility function
             info = fetch_stock_info(symbol)
-            if info:
+            if info and isinstance(info, dict):
                 return self._score_fundamentals(info)
             
         except Exception as e:
@@ -409,6 +409,9 @@ class UnifiedMarketIntelligence:
     
     def _score_fundamentals(self, data: Dict) -> float:
         """Score fundamental data."""
+        if not data or not isinstance(data, dict):
+            return 0.0
+        
         score = 0.0
         factors = 0
         
@@ -499,42 +502,53 @@ class UnifiedMarketIntelligence:
     #     DISABLED: No fallback sentiment allowed per fail-fast design
     
     async def _get_news_articles(self, symbol: str) -> List[Dict]:
-        """Get news articles for sentiment analysis. Used by sentiment agent."""
+        """Get news articles for sentiment analysis with enhanced caching and error handling."""
         try:
-            if not self.news_key or not await self._check_rate_limit('news_api'):
-                return []
+            # Import enhanced cache
+            from utils.enhanced_api_cache import get_enhanced_cache, CacheType
+            cache = await get_enhanced_cache()
             
-            if not self.session:
-                await self._ensure_session()
-            
-            # Get recent news
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'q': f'"{symbol}"',
-                'sortBy': 'publishedAt',
-                'language': 'en',
-                'pageSize': 20,  # Get more articles for LLM analysis
-                'from': (datetime.now() - timedelta(days=2)).isoformat(),
-                'apiKey': self.news_key
-            }
-            
-            async with self.session.get(url, params=params) as response:
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        if data and isinstance(data, dict) and 'articles' in data:
-                            return data.get('articles', [])
-                        else:
-                            logger.debug(f"Invalid response format for {symbol}: {type(data)} - {data}")
-                            return []
-                    except Exception as json_error:
-                        logger.warning(f"Failed to parse JSON response for {symbol}: {json_error}")
-                        return []
-                else:
-                    logger.debug(f"News API returned status {response.status} for {symbol}")
+            # Define the API call function
+            async def fetch_news_api():
+                if not self.news_key or not await self._check_rate_limit('news_api'):
                     return []
+                
+                if not self.session:
+                    self.session = await self._ensure_session()
+                
+                # Get recent news
+                url = "https://newsapi.org/v2/everything"
+                params = {
+                    'q': f'"{symbol}"',
+                    'sortBy': 'publishedAt',
+                    'language': 'en',
+                    'pageSize': 20,  # Get more articles for LLM analysis
+                    'from': (datetime.now() - timedelta(days=2)).isoformat(),
+                    'apiKey': self.news_key
+                }
+                
+                # Enhanced timeout and retry logic for news API reliability
+                timeout = aiohttp.ClientTimeout(total=45, connect=15, sock_read=30)
+                async with self.session.get(url, params=params, timeout=timeout) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            if data and isinstance(data, dict) and 'articles' in data:
+                                return data.get('articles', [])
+                            else:
+                                logger.debug(f"Invalid response format for {symbol}: {type(data)} - {data}")
+                                return []
+                        except Exception as json_error:
+                            logger.warning(f"Failed to parse JSON response for {symbol}: {json_error}")
+                            return []
+                    else:
+                        logger.debug(f"News API returned status {response.status} for {symbol}")
+                        return []
             
-            return []
+            # Use cached API call with buffer and error handling
+            cache_key = f"news_articles_{symbol}"
+            result = await cache.cached_api_call(CacheType.NEWS, cache_key, fetch_news_api)
+            return result if result is not None else []
             
         except Exception as e:
             logger.warning(f"Error fetching news articles for {symbol}: {e}")

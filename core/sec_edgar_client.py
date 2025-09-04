@@ -114,46 +114,89 @@ class SECEdgarClient:
         )
     
     async def _make_request(self, url: str, **kwargs) -> Optional[Dict]:
-        """Make rate-limited request to SEC API."""
+        """Make rate-limited request to SEC API with enhanced error handling and retry logic."""
         await self.rate_limiter.acquire()
         
-        try:
-            session = await self._get_session()
-            timeout = aiohttp.ClientTimeout(total=60)  # Increased timeout for slower SEC responses
-            async with session.get(url, timeout=timeout, **kwargs) as response:
-                if response.status == 200:
-                    content_type = response.headers.get('content-type', '')
-                    if 'application/json' in content_type:
-                        return await response.json()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                session = await self._get_session()
+                # Enhanced timeout configuration for SEC.gov reliability issues
+                timeout = aiohttp.ClientTimeout(
+                    total=120,        # Total timeout increased from 60s
+                    connect=30,       # Connection timeout
+                    sock_read=90      # Socket read timeout
+                )
+                
+                async with session.get(url, timeout=timeout, **kwargs) as response:
+                    if response.status == 200:
+                        content_type = response.headers.get('content-type', '')
+                        if 'application/json' in content_type:
+                            return await response.json()
+                        else:
+                            text = await response.text()
+                            return {'content': text, 'content_type': content_type}
+                    elif response.status == 429:
+                        # Rate limited - wait and retry once
+                        logger.warning("Rate limited by SEC, waiting...")
+                        await asyncio.sleep(2)
+                        return await self._make_request(url, **kwargs)
+                    elif response.status == 404:
+                        # Not found - could be wrong CIK, no filings, or incorrect endpoint
+                        logger.warning(f"SEC API 404 Not Found: {url}")
+                        logger.warning(f"This could mean: 1) CIK not found, 2) No recent filings, 3) Wrong endpoint")
+                        return None
+                    elif response.status == 403:
+                        # Forbidden - likely user agent issue (2024 SEC requirements)
+                        error_text = await response.text()
+                        logger.warning(f"SEC API 403 Forbidden: {url}")
+                        logger.warning(f"User-Agent issue with SEC 2024 requirements. Current UA: {self.user_agent}")
+                        logger.warning(f"SEC endpoint temporarily unavailable - graceful degradation in effect")
+                        logger.debug(f"SEC Response: {error_text[:200]}...")
+                        return None
                     else:
-                        text = await response.text()
-                        return {'content': text, 'content_type': content_type}
-                elif response.status == 429:
-                    # Rate limited - wait and retry once
-                    logger.warning("Rate limited by SEC, waiting...")
-                    await asyncio.sleep(2)
-                    return await self._make_request(url, **kwargs)
-                elif response.status == 404:
-                    # Not found - could be wrong CIK, no filings, or incorrect endpoint
-                    logger.warning(f"SEC API 404 Not Found: {url}")
-                    logger.warning(f"This could mean: 1) CIK not found, 2) No recent filings, 3) Wrong endpoint")
-                    return None
-                elif response.status == 403:
-                    # Forbidden - likely user agent issue (2024 SEC requirements)
-                    error_text = await response.text()
-                    logger.warning(f"SEC API 403 Forbidden: {url}")
-                    logger.warning(f"User-Agent issue with SEC 2024 requirements. Current UA: {self.user_agent}")
-                    logger.warning(f"SEC endpoint temporarily unavailable - graceful degradation in effect")
-                    logger.debug(f"SEC Response: {error_text[:200]}...")
-                    return None
+                        logger.warning(f"SEC API request failed: {response.status} for {url}")
+                        if attempt < max_retries - 1 and response.status >= 500:
+                            # Server error - retry after delay
+                            backoff_time = min(10 * (attempt + 1), 30)
+                            logger.warning(f"SEC API server error. Retrying in {backoff_time}s (attempt {attempt + 1})")
+                            await asyncio.sleep(backoff_time)
+                            continue
+                        return None
+                    
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    backoff_time = min(15 * (attempt + 1), 45)
+                    logger.warning(f"SEC API timeout. Retrying in {backoff_time}s (attempt {attempt + 1})")
+                    await asyncio.sleep(backoff_time)
+                    continue
                 else:
-                    logger.warning(f"SEC API request failed: {response.status} for {url}")
+                    logger.error(f"SEC API timeout after {max_retries} attempts for {url}")
                     return None
-        except Exception as e:
-            logger.error(f"SEC API request error: {str(e)}")
-            logger.debug(f"Failed URL: {url}")
-            logger.debug(f"Exception type: {type(e).__name__}")
-            return None
+                    
+            except aiohttp.ClientConnectorError as e:
+                if attempt < max_retries - 1:
+                    backoff_time = min(20 * (attempt + 1), 60)
+                    logger.warning(f"SEC API connection error: {e}. Retrying in {backoff_time}s (attempt {attempt + 1})")
+                    await asyncio.sleep(backoff_time)
+                    continue
+                else:
+                    logger.error(f"SEC API connection failed after {max_retries} attempts: {e}")
+                    return None
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    backoff_time = min(10 * (attempt + 1), 30)
+                    logger.warning(f"SEC API request error: {e}. Retrying in {backoff_time}s (attempt {attempt + 1})")
+                    await asyncio.sleep(backoff_time)
+                    continue
+                else:
+                    logger.error(f"SEC API request error after {max_retries} attempts: {str(e)}")
+                    logger.debug(f"Failed URL: {url}")
+                    logger.debug(f"Exception type: {type(e).__name__}")
+                    return None
+        
+        return None  # All retries exhausted
     
     def normalize_cik(self, cik: int or str) -> str:
         """Normalize CIK to 10-digit zero-padded format (SEC requirement)."""

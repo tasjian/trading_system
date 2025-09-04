@@ -58,6 +58,7 @@ class DailySummary:
     day_change_percent: float
     daily_return_percent: float  # Daily rate of return as percentage
     ytd_return_percent: float    # Year-to-date rate of return as percentage
+    daily_sharpe_ratio: float    # Daily Sharpe ratio
     positions: List[Position]
     total_positions: int
     trades_today: int
@@ -674,6 +675,12 @@ class EmailWebhookNotifier:
                                 </span>
                                 <span class="metric-label">YTD Return</span>
                             </div>
+                            <div class="metric">
+                                <span class="metric-value" style="color: {('#28a745' if summary.daily_sharpe_ratio > 1 else '#ffc107' if summary.daily_sharpe_ratio > 0 else '#dc3545')};">
+                                    {summary.daily_sharpe_ratio:.2f}
+                                </span>
+                                <span class="metric-label">Sharpe Ratio</span>
+                            </div>
                         </div>
                     </div>
                     
@@ -1065,6 +1072,49 @@ async def send_daily_summary_email(portfolio_value: float, cash_balance: float,
     elif ytd_return_percent < -100:
         ytd_return_percent = max(ytd_return_percent, -50.0)
     
+    # Calculate daily Sharpe ratio using recent portfolio performance
+    daily_sharpe_ratio = 0.0
+    try:
+        from tools.alpaca_client import AlpacaClient
+        alpaca_client = AlpacaClient()
+        
+        # Get portfolio history for the last 30 days to calculate Sharpe ratio
+        portfolio_history = alpaca_client.get_portfolio_history(period='1M', timeframe='1Day')
+        
+        if portfolio_history and 'equity' in portfolio_history:
+            equity_values = portfolio_history['equity']
+            if len(equity_values) > 1:
+                import numpy as np
+                
+                # Calculate daily returns
+                daily_returns = []
+                for i in range(1, len(equity_values)):
+                    if equity_values[i-1] > 0:
+                        daily_return = (equity_values[i] - equity_values[i-1]) / equity_values[i-1]
+                        daily_returns.append(daily_return)
+                
+                if len(daily_returns) > 5:  # Need at least 5 days of data
+                    mean_return = np.mean(daily_returns)
+                    std_return = np.std(daily_returns)
+                    
+                    if std_return > 0:
+                        # Annualized Sharpe ratio (assuming 252 trading days, risk-free rate ~0)
+                        daily_sharpe_ratio = (mean_return / std_return) * np.sqrt(252)
+                        
+                        logger.debug(f"Calculated daily Sharpe ratio: {daily_sharpe_ratio:.3f} from {len(daily_returns)} days")
+                    else:
+                        logger.debug("Zero volatility detected, Sharpe ratio set to 0")
+                else:
+                    logger.debug(f"Insufficient data for Sharpe calculation: {len(daily_returns)} returns")
+            else:
+                logger.debug("Insufficient portfolio history for Sharpe calculation")
+        else:
+            logger.debug("No portfolio history available for Sharpe calculation")
+            
+    except Exception as e:
+        logger.warning(f"Error calculating daily Sharpe ratio: {e}")
+        daily_sharpe_ratio = 0.0
+    
     # Create risk metrics
     risk_metrics = {
         'max_position_risk': f"{max([abs(p.market_value / portfolio_value) * 100 for p in positions] + [0]):.1f}%" if positions else "0.0%",
@@ -1082,6 +1132,7 @@ async def send_daily_summary_email(portfolio_value: float, cash_balance: float,
         day_change_percent=day_change_percent,
         daily_return_percent=daily_return_percent,
         ytd_return_percent=ytd_return_percent,
+        daily_sharpe_ratio=daily_sharpe_ratio,
         positions=positions,
         total_positions=len(positions),
         trades_today=trades_today,

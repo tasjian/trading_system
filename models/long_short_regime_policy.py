@@ -105,8 +105,22 @@ class RegimeAwarePolicy(nn.Module):
             nn.Linear(hidden_size, 1),
         )
 
-    def forward(self, obs):
-        raise NotImplementedError
+    def forward(self, obs, regime_id=None):
+        """
+        Forward pass for RegimeAwarePolicy compatibility.
+        
+        Args:
+            obs: State observation tensor
+            regime_id: Optional regime identifier (ignored in simple policy)
+            
+        Returns:
+            action_mean: Mean action values
+            action_std: Action standard deviations
+        """
+        x = self.actor(obs)
+        mu = self.mu_head(x)
+        std = torch.exp(self.log_std)
+        return mu, std
 
     def act(self, obs):
         x = self.actor(obs)

@@ -491,10 +491,20 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
         # Remove duplicates and limit total for diversification
         symbols = list(dict.fromkeys(symbols))[:25]  # Max 25 symbols for proper diversification
         
-        # 4. Only fallback to defaults if no symbols found from any source
+        # 4. Raise error if no dynamic symbols found - fail fast instead of silent fallback
         if not symbols:
-            logger.warning("⚠️ No symbols from universe filter or sentiment data, using diversified fallback")
-            symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'IWM', 'XLF', 'XLK', 'SPY', 'QQQ']
+            error_msg = (
+                "❌ CRITICAL ERROR: No dynamic symbols found for hybrid LLM-RL system! "
+                "This indicates a failure in the trading pipeline. "
+                "Sources checked: universe_filter={}, sentiment_data={}, portfolio_positions={}. "
+                "The trading system must provide dynamic symbols for proper RL learning."
+            ).format(
+                len(state.get("filtered_symbols", [])),
+                len(state.get("sentiment_data", {})), 
+                len(state.get("portfolio", {}).get("positions", {}))
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         logger.info(f"🎯 Processing {len(symbols)} symbols for diversified portfolio (${portfolio_value:,.2f})")
         
@@ -682,9 +692,9 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
         # STEP 4: Intelligent Rebalancing Logic with Sector Constraints
         logger.info("⚖️ Step 4: Intelligent Rebalancing - Preventing Over-Trading")
         
-        # Calculate rebalancing thresholds - ENHANCED FOR MORE AGGRESSIVE TRADING
-        rebalancing_threshold = 0.015  # 1.5% deviation triggers rebalancing (was 5%)
-        min_trade_size = portfolio_value * 0.002  # Minimum $200 trade size (was $500)
+        # Calculate rebalancing thresholds - BALANCED TO PREVENT CHURNING WHILE ALLOWING LEGITIMATE SIGNALS
+        rebalancing_threshold = 0.025  # 2.5% deviation triggers rebalancing (balanced: prevents churning but allows opportunities)
+        min_trade_size = portfolio_value * 0.004  # Minimum $200 trade size (balanced: prevents micro-trades but allows meaningful positions)
         max_single_position = 0.15  # Max 15% per position (was 8%)
         max_sector_allocation = 0.35  # Max 35% per sector (was 25%)
         
@@ -759,23 +769,42 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
         # FORCE REBALANCING: Check if we've been idle too long
         force_rebalancing = False
         try:
-            # Force rebalancing if no real trades in last 2 hours 
-            from datetime import datetime
-            last_real_trade_time = getattr(self, 'last_real_trade_time', None)
-            if last_real_trade_time is None or (datetime.now() - last_real_trade_time).seconds > 7200:  # 2 hours
+            # Force rebalancing if we have very few positions (portfolio concentration risk)
+            if len(current_positions) < 5 or total_target_allocation < 0.3:
                 force_rebalancing = True
-                logger.info("🚀 FORCE REBALANCING: No real trades in 2+ hours, forcing active trading")
+                logger.info("🚀 FORCE REBALANCING: Low portfolio diversification detected")
         except:
             pass
         
+        # Anti-churning enhancement: Balanced minimum portfolio size threshold
+        min_positions_for_skip = 8  # Balanced: only skip rebalancing if portfolio is well diversified
+        
         # Only proceed with rebalancing if significant changes are needed
-        if not needs_rebalancing and len(current_positions) > 20 and not force_rebalancing:  # Allow rebalancing if portfolio too small (was 5, now 20)
-            logger.info("🔒 No significant rebalancing needed - maintaining current positions")
+        if not needs_rebalancing and len(current_positions) > min_positions_for_skip and not force_rebalancing:
+            logger.info(f"🔒 No significant rebalancing needed - maintaining current {len(current_positions)} positions")
+            
+            # Generate maintenance allocations for existing positions to keep system active
+            maintenance_allocations = []
+            for symbol, position_info in positions.items():
+                current_value = position_info.get('market_value', 0)
+                current_weight = current_value / max(portfolio_value, 1)
+                if current_weight >= 0.005:  # Only track positions >= 0.5%
+                    maintenance_allocations.append({
+                        'symbol': symbol,
+                        'weight': current_weight,
+                        'percentage': current_weight * 100,
+                        'confidence': 0.6,
+                        'action': 'HOLD',
+                        'risk_level': 'medium',
+                        'sector': 'Unknown',
+                        'reasoning': 'Maintaining existing position'
+                    })
+            
             return {
                 'rl_decisions': {
                     'strategy': 'maintain_positions',
                     'risk_level': risk_profile,
-                    'allocations': [],  # No new trades
+                    'allocations': maintenance_allocations,  # Provide maintenance allocations instead of empty
                     'confidence': 0.7,
                     'reasoning': 'Portfolio is well-balanced, no significant rebalancing required',
                     'rebalance_analysis': {

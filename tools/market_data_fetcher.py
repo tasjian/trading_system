@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 class MarketDataFetcher:
     """
     Market data fetcher that provides historical data for backtesting.
-    Uses Alpaca API as primary source with yfinance fallback for historical data.
+    Uses yfinance for historical data - raises errors if data unavailable.
     """
     
     def __init__(self):
         self.alpaca_client = alpaca_client
-        logger.info("✅ MarketDataFetcher initialized with Alpaca + yfinance backends")
+        logger.info("✅ MarketDataFetcher initialized with yfinance backend")
     
     async def get_historical_data(self, 
                                 symbol: str, 
@@ -64,8 +64,9 @@ class MarketDataFetcher:
                 )
                 
                 if hist_data.empty:
-                    logger.warning(f"⚠️ No historical data available for {symbol} from yfinance")
-                    return None
+                    error_msg = f"❌ CRITICAL: No historical data available for {symbol} from yfinance - cannot proceed with backtesting"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
                 
                 # Standardize column names (yfinance uses Title Case)
                 hist_data.columns = hist_data.columns.str.lower()
@@ -85,15 +86,14 @@ class MarketDataFetcher:
                 return hist_data
                 
             except Exception as yf_error:
-                logger.error(f"❌ yfinance error for {symbol}: {yf_error}")
-                
-                # Fallback: Try to get current data from Alpaca and create synthetic historical data
-                logger.info(f"🔄 Attempting Alpaca fallback for {symbol}")
-                return await self._create_synthetic_data(symbol, start_date, end_date)
+                error_msg = f"❌ CRITICAL: yfinance error for {symbol}: {yf_error} - cannot proceed with backtesting"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
                 
         except Exception as e:
-            logger.error(f"❌ Failed to fetch historical data for {symbol}: {e}")
-            return None
+            error_msg = f"❌ CRITICAL: Failed to fetch historical data for {symbol}: {e} - system cannot proceed"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
     
     def _convert_interval_to_yfinance(self, interval: str) -> str:
         """Convert internal interval format to yfinance format."""
@@ -106,75 +106,6 @@ class MarketDataFetcher:
         }
         return interval_mapping.get(interval, "1d")
     
-    async def _create_synthetic_data(self, symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-        """
-        Create synthetic historical data for backtesting when real data is unavailable.
-        Uses current Alpaca price as baseline with realistic price movements.
-        """
-        try:
-            # Get current price from Alpaca
-            current_data = self.alpaca_client.get_market_data(symbol, limit=1)
-            if current_data.empty:
-                logger.warning(f"⚠️ No current data available for {symbol} from Alpaca")
-                return None
-            
-            current_price = current_data['close'].iloc[-1]
-            
-            # Create date range
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-            date_range = pd.date_range(start=start_dt, end=end_dt, freq='H')
-            
-            # Generate synthetic price movements (random walk with realistic parameters)
-            np.random.seed(hash(symbol) % 2**32)  # Deterministic randomness per symbol
-            
-            # Realistic daily volatility (1-3% for most stocks)
-            daily_vol = 0.02
-            hourly_vol = daily_vol / np.sqrt(24)
-            
-            # Generate price movements
-            n_periods = len(date_range)
-            returns = np.random.normal(0, hourly_vol, n_periods)
-            
-            # Add some trend and mean reversion
-            trend = np.linspace(0, 0.05, n_periods)  # 5% trend over period
-            returns += trend / n_periods
-            
-            # Calculate prices
-            price_multipliers = np.exp(np.cumsum(returns))
-            prices = current_price * price_multipliers / price_multipliers[-1]  # End at current price
-            
-            # Generate OHLC data
-            close_prices = prices
-            open_prices = np.roll(close_prices, 1)
-            open_prices[0] = close_prices[0]
-            
-            # High/Low with realistic spreads
-            high_low_range = np.abs(np.random.normal(0, hourly_vol/2, n_periods))
-            high_prices = np.maximum(open_prices, close_prices) + high_low_range * close_prices
-            low_prices = np.minimum(open_prices, close_prices) - high_low_range * close_prices
-            
-            # Volume (realistic trading volume)
-            avg_volume = 1000000  # 1M average volume
-            volume = np.random.exponential(avg_volume, n_periods)
-            
-            # Create DataFrame
-            synthetic_data = pd.DataFrame({
-                'open': open_prices,
-                'high': high_prices,
-                'low': low_prices,
-                'close': close_prices,
-                'volume': volume
-            }, index=date_range)
-            
-            logger.info(f"📊 Generated {len(synthetic_data)} synthetic data points for {symbol}")
-            logger.warning(f"⚠️ Using synthetic data for {symbol} - backtesting results may not reflect real performance")
-            
-            return synthetic_data
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to create synthetic data for {symbol}: {e}")
-            return None
     
     def get_available_symbols(self) -> list:
         """Get list of available symbols for backtesting."""

@@ -37,6 +37,11 @@ class RewardComponents:
     regime_alignment_component: float = 0.0  # Market regime awareness
     risk_management_component: float = 0.0   # Portfolio risk controls
     
+    # Enhanced loss management penalties
+    stop_loss_penalty: float = 0.0          # Extra penalty for exceeding stop-loss
+    drawdown_penalty: float = 0.0           # Portfolio drawdown penalty
+    consecutive_loss_penalty: float = 0.0   # Consecutive loss penalty
+    
     # Detailed breakdown (for analysis)
     realized_return_raw: float = 0.0
     unrealized_return_raw: float = 0.0
@@ -116,7 +121,14 @@ class UnifiedRewardCalculator:
                  L_max: float = 0.05,         # Maximum allowed loss threshold (5%)
                  volatility_window: int = 20, # Rolling volatility window
                  min_volatility: float = 0.001, # Minimum volatility for normalization
-                 risk_free_rate: float = 0.02):  # Risk-free rate for calculations
+                 risk_free_rate: float = 0.02,  # Risk-free rate for calculations
+                 
+                 # Enhanced loss management parameters
+                 loss_penalty_factor: float = 2.0,     # Asymmetric penalty for losses
+                 stop_loss_threshold: float = 0.02,    # Stop-loss threshold (2%)
+                 stop_loss_penalty: float = 1.0,       # Extra penalty for exceeding stop-loss
+                 drawdown_penalty_factor: float = 1.5, # Penalty for portfolio drawdown
+                 consecutive_loss_penalty: float = 0.1): # Penalty for consecutive losses
         """
         Initialize mathematically-principled reward calculator.
         
@@ -152,8 +164,17 @@ class UnifiedRewardCalculator:
         self.min_volatility = min_volatility
         self.risk_free_rate = risk_free_rate
         
-        # Track performance for volatility calculation
+        # Enhanced loss management parameters
+        self.loss_penalty_factor = loss_penalty_factor
+        self.stop_loss_threshold = stop_loss_threshold
+        self.stop_loss_penalty = stop_loss_penalty
+        self.drawdown_penalty_factor = drawdown_penalty_factor
+        self.consecutive_loss_penalty = consecutive_loss_penalty
+        
+        # Track performance for volatility calculation and loss patterns
         self.returns_history: List[float] = []
+        self.loss_streak: int = 0
+        self.portfolio_peak: float = 0.0
         
     def calculate_reward(self, metrics: TradeMetrics) -> RewardComponents:
         """
@@ -192,6 +213,13 @@ class UnifiedRewardCalculator:
         # 7. Risk Management (portfolio-level risk controls)
         risk_management_component = self._calculate_risk_management_component(metrics)
         
+        # === ENHANCED LOSS MANAGEMENT PENALTIES ===
+        
+        # Calculate additional loss penalties
+        stop_loss_penalty = self._calculate_stop_loss_penalty(metrics)
+        drawdown_penalty = self._calculate_drawdown_penalty(metrics)
+        consecutive_loss_penalty = self._calculate_consecutive_loss_penalty(metrics)
+        
         # === TOTAL REWARD CALCULATION ===
         
         total_reward = (
@@ -201,7 +229,10 @@ class UnifiedRewardCalculator:
             self.delta * transaction_cost_component +
             self.lambda_cash * cash_management_component +
             self.lambda_regime * regime_alignment_component +
-            self.lambda_risk * risk_management_component
+            self.lambda_risk * risk_management_component -
+            stop_loss_penalty -
+            drawdown_penalty -
+            consecutive_loss_penalty
         )
         
         # Final validation and clipping with detailed debugging
@@ -215,6 +246,9 @@ class UnifiedRewardCalculator:
             logger.warning(f"  lambda_cash * cash_mgmt: {self.lambda_cash} * {cash_management_component} = {self.lambda_cash * cash_management_component}")
             logger.warning(f"  lambda_regime * regime: {self.lambda_regime} * {regime_alignment_component} = {self.lambda_regime * regime_alignment_component}")
             logger.warning(f"  lambda_risk * risk_mgmt: {self.lambda_risk} * {risk_management_component} = {self.lambda_risk * risk_management_component}")
+            logger.warning(f"  stop_loss_penalty: -{stop_loss_penalty}")
+            logger.warning(f"  drawdown_penalty: -{drawdown_penalty}")
+            logger.warning(f"  consecutive_loss_penalty: -{consecutive_loss_penalty}")
             logger.warning(f"Input metrics: realized_return={metrics.realized_return}, volatility={metrics.volatility}")
             total_reward = np.clip(metrics.realized_return, -1.0, 1.0)
         else:
@@ -233,6 +267,11 @@ class UnifiedRewardCalculator:
             regime_alignment_component=regime_alignment_component,
             risk_management_component=risk_management_component,
             
+            # Enhanced loss management penalties
+            stop_loss_penalty=stop_loss_penalty,
+            drawdown_penalty=drawdown_penalty,
+            consecutive_loss_penalty=consecutive_loss_penalty,
+            
             # Raw values for analysis
             realized_return_raw=metrics.realized_return,
             unrealized_return_raw=metrics.unrealized_return, 
@@ -242,37 +281,47 @@ class UnifiedRewardCalculator:
     
     def _calculate_profit_component(self, metrics: TradeMetrics) -> float:
         """
-        Calculate profit component: α·(r_t/σ)
-        Risk-adjusted realized returns following the mathematical formulation.
+        Calculate profit component: α·(r_t/σ) with asymmetric loss penalties
+        Enhanced with asymmetric loss weighting to discourage losses more than encouraging gains.
         """
         
         # Get realized return (r_t) from metrics
         realized_return = metrics.realized_return
         
-        # Get volatility (σ) for normalization
-        volatility = max(metrics.volatility, self.min_volatility)  # Avoid division by zero
+        # Get volatility (σ) for normalization - use downside deviation for better risk adjustment
+        volatility = self._calculate_downside_deviation(metrics) or max(metrics.volatility, self.min_volatility)
         
-        # Calculate risk-adjusted profit: r_t / σ with validation
+        # Calculate base risk-adjusted return
         if volatility > 0 and not np.isnan(realized_return) and not np.isinf(realized_return):
-            risk_adjusted_profit = realized_return / volatility
-            # Validate result and clip extreme values
-            if np.isnan(risk_adjusted_profit) or np.isinf(risk_adjusted_profit):
-                logger.warning(f"NaN/Inf in profit calculation: {realized_return}/{volatility} = {risk_adjusted_profit}")
-                risk_adjusted_profit = 0.0
-            else:
-                # Clip to prevent extreme rewards from very low volatility
-                risk_adjusted_profit = np.clip(risk_adjusted_profit, -50.0, 50.0)
-        else:
-            risk_adjusted_profit = 0.0
+            risk_adjusted_return = realized_return / volatility
             
-        # Track returns for adaptive volatility if needed
+            # ASYMMETRIC LOSS PENALTY: Weight losses more heavily than gains
+            if realized_return < 0:
+                risk_adjusted_return *= self.loss_penalty_factor  # Amplify negative returns
+            
+            # Validate result and clip extreme values
+            if np.isnan(risk_adjusted_return) or np.isinf(risk_adjusted_return):
+                logger.warning(f"NaN/Inf in profit calculation: {realized_return}/{volatility} = {risk_adjusted_return}")
+                risk_adjusted_return = 0.0
+            else:
+                risk_adjusted_return = np.clip(risk_adjusted_return, -100.0, 50.0)  # Allow larger negative penalties
+        else:
+            risk_adjusted_return = 0.0
+            
+        # Track returns for adaptive volatility and loss streak monitoring
         if realized_return != 0:
             self.returns_history.append(realized_return)
+            # Update loss streak
+            if realized_return < 0:
+                self.loss_streak += 1
+            else:
+                self.loss_streak = 0
+                
             # Keep only recent returns for volatility updates
             if len(self.returns_history) > self.volatility_window:
                 self.returns_history.pop(0)
         
-        return risk_adjusted_profit
+        return risk_adjusted_return
     
     def _calculate_loss_cutting_component(self, metrics: TradeMetrics) -> float:
         """
@@ -608,6 +657,61 @@ class UnifiedRewardCalculator:
         
         return cash_management_reward
     
+    def _calculate_downside_deviation(self, metrics: TradeMetrics) -> Optional[float]:
+        """
+        Calculate downside deviation instead of standard volatility.
+        Only considers negative returns for better risk adjustment.
+        """
+        if len(self.returns_history) < 5:
+            return None
+            
+        negative_returns = [r for r in self.returns_history if r < 0]
+        if not negative_returns:
+            return self.min_volatility
+            
+        return float(np.std(negative_returns))
+    
+    def _calculate_stop_loss_penalty(self, metrics: TradeMetrics) -> float:
+        """
+        Calculate extra penalty for trades exceeding stop-loss threshold.
+        """
+        penalty = 0.0
+        
+        # Check if trade return exceeds stop-loss threshold
+        trade_return = metrics.realized_return or metrics.unrealized_return
+        if trade_return < -self.stop_loss_threshold:
+            penalty = self.stop_loss_penalty * abs(trade_return / self.stop_loss_threshold)
+            
+        return penalty
+    
+    def _calculate_drawdown_penalty(self, metrics: TradeMetrics) -> float:
+        """
+        Calculate penalty based on portfolio drawdown from peak.
+        """
+        current_portfolio_value = metrics.portfolio_value_t1
+        
+        # Track portfolio peak
+        if current_portfolio_value > self.portfolio_peak:
+            self.portfolio_peak = current_portfolio_value
+        
+        # Calculate drawdown
+        if self.portfolio_peak > 0:
+            drawdown = (self.portfolio_peak - current_portfolio_value) / self.portfolio_peak
+            if drawdown > 0:
+                return self.drawdown_penalty_factor * drawdown
+                
+        return 0.0
+    
+    def _calculate_consecutive_loss_penalty(self, metrics: TradeMetrics) -> float:
+        """
+        Calculate penalty for consecutive losses.
+        """
+        if self.loss_streak > 1:  # After first loss
+            # Exponential penalty for consecutive losses
+            return self.consecutive_loss_penalty * (self.loss_streak - 1) ** 1.5
+            
+        return 0.0
+
     def get_reward_breakdown(self, metrics: TradeMetrics) -> Dict[str, float]:
         """Get detailed breakdown of mathematically-principled reward components."""
         
@@ -624,6 +728,11 @@ class UnifiedRewardCalculator:
             'cash_management_component': self.lambda_cash * components.cash_management_component,
             'regime_alignment_component': self.lambda_regime * components.regime_alignment_component,
             'risk_management_component': self.lambda_risk * components.risk_management_component,
+            
+            # Enhanced loss management penalties
+            'stop_loss_penalty': -components.stop_loss_penalty,
+            'drawdown_penalty': -components.drawdown_penalty, 
+            'consecutive_loss_penalty': -components.consecutive_loss_penalty,
             
             # Raw components (unweighted for analysis)
             'profit_raw': components.profit_component,

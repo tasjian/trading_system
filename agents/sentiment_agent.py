@@ -24,6 +24,7 @@ from core.sec_edgar_client import SECEdgarClient, SECFiling
 # from core.crypto_sentiment_analyzer import crypto_sentiment_analyzer, CryptoSentimentResult
 from config.settings import settings, is_crypto_symbol
 from tools.alpaca_market_data import fetch_stock_history
+from utils.enhanced_api_cache import get_enhanced_cache, CacheType, cached_api
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ class SentimentAgent:
         news_task = asyncio.wait_for(self._analyze_news_sentiment(symbol), timeout=180.0)
         
         await asyncio.sleep(0.5)  # Small delay to stagger API calls
-        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=240.0)
+        social_task = asyncio.wait_for(self._analyze_social_sentiment(symbol), timeout=120.0)  # Reduced from 240s to prevent churning delays
         
         await asyncio.sleep(0.5)  # Small delay to stagger API calls  
         earnings_task = asyncio.wait_for(self._analyze_earnings_sentiment(symbol), timeout=300.0)
