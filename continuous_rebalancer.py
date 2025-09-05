@@ -1819,7 +1819,7 @@ class ContinuousRebalancer:
             logger.info("🚀 Initializing Hybrid LLM-RL Portfolio Decision Layer...")
             
             # Use hybrid system that combines LLM portfolio management with RL optimization
-            result = await integrate_hybrid_llm_rl_portfolio_system(state, config)
+            result = await integrate_hybrid_llm_rl_portfolio_system(state, config, alpaca_client=alpaca_client)
             
             # PRIORITY 1: BACKTESTING VALIDATION GATE
             # Validate RL decisions against recent backtest performance before proceeding
@@ -2043,21 +2043,21 @@ class ContinuousRebalancer:
                 save_plots=False,   # Skip plots for speed
             )
             
-            # Run quick backtest on primary symbol
+            # Run backtest validation on primary symbol with robust data fetching
             primary_symbol = symbols[0]
             start_validation = datetime.now()
             
             logger.info(f"⏱️ Starting 30-day backtest validation for {primary_symbol}...")
             
-            # Import and run quick backtest
+            # Import and run backtest with robust data fetching
             from agents.rl_backtesting_framework import RLBacktestingFramework
             framework = RLBacktestingFramework(config)
             
-            # Set timeout for validation (max 60 seconds)
+            # Set timeout for validation (max 120 seconds for robust fetching)
             try:
                 validation_results = await asyncio.wait_for(
                     framework.backtest_single_symbol(current_agent, primary_symbol),
-                    timeout=60.0
+                    timeout=120.0
                 )
                 
                 validation_duration = (datetime.now() - start_validation).total_seconds()

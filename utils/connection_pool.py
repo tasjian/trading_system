@@ -28,10 +28,10 @@ class ConnectionPoolManager:
         self._cleanup_registered = False
         self._active_connections: Set[Any] = weakref.WeakSet()
         
-        # Default timeouts and limits
-        self._default_timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        self._default_connector_limit = 100
-        self._default_connector_limit_per_host = 30
+        # Default timeouts and limits (optimized for higher throughput)
+        self._default_timeout = aiohttp.ClientTimeout(total=60, connect=15, sock_read=45)
+        self._default_connector_limit = 200
+        self._default_connector_limit_per_host = 50
     
     async def get_async_session(self, 
                                name: str = "default",
@@ -43,13 +43,15 @@ class ConnectionPoolManager:
         async with self._session_lock:
             if name not in self._async_sessions or self._async_sessions[name].closed:
                 
-                # Configure connector with connection limits
+                # Configure connector with connection limits (optimized)
                 connector = aiohttp.TCPConnector(
                     limit=connector_limit or self._default_connector_limit,
                     limit_per_host=connector_limit or self._default_connector_limit_per_host,
                     enable_cleanup_closed=True,
-                    keepalive_timeout=30,
-                    ttl_dns_cache=300
+                    keepalive_timeout=60,  # Longer keepalive
+                    ttl_dns_cache=600,     # Longer DNS cache
+                    use_dns_cache=True,
+                    force_close=False      # Reuse connections
                 )
                 
                 session = aiohttp.ClientSession(
@@ -77,10 +79,10 @@ class ConnectionPoolManager:
             if name not in self._sync_sessions:
                 session = requests.Session()
                 
-                # Configure connection pooling
+                # Configure connection pooling (increased limits)
                 adapter = requests.adapters.HTTPAdapter(
-                    pool_connections=20,
-                    pool_maxsize=100,
+                    pool_connections=30,
+                    pool_maxsize=150,
                     max_retries=max_retries,
                     pool_block=False
                 )

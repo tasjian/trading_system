@@ -1,18 +1,32 @@
 {
   "7c63f97dd483": {
     "version_id": "7c63f97dd483",
-    "timestamp": "2025-08-12 07:31:28.069281",
+    "timestamp": "2025-09-05 10:09:31.969618",
     "symbols": [
       "AAPL",
-      "MSFT",
-      "GOOGL"
+      "GOOGL",
+      "MSFT"
     ],
     "state_dim": 36,
     "action_dim": 3,
     "model_architecture": "RegimeAwarePolicy",
     "pytorch_version": "2.2.2",
     "training_stats": {
-      "test": "value"
+      "total_updates": 2,
+      "safety_violations": 2,
+      "agent_switches": 0,
+      "stable_policy_updates": 1,
+      "average_return": 0.0,
+      "average_sharpe": 0.0,
+      "consecutive_losses": 0,
+      "force_training": true,
+      "last_update_trigger": "manual_reset",
+      "training_active": true,
+      "total_return": 0.0,
+      "return_volatility": 0.0,
+      "win_rate": 0.0,
+      "stable_avg_return": 0.0,
+      "stable_trades": 1
     },
     "file_path": "models/model_7c63f97dd483.pt"
   },
@@ -791,7 +805,7 @@
   },
   "150a863234e0": {
     "version_id": "150a863234e0",
-    "timestamp": "2025-09-04 17:15:19.639528",
+    "timestamp": "2025-09-05 10:08:24.354515",
     "symbols": [
       "AAPL",
       "MSFT",
@@ -804,17 +818,71 @@
     "model_architecture": "RegimeAwarePolicy",
     "pytorch_version": "2.2.2",
     "training_stats": {
-      "total_updates": 1,
-      "safety_violations": 0,
+      "total_updates": 2,
+      "safety_violations": 2,
       "agent_switches": 0,
       "stable_policy_updates": 1,
-      "average_return": 0.0,
-      "average_sharpe": 3.4713320972195914,
+      "average_return": 0.001450757603852731,
+      "average_sharpe": 0.7452628474502367,
       "consecutive_losses": 0,
       "force_training": true,
       "last_update_trigger": "manual_reset",
-      "training_active": true
+      "training_active": true,
+      "total_return": 0.030465909680907354,
+      "return_volatility": 0.030901933557233318,
+      "win_rate": 0.7142857142857143,
+      "stable_avg_return": 0.001450757603852731,
+      "stable_trades": 21
     },
     "file_path": "models/model_150a863234e0.pt"
+  },
+  "61b4cfb83d8c": {
+    "version_id": "61b4cfb83d8c",
+    "timestamp": "2025-09-05 11:14:08.277456",
+    "symbols": [
+      "AAPL",
+      "ATI",
+      "AVD",
+      "BULU",
+      "CFLT",
+      "CHSCP",
+      "CRSP",
+      "DNN",
+      "EMPD",
+      "FAI",
+      "FC",
+      "FEDM",
+      "FET",
+      "FIRS",
+      "FLY",
+      "GRN",
+      "INGN",
+      "ITRG",
+      "MNSBP",
+      "MRVL",
+      "MTUL",
+      "MULL",
+      "MXE",
+      "OPFI",
+      "OPRA",
+      "POWA",
+      "POWW",
+      "RIBBR",
+      "SOGP",
+      "TECL"
+    ],
+    "state_dim": 360,
+    "action_dim": 30,
+    "model_architecture": "RegimeAwarePolicy",
+    "pytorch_version": "2.2.2",
+    "training_stats": {
+      "total_updates": 0,
+      "safety_violations": 0,
+      "agent_switches": 0,
+      "stable_policy_updates": 0,
+      "average_return": 0.0,
+      "average_sharpe": 0.0
+    },
+    "file_path": "models/model_61b4cfb83d8c.pt"
   }
 }

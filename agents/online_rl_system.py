@@ -942,10 +942,11 @@ class DualAgentSystem:
 class OnlineRLTradingSystem:
     """Main online RL trading system with safe continuous learning."""
     
-    def __init__(self, symbols: List[str], config: OnlineLearningConfig, device: str = 'cpu'):
+    def __init__(self, symbols: List[str], config: OnlineLearningConfig, device: str = 'cpu', alpaca_client=None):
         self.symbols = symbols
         self.config = config
         self.device = device
+        self.alpaca_client = alpaca_client  # For dynamic symbol updates
         
         # Dynamic state and action dimensions based on actual symbols
         self.state_dim = len(symbols) * 12  # 12 features per symbol (price, volume, indicators, etc.)
@@ -963,6 +964,7 @@ class OnlineRLTradingSystem:
         self.training_active = False
         self.last_batch_update = datetime.now()
         self.last_safety_check = datetime.now()
+        self.last_symbol_update = datetime.now()
         
         # Performance tracking
         self.performance_history = deque(maxlen=10000)
@@ -1031,36 +1033,88 @@ class OnlineRLTradingSystem:
             uncertainty_estimate=uncertainty
         )
         
-        # Store experience if we have previous step
+        # CRITICAL FIX: Enhanced experience storage with validation
         if previous_action is not None:
-            experience = Experience(
-                state=self._last_state if hasattr(self, '_last_state') else market_state,
-                action=previous_action,
-                reward=previous_reward,
-                next_state=market_state,
-                done=False,
-                info={}
-            )
-            
-            self.replay_buffer.push(
-                experience, 
-                uncertainty=uncertainty,
-                regime=self.current_regime
-            )
+            try:
+                # Validate previous action dimensions
+                if isinstance(previous_action, np.ndarray) and previous_action.shape[0] != self.action_dim:
+                    logger.warning(f"Action dimension mismatch: {previous_action.shape[0]} != {self.action_dim}, reshaping")
+                    if previous_action.shape[0] < self.action_dim:
+                        # Pad with zeros
+                        padded_action = np.zeros(self.action_dim)
+                        padded_action[:previous_action.shape[0]] = previous_action
+                        previous_action = padded_action
+                    else:
+                        # Truncate
+                        previous_action = previous_action[:self.action_dim]
+                
+                # Create experience with proper validation
+                experience = Experience(
+                    state=self._last_state if hasattr(self, '_last_state') else market_state.copy(),
+                    action=previous_action.copy() if isinstance(previous_action, np.ndarray) else np.array(previous_action),
+                    reward=float(previous_reward),
+                    next_state=market_state.copy(),
+                    done=False,
+                    info={
+                        'regime': self.current_regime.value,
+                        'uncertainty': uncertainty,
+                        'timestamp': datetime.now().isoformat(),
+                        'step': getattr(self, '_step_counter', 0)
+                    }
+                )
+                
+                # Store in replay buffer with validation
+                self.replay_buffer.push(
+                    experience, 
+                    uncertainty=uncertainty,
+                    regime=self.current_regime
+                )
+                
+                # Log experience storage for debugging
+                if getattr(self, '_step_counter', 0) % 20 == 0:
+                    logger.info(f"🧠 Experience stored: Step {getattr(self, '_step_counter', 0)}, "
+                               f"Reward={previous_reward:.4f}, Buffer={len(self.replay_buffer.buffer)}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Failed to store experience: {e}")
+                logger.error(f"   Previous action shape: {previous_action.shape if hasattr(previous_action, 'shape') else 'no shape'}")
+                logger.error(f"   Market state shape: {market_state.shape if hasattr(market_state, 'shape') else 'no shape'}")
+        else:
+            # Log when no previous action (first step)
+            if getattr(self, '_step_counter', 0) <= 1:
+                logger.info(f"🎯 First step - no previous action to store (step {getattr(self, '_step_counter', 0)})")
         
         # Store current state for next iteration
         self._last_state = market_state.copy()
         
-        # Update performance tracking
+        # CRITICAL FIX: Enhanced performance tracking with proper logging
         performance_metrics = {
             'return': previous_reward,
             'timestamp': datetime.now(),
             'regime': self.current_regime.value,
-            'uncertainty': uncertainty
+            'uncertainty': uncertainty,
+            'agent': action_info.get('agent', 'unknown'),
+            'step': getattr(self, '_step_counter', 0),
+            'portfolio_value': market_data.get('portfolio_value', 0),
+            'buffer_size': len(self.replay_buffer.buffer)
         }
         
+        # Increment step counter
+        if not hasattr(self, '_step_counter'):
+            self._step_counter = 0
+        self._step_counter += 1
+        
+        # Always append to performance history for tracking
         self.performance_history.append(performance_metrics)
+        
+        # Update dual agent performance tracking
         self.dual_agent.update_performance(action_info['agent'], performance_metrics)
+        
+        # Log performance periodically for monitoring
+        if self._step_counter % 10 == 0:
+            logger.info(f"📊 Step {self._step_counter}: Return={previous_reward:.4f}, "
+                       f"Agent={performance_metrics['agent']}, Regime={self.current_regime.value}, "
+                       f"Buffer={len(self.replay_buffer.buffer)}, History={len(self.performance_history)}")
         
         # Check for agent switching
         self.dual_agent.should_switch_agents()
@@ -1147,12 +1201,23 @@ class OnlineRLTradingSystem:
         """Check if we should trigger a training update."""
         
         time_since_update = datetime.now() - self.last_batch_update
+        buffer_size = len(self.replay_buffer.buffer)
         
-        if (time_since_update >= self.config.batch_update_frequency and 
-            len(self.replay_buffer.buffer) >= self.config.min_replay_size):
-            
-            if not self.training_active:
-                await self._perform_batch_update()
+        # CRITICAL FIX: More aggressive training triggers to ensure learning happens
+        should_train = (
+            # Regular schedule trigger
+            (time_since_update >= self.config.batch_update_frequency and 
+             buffer_size >= self.config.min_replay_size) or
+            # Force training when buffer gets full to prevent loss of experiences
+            buffer_size >= self.config.buffer_size * 0.8 or
+            # Regular small batch updates to keep learning active
+            (buffer_size >= max(32, self.config.min_replay_size // 4) and 
+             time_since_update >= timedelta(minutes=30))
+        )
+        
+        if should_train and not self.training_active:
+            logger.info(f"🎓 Triggering training: buffer_size={buffer_size}, time_since_update={time_since_update}")
+            await self._perform_batch_update()
     
     async def _perform_batch_update(self):
         """Perform a batch update of the learning agent."""
@@ -1165,15 +1230,83 @@ class OnlineRLTradingSystem:
         logger.info("🎓 Starting batch update...")
         
         try:
-            # Sample batch
-            experiences, indices, weights = self.replay_buffer.sample(self.config.min_batch_size)
+            # Determine effective batch size
+            available_experiences = len(self.replay_buffer.buffer)
+            effective_batch_size = min(self.config.min_batch_size, available_experiences)
             
-            # Convert to tensors
-            states = torch.FloatTensor([e.state for e in experiences]).to(self.device)
-            actions = torch.FloatTensor([e.action for e in experiences]).to(self.device)
-            rewards = torch.FloatTensor([e.reward for e in experiences]).to(self.device)
-            next_states = torch.FloatTensor([e.next_state for e in experiences]).to(self.device)
-            weights_tensor = torch.FloatTensor(weights).to(self.device)
+            logger.info(f"🎓 Batch update: {available_experiences} available, using batch size {effective_batch_size}")
+            
+            # Sample batch
+            experiences, indices, weights = self.replay_buffer.sample(effective_batch_size)
+            
+            if not experiences:
+                logger.warning("⚠️ No experiences sampled for training")
+                return
+            
+            # CRITICAL FIX: Validate and convert experiences to tensors safely
+            try:
+                # Extract and validate data
+                states_list = []
+                actions_list = []
+                rewards_list = []
+                next_states_list = []
+                
+                for i, e in enumerate(experiences):
+                    # Validate state dimensions
+                    if hasattr(e.state, 'shape') and e.state.shape[0] != self.state_dim:
+                        logger.warning(f"Experience {i}: state dimension mismatch {e.state.shape[0]} != {self.state_dim}")
+                        # Pad or truncate state
+                        if e.state.shape[0] < self.state_dim:
+                            padded_state = np.zeros(self.state_dim)
+                            padded_state[:e.state.shape[0]] = e.state
+                            states_list.append(padded_state)
+                        else:
+                            states_list.append(e.state[:self.state_dim])
+                    else:
+                        states_list.append(e.state)
+                    
+                    # Validate action dimensions  
+                    if hasattr(e.action, 'shape') and e.action.shape[0] != self.action_dim:
+                        logger.warning(f"Experience {i}: action dimension mismatch {e.action.shape[0]} != {self.action_dim}")
+                        # Pad or truncate action
+                        if e.action.shape[0] < self.action_dim:
+                            padded_action = np.zeros(self.action_dim)
+                            padded_action[:e.action.shape[0]] = e.action
+                            actions_list.append(padded_action)
+                        else:
+                            actions_list.append(e.action[:self.action_dim])
+                    else:
+                        actions_list.append(e.action)
+                    
+                    # Validate next_state dimensions
+                    if hasattr(e.next_state, 'shape') and e.next_state.shape[0] != self.state_dim:
+                        if e.next_state.shape[0] < self.state_dim:
+                            padded_next_state = np.zeros(self.state_dim)
+                            padded_next_state[:e.next_state.shape[0]] = e.next_state
+                            next_states_list.append(padded_next_state)
+                        else:
+                            next_states_list.append(e.next_state[:self.state_dim])
+                    else:
+                        next_states_list.append(e.next_state)
+                    
+                    rewards_list.append(float(e.reward))
+                
+                # Convert to tensors
+                states = torch.FloatTensor(states_list).to(self.device)
+                actions = torch.FloatTensor(actions_list).to(self.device)
+                rewards = torch.FloatTensor(rewards_list).to(self.device)
+                next_states = torch.FloatTensor(next_states_list).to(self.device)
+                weights_tensor = torch.FloatTensor(weights).to(self.device)
+                
+                logger.debug(f"Batch tensors: states={states.shape}, actions={actions.shape}, rewards={rewards.shape}")
+                
+            except Exception as tensor_error:
+                logger.error(f"❌ Failed to create training tensors: {tensor_error}")
+                logger.error(f"   State dim: {self.state_dim}, Action dim: {self.action_dim}")
+                if experiences:
+                    logger.error(f"   Sample experience state shape: {experiences[0].state.shape if hasattr(experiences[0].state, 'shape') else 'no shape'}")
+                    logger.error(f"   Sample experience action shape: {experiences[0].action.shape if hasattr(experiences[0].action, 'shape') else 'no shape'}")
+                raise tensor_error
             
             # Regime conditioning (simplified - use current regime for all)  
             if isinstance(self.current_regime, int):
@@ -1228,28 +1361,170 @@ class OnlineRLTradingSystem:
         finally:
             self.training_active = False
     
-    def get_training_stats(self) -> Dict[str, Any]:
-        """Get current training statistics."""
+    async def force_training_update(self, min_batch_size: int = 16):
+        """Force a training update regardless of normal triggers."""
+        buffer_size = len(self.replay_buffer.buffer)
         
-        # Calculate performance metrics
+        if buffer_size < min_batch_size:
+            logger.warning(f"⚠️ Insufficient experiences for forced training: {buffer_size} < {min_batch_size}")
+            return False
+        
+        if self.training_active:
+            logger.info("🔄 Training already active, skipping forced update")
+            return False
+        
+        logger.info(f"🚀 FORCE TRAINING: Initiating batch update with {buffer_size} experiences")
+        await self._perform_batch_update()
+        return True
+    
+    def get_training_stats(self) -> Dict[str, Any]:
+        """Get current training statistics with comprehensive performance tracking."""
+        
+        # CRITICAL FIX: Enhanced performance metrics calculation
+        performance_window = 100  # Last 100 steps for performance calculation
+        
+        # Calculate performance metrics from history
         if len(self.performance_history) > 0:
-            recent_returns = [p['return'] for p in list(self.performance_history)[-100:]]
+            recent_performance = list(self.performance_history)[-performance_window:]
+            recent_returns = [p['return'] for p in recent_performance]
+            
             self.training_stats['average_return'] = np.mean(recent_returns) if recent_returns else 0.0
+            self.training_stats['total_return'] = np.sum(recent_returns) if recent_returns else 0.0
+            self.training_stats['return_volatility'] = np.std(recent_returns) if len(recent_returns) > 1 else 0.0
             
             if len(recent_returns) > 10 and np.std(recent_returns) > 0:
                 self.training_stats['average_sharpe'] = (
                     np.mean(recent_returns) / np.std(recent_returns) * np.sqrt(252)
                 )
+            else:
+                self.training_stats['average_sharpe'] = 0.0
+                
+            # Calculate win rate
+            winning_trades = sum(1 for r in recent_returns if r > 0)
+            self.training_stats['win_rate'] = winning_trades / len(recent_returns) if recent_returns else 0.0
+            
+            # Track performance by agent
+            agent_performance = {}
+            for p in recent_performance:
+                agent = p.get('agent', 'unknown')
+                if agent not in agent_performance:
+                    agent_performance[agent] = []
+                agent_performance[agent].append(p['return'])
+            
+            for agent, returns in agent_performance.items():
+                avg_return = np.mean(returns) if returns else 0.0
+                self.training_stats[f'{agent}_avg_return'] = avg_return
+                self.training_stats[f'{agent}_trades'] = len(returns)
+        else:
+            # Initialize empty stats if no history
+            self.training_stats.update({
+                'average_return': 0.0,
+                'total_return': 0.0,
+                'return_volatility': 0.0,
+                'average_sharpe': 0.0,
+                'win_rate': 0.0
+            })
         
-        return {
+        # Add current system state
+        current_stats = {
             **self.training_stats,
             'active_agent': self.dual_agent.active_agent,
             'current_regime': self.current_regime.value,
             'buffer_size': len(self.replay_buffer.buffer),
+            'buffer_capacity': self.config.buffer_size,
+            'buffer_utilization': len(self.replay_buffer.buffer) / self.config.buffer_size,
             'stable_performance_samples': len(self.dual_agent.stable_performance),
             'learner_performance_samples': len(self.dual_agent.learner_performance),
-            'training_active': self.training_active
+            'training_active': self.training_active,
+            'performance_history_size': len(self.performance_history),
+            'last_update_time': self.last_batch_update.isoformat() if self.last_batch_update else None,
+            'last_symbol_update': self.last_symbol_update.isoformat() if hasattr(self, 'last_symbol_update') else None,
+            'current_symbols': self.symbols.copy(),
+            'symbol_count': len(self.symbols),
+            'state_dim': self.state_dim,
+            'action_dim': self.action_dim,
+            'system_initialized': True,
+            'step_counter': getattr(self, '_step_counter', 0)
         }
+        
+        return current_stats
+    
+    def update_symbols_from_portfolio(self, force_update: bool = False) -> bool:
+        """Dynamically update RL symbols from current portfolio positions."""
+        if not self.alpaca_client:
+            logger.warning("No Alpaca client available for dynamic symbol updates")
+            return False
+            
+        # Check if update is needed (hourly or forced)
+        now = datetime.now()
+        if not force_update and (now - self.last_symbol_update).total_seconds() < 3600:  # 1 hour
+            return False
+            
+        try:
+            # Get current portfolio positions
+            positions = self.alpaca_client.get_positions()
+            
+            # Extract symbols with meaningful positions (> $100 value)
+            portfolio_symbols = []
+            for pos in positions:
+                if abs(pos['market_value']) > 100:  # Minimum $100 position
+                    portfolio_symbols.append(pos['symbol'])
+            
+            # Ensure minimum symbol count (add core symbols if needed)
+            core_symbols = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'NVDA']
+            for symbol in core_symbols:
+                if symbol not in portfolio_symbols and len(portfolio_symbols) < 10:
+                    portfolio_symbols.append(symbol)
+            
+            # Sort for consistency
+            portfolio_symbols = sorted(list(set(portfolio_symbols)))
+            
+            # Check if symbols changed
+            if set(portfolio_symbols) == set(self.symbols):
+                self.last_symbol_update = now
+                return False  # No change needed
+            
+            logger.info(f"🔄 Updating RL symbols: {len(self.symbols)} → {len(portfolio_symbols)}")
+            logger.info(f"Old symbols: {self.symbols}")
+            logger.info(f"New symbols: {portfolio_symbols}")
+            
+            # Update symbols and dimensions
+            old_symbols = self.symbols.copy()
+            self.symbols = portfolio_symbols
+            
+            # Recalculate dimensions
+            new_state_dim = len(portfolio_symbols) * 12
+            new_action_dim = len(portfolio_symbols)
+            
+            if new_state_dim != self.state_dim or new_action_dim != self.action_dim:
+                logger.info(f"🎯 Updating dimensions: state {self.state_dim}→{new_state_dim}, action {self.action_dim}→{new_action_dim}")
+                self.state_dim = new_state_dim
+                self.action_dim = new_action_dim
+                
+                # Reinitialize dual agent system with new dimensions
+                logger.info("🔄 Reinitializing dual agent system with new dimensions")
+                self.dual_agent = DualAgentSystem(self.state_dim, self.action_dim, self.config, self.device, self.symbols)
+                
+                # Clear experience buffer (old experiences have wrong dimensions)
+                logger.info("🗑️ Clearing experience buffer due to dimension change")
+                self.replay_buffer = PrioritizedReplayBuffer(self.config.buffer_size, self.config.priority_alpha, self.config.priority_beta)
+            
+            self.last_symbol_update = now
+            
+            # Log symbol changes
+            added_symbols = set(portfolio_symbols) - set(old_symbols)
+            removed_symbols = set(old_symbols) - set(portfolio_symbols)
+            
+            if added_symbols:
+                logger.info(f"➕ Added symbols: {list(added_symbols)}")
+            if removed_symbols:
+                logger.info(f"➖ Removed symbols: {list(removed_symbols)}")
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update symbols from portfolio: {e}")
+            return False
     
     def save_system_state(self, filepath: str):
         """Save complete system state with version control."""
@@ -1364,7 +1639,7 @@ class OnlineRLTradingSystem:
             return False
 
 # Factory function
-def create_online_rl_system(symbols: List[str], **kwargs) -> OnlineRLTradingSystem:
+def create_online_rl_system(symbols: List[str], alpaca_client=None, **kwargs) -> OnlineRLTradingSystem:
     """Create online RL trading system."""
     
     config = OnlineLearningConfig(**kwargs)
@@ -1372,7 +1647,7 @@ def create_online_rl_system(symbols: List[str], **kwargs) -> OnlineRLTradingSyst
     
     logger.info(f"🚀 Creating online RL system for {len(symbols)} symbols on {device}")
     
-    return OnlineRLTradingSystem(symbols, config, device)
+    return OnlineRLTradingSystem(symbols, config, device, alpaca_client=alpaca_client)
 
 
 if __name__ == "__main__":

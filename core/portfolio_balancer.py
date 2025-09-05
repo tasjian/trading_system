@@ -101,8 +101,8 @@ class IntelligentPortfolioBalancer:
         }
         
         # Rebalancing thresholds - BALANCED to prevent churning while capturing opportunities  
-        self.rebalance_threshold = 0.025  # 2.5% threshold (balanced: prevents churning but allows opportunities)
-        self.significant_deviation_threshold = 0.06  # 6% for high urgency (balanced approach)
+        self.rebalance_threshold = 0.02  # 2% threshold (more aggressive to ensure trades execute)
+        self.significant_deviation_threshold = 0.05  # 5% for high urgency (more aggressive)
         self.critical_deviation_threshold = 0.12     # 12% for critical urgency (balanced approach)
         
         # Anti-churning controls
@@ -560,7 +560,7 @@ class IntelligentPortfolioBalancer:
         
         # Base confidence from deviation size - more realistic scaling
         # Use smaller threshold for confidence calculation
-        confidence_threshold = 0.05  # 5% instead of 10% for more realistic confidence scores
+        confidence_threshold = 0.03  # 3% for more aggressive position adjustments
         deviation_confidence = min(abs(analysis.deviation) / confidence_threshold, 1.0)
         
         # Adjust for urgency with higher multipliers

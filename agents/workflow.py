@@ -183,24 +183,16 @@ class TradingWorkflow:
             
             # Convert sentiment data to format expected by universe filter
             for symbol, sentiment_data in cached_sentiment_data.items():
-                if isinstance(sentiment_data, dict):
-                    # Extract social_sentiment data
-                    social_sentiment = sentiment_data.get('social_sentiment', {})
-                elif hasattr(sentiment_data, 'social_sentiment'):
-                    social_sentiment = sentiment_data.social_sentiment
-                else:
-                    continue
-                
-                if social_sentiment:
-                    # Create mock platform data structure for universe filter
-                    symbol_social_data = {}
-                    for platform, sentiment_analysis in social_sentiment.items():
-                        # Create mock posts list based on platform having sentiment data
-                        # Universe filter only needs the count, so we create a mock list
-                        symbol_social_data[platform] = [{"mock": True}] * 10  # Assume 10 posts if sentiment exists
-                    
-                    if symbol_social_data:
-                        cached_social_data[symbol] = symbol_social_data
+                if isinstance(sentiment_data, dict) and sentiment_data.get('overall_sentiment'):
+                    # Create mock social media data structure for universe filter
+                    # The universe filter expects platform-specific data, so we create mock data
+                    # based on the existence of sentiment analysis
+                    symbol_social_data = {
+                        'reddit': [{"sentiment": sentiment_data['overall_sentiment'], "mock": True}] * 5,
+                        'twitter': [{"sentiment": sentiment_data['overall_sentiment'], "mock": True}] * 5,
+                        'stocktwits': [{"sentiment": sentiment_data['overall_sentiment'], "mock": True}] * 5
+                    }
+                    cached_social_data[symbol] = symbol_social_data
             
             # Apply universe filter to get actionable stocks
             logger.info("🔍 Running universe filter to identify actionable stocks...")

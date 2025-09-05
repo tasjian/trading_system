@@ -31,11 +31,20 @@ class TradingSignal:
 class SimplifiedRLAgent:
     """Simplified RL agent that provides all necessary RL functionality."""
     
-    def __init__(self, symbols: List[str]):
+    def __init__(self, symbols: List[str], alpaca_client=None):
         self.symbols = symbols
+        self.alpaca_client = alpaca_client
         self.initialized = False
         self.last_portfolio_value = None
         self.signal_history = []
+        
+        # CRITICAL FIX: Action tracking for experience buffer population
+        self.previous_action = None
+        self.previous_state = None
+        self.step_counter = 0
+        
+        # Track portfolio symbols for dynamic updates
+        self.last_portfolio_symbols = None
         
         # Dynamic feature tracking for compatibility
         self.features_per_symbol = 20  # Updated feature count
@@ -70,6 +79,7 @@ class SimplifiedRLAgent:
                 
                 self.system = create_online_rl_system(
                     symbols=self.symbols,
+                    alpaca_client=self.alpaca_client,
                     **self.config.__dict__
                 )
                 
@@ -97,6 +107,9 @@ class SimplifiedRLAgent:
         
         if not self.initialized:
             await self.initialize_system()
+        
+        # Update symbols dynamically from current portfolio
+        await self._update_symbols_from_portfolio(portfolio_data)
         
         try:
             if self.has_advanced_rl and self.system:
@@ -211,14 +224,19 @@ class SimplifiedRLAgent:
             else:
                 previous_reward = 0.01 if portfolio_value > 0 else 0.0
         
-        # Process market step
+        # CRITICAL FIX: Pass proper previous action for experience buffer population
         action, action_info = await self.system.process_market_step(
             market_state=current_state,
             market_data=market_metadata,
-            previous_action=None,
+            previous_action=self.previous_action,
             previous_reward=previous_reward,
             deterministic=False
         )
+        
+        # Store current action and state for next iteration
+        self.previous_action = action.copy() if action is not None else None
+        self.previous_state = current_state.copy()
+        self.step_counter += 1
         
         # Convert actions to signals
         signals = self._convert_actions_to_signals(action, action_info, market_data, portfolio_data)
@@ -385,18 +403,118 @@ class SimplifiedRLAgent:
             "signals_generated": len(self.signal_history),
             "expected_features": self.total_expected_features,
             "features_per_symbol": self.features_per_symbol,
-            "symbol_count": len(self.symbols)
+            "symbol_count": len(self.symbols),
+            "step_counter": self.step_counter
         }
+    
+    async def force_training_update(self, min_batch_size: int = 16):
+        """Force a training update regardless of normal triggers."""
+        if self.has_advanced_rl and self.system and self.initialized:
+            try:
+                result = await self.system.force_training_update(min_batch_size)
+                logger.info(f"🚀 Force training result: {result}")
+                return result
+            except Exception as e:
+                logger.error(f"❌ Force training failed: {e}")
+                return False
+        else:
+            logger.warning("⚠️ Advanced RL system not available for force training")
+            return False
+    
+    def get_learning_diagnostics(self) -> Dict[str, Any]:
+        """Get detailed diagnostics for learning system health."""
+        diagnostics = {
+            'system_initialized': self.initialized,
+            'has_advanced_rl': self.has_advanced_rl,
+            'step_counter': self.step_counter,
+            'previous_action_set': self.previous_action is not None,
+            'previous_state_set': self.previous_state is not None,
+            'signal_history_size': len(self.signal_history)
+        }
+        
+        if self.has_advanced_rl and self.system and self.initialized:
+            try:
+                training_stats = self.system.get_training_stats()
+                diagnostics.update({
+                    'buffer_size': training_stats.get('buffer_size', 0),
+                    'buffer_utilization': training_stats.get('buffer_utilization', 0.0),
+                    'performance_history_size': training_stats.get('performance_history_size', 0),
+                    'training_active': training_stats.get('training_active', False),
+                    'active_agent': training_stats.get('active_agent', 'unknown'),
+                    'total_updates': training_stats.get('total_updates', 0)
+                })
+            except Exception as e:
+                logger.warning(f"Could not get training diagnostics: {e}")
+                
+        return diagnostics
+    
+    async def _update_symbols_from_portfolio(self, portfolio_data: Dict[str, Any]):
+        """Update RL symbols based on current portfolio positions."""
+        if not self.alpaca_client:
+            return  # No Alpaca client available
+            
+        try:
+            # Extract symbols with meaningful positions from portfolio data
+            current_portfolio_symbols = []
+            for symbol, pos_data in portfolio_data.items():
+                qty = pos_data.get('quantity', 0) if isinstance(pos_data, dict) else 0
+                if abs(qty) > 0.01:  # Meaningful position
+                    current_portfolio_symbols.append(symbol)
+            
+            # Add positions from Alpaca client for completeness
+            try:
+                positions = self.alpaca_client.get_positions()
+                for pos in positions:
+                    if abs(pos.get('market_value', 0)) > 100:  # $100+ positions
+                        symbol = pos['symbol']
+                        if symbol not in current_portfolio_symbols:
+                            current_portfolio_symbols.append(symbol)
+            except Exception as e:
+                logger.debug(f"Could not fetch Alpaca positions: {e}")
+            
+            # Sort for consistency
+            current_portfolio_symbols = sorted(list(set(current_portfolio_symbols)))
+            
+            # Check if symbols have changed significantly
+            if self.last_portfolio_symbols != current_portfolio_symbols:
+                old_count = len(self.symbols)
+                new_count = len(current_portfolio_symbols)
+                
+                # Update symbols if meaningful change (>20% change or new symbols)
+                change_ratio = abs(new_count - old_count) / max(old_count, 1)
+                new_symbols = set(current_portfolio_symbols) - set(self.symbols)
+                
+                if change_ratio > 0.2 or len(new_symbols) > 2:
+                    logger.info(f"🔄 RL symbols update needed: {old_count} → {new_count} symbols")
+                    logger.info(f"New symbols: {list(new_symbols)}")
+                    
+                    # Update symbols
+                    self.symbols = current_portfolio_symbols
+                    self.last_portfolio_symbols = current_portfolio_symbols.copy()
+                    
+                    # Update advanced RL system if available
+                    if self.has_advanced_rl and self.system:
+                        # Update symbols in the RL system
+                        updated = self.system.update_symbols_from_portfolio(force_update=True)
+                        if updated:
+                            logger.info("✅ RL system symbols updated successfully")
+                    
+                    # Update feature dimensions
+                    self.total_expected_features = len(self.symbols) * self.features_per_symbol
+                    logger.info(f"📊 Updated feature dimensions: {self.total_expected_features} total features")
+                    
+        except Exception as e:
+            logger.error(f"Failed to update symbols from portfolio: {e}")
 
 # Global instance management
 _global_rl_agent: Optional[SimplifiedRLAgent] = None
 
-def initialize_rl_agent(symbols: List[str]) -> SimplifiedRLAgent:
+def initialize_rl_agent(symbols: List[str], alpaca_client=None) -> SimplifiedRLAgent:
     """Initialize global RL agent instance."""
     global _global_rl_agent
     
     if _global_rl_agent is None:
-        _global_rl_agent = SimplifiedRLAgent(symbols)
+        _global_rl_agent = SimplifiedRLAgent(symbols, alpaca_client=alpaca_client)
         # Set as current agent for backtesting validation
         _set_current_rl_agent(_global_rl_agent)
     
@@ -409,11 +527,12 @@ def get_rl_agent() -> Optional[SimplifiedRLAgent]:
 async def generate_rl_enhanced_signals(market_data: Dict[str, Any],
                                      portfolio_data: Dict[str, Any],
                                      portfolio_value: float,
-                                     symbols: List[str]) -> List[Dict[str, Any]]:
+                                     symbols: List[str],
+                                     alpaca_client=None) -> List[Dict[str, Any]]:
     """Generate RL-enhanced trading signals for integration with existing workflow."""
     
     # Initialize or get RL agent
-    rl_agent = initialize_rl_agent(symbols)
+    rl_agent = initialize_rl_agent(symbols, alpaca_client=alpaca_client)
     
     try:
         # Generate signals
@@ -446,7 +565,7 @@ async def generate_rl_enhanced_signals(market_data: Dict[str, Any],
         logger.error(f"❌ RL enhanced signal generation failed: {e}")
         return []
 
-async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config: Dict[str, Any], alpaca_client=None) -> Dict[str, Any]:
     """
     Hybrid LLM-RL Portfolio Integration System
     
@@ -572,9 +691,9 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
         # STEP 2: RL Enhancement and Position Optimization
         logger.info("🤖 Step 2: RL Agent - Optimizing Position Sizing and Timing")
         
-        # Initialize RL agent with LLM-selected symbols
+        # Initialize RL agent with LLM-selected symbols and alpaca client for dynamic updates
         llm_symbols = [alloc.symbol for alloc in llm_allocations]
-        rl_agent = initialize_rl_agent(llm_symbols)
+        rl_agent = initialize_rl_agent(llm_symbols, alpaca_client=alpaca_client)
         
         # Prepare enhanced market data for RL agent
         market_data = {}
@@ -693,8 +812,8 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
         logger.info("⚖️ Step 4: Intelligent Rebalancing - Preventing Over-Trading")
         
         # Calculate rebalancing thresholds - BALANCED TO PREVENT CHURNING WHILE ALLOWING LEGITIMATE SIGNALS
-        rebalancing_threshold = 0.025  # 2.5% deviation triggers rebalancing (balanced: prevents churning but allows opportunities)
-        min_trade_size = portfolio_value * 0.004  # Minimum $200 trade size (balanced: prevents micro-trades but allows meaningful positions)
+        rebalancing_threshold = 0.02  # 2% deviation triggers rebalancing (more aggressive to ensure trades execute)
+        min_trade_size = portfolio_value * 0.003  # Minimum $150 trade size (reduced to allow more trades)
         max_single_position = 0.15  # Max 15% per position (was 8%)
         max_sector_allocation = 0.35  # Max 35% per sector (was 25%)
         

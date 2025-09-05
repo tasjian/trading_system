@@ -304,7 +304,15 @@ class SentimentAgent:
                 # Combine posts into text for analysis (limit text length)
                 combined_text = ""
                 for post in posts[:10]:  # Reduced from 20 to 10 for faster processing
-                    combined_text += f"{post.content}\n"
+                    # Handle both string content and post objects with content attribute
+                    if hasattr(post, 'content'):
+                        content = post.content
+                    elif isinstance(post, str):
+                        content = post
+                    else:
+                        content = str(post)
+                    
+                    combined_text += f"{content}\n"
                     if len(combined_text) > 2000:  # Limit text length
                         break
                 

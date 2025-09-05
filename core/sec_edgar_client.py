@@ -166,22 +166,22 @@ class SECEdgarClient:
                     
             except asyncio.TimeoutError:
                 if attempt < max_retries - 1:
-                    backoff_time = min(15 * (attempt + 1), 45)
+                    backoff_time = min(10 * (attempt + 1), 30)  # Reduced backoff time
                     logger.warning(f"SEC API timeout. Retrying in {backoff_time}s (attempt {attempt + 1})")
                     await asyncio.sleep(backoff_time)
                     continue
                 else:
-                    logger.error(f"SEC API timeout after {max_retries} attempts for {url}")
+                    logger.warning(f"SEC API timeout after {max_retries} attempts for {url} - continuing with degraded data")
                     return None
                     
             except aiohttp.ClientConnectorError as e:
                 if attempt < max_retries - 1:
-                    backoff_time = min(20 * (attempt + 1), 60)
+                    backoff_time = min(15 * (attempt + 1), 45)  # Reduced backoff time
                     logger.warning(f"SEC API connection error: {e}. Retrying in {backoff_time}s (attempt {attempt + 1})")
                     await asyncio.sleep(backoff_time)
                     continue
                 else:
-                    logger.error(f"SEC API connection failed after {max_retries} attempts: {e}")
+                    logger.warning(f"SEC API connection failed after {max_retries} attempts: {e} - continuing with degraded data")
                     return None
                     
             except Exception as e:
