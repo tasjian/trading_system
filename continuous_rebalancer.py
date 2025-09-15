@@ -487,11 +487,29 @@ class ContinuousRebalancer:
             await self._monitor_active_oco_orders(state)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 2: Universe Filter (11k+ → ~200 actionable stocks)
+            # Step 2: Universe Filter (DISABLED FOR RL_ONLY - FinRL works with all stocks)
+            # pipeline_stage = "universe_filter"
+            # stage_start = time.time()
+            # logger.info("🔍 Universe Filter (99.7% processing reduction)...")
+            # state = await self.workflow.universe_filter_agent(state, config)
+            # stage_timings[pipeline_stage] = time.time() - stage_start
+            
+            # RL_ONLY: Skip universe filtering, let FinRL see all stocks
             pipeline_stage = "universe_filter"
             stage_start = time.time()
-            logger.info("🔍 Universe Filter (99.7% processing reduction)...")
-            state = await self.workflow.universe_filter_agent(state, config)
+            
+            # Get all tradeable symbols from Alpaca without filtering
+            from tools.alpaca_client import alpaca_client
+            try:
+                all_assets = alpaca_client.list_assets()
+                tradeable_symbols = [asset['symbol'] for asset in all_assets if asset.get('tradable', False) and asset.get('status') == 'active']
+                state["filtered_symbols"] = tradeable_symbols  # All symbols for FinRL
+                logger.info(f"🤖 RL_ONLY MODE: Providing {len(tradeable_symbols)} unfiltered symbols to FinRL")
+            except Exception as e:
+                logger.warning(f"Failed to get all symbols, using fallback: {e}")
+                # Fallback to common symbols
+                state["filtered_symbols"] = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'SPY', 'QQQ', 'IWM']
+                
             stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 3: Sentiment Analysis (DISABLED FOR RL_ONLY - FinRL picks stocks directly)
