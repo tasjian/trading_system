@@ -222,7 +222,7 @@ class TradingWorkflow:
             
             # Store filter results in state for sentiment analysis
             state["universe_filter_result"] = filter_result
-            state["filtered_symbols"] = filtered_symbols[:200]  # Limit to top 200 for sentiment analysis
+            state["filtered_symbols"] = filtered_symbols  # RL_ONLY: No limit - let FinRL see all filtered symbols
             state["current_agent"] = "universe_filter"
             
             return update_state_timestamp(state)
@@ -254,7 +254,7 @@ class TradingWorkflow:
                     fallback_symbols = list(set(current_positions + watchlist_symbols + backup_symbols))
                     
                     # Update state with fallback symbols
-                    state["filtered_symbols"] = fallback_symbols[:100]  # Limit to 100
+                    state["filtered_symbols"] = fallback_symbols  # RL_ONLY: No limit on fallback symbols
                     state["universe_filter_result"] = {
                         "total_symbols": len(fallback_symbols),
                         "filtered_symbols": fallback_symbols,
@@ -273,7 +273,22 @@ class TradingWorkflow:
                 return add_error_to_state(state, error_msg)
     
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze comprehensive sentiment for pre-filtered stocks using enhanced sentiment engine."""
+        """RL_ONLY: Sentiment analysis disabled - FinRL picks stocks directly."""
+        try:
+            # RL_ONLY: Skip all sentiment analysis, return empty sentiment data
+            logger.info("🤖 RL_ONLY MODE: Sentiment analysis disabled - returning empty sentiment data")
+            state["sentiment_data"] = {}
+            state["current_agent"] = "sentiment_analyzer"
+            return update_state_timestamp(state)
+            
+        except Exception as e:
+            logger.error(f"RL_ONLY sentiment bypass failed: {e}")
+            state["sentiment_data"] = {}
+            state["current_agent"] = "sentiment_analyzer"
+            return update_state_timestamp(state)
+        
+        # ORIGINAL SENTIMENT CODE (COMMENTED OUT FOR RL_ONLY)
+        """
         try:
             from core.batch_sentiment_processor import batch_sentiment_processor
             from core.market_intelligence import UnifiedMarketIntelligence
@@ -526,6 +541,8 @@ class TradingWorkflow:
             logger.error(error_msg)
             # FAIL-FAST: Halt the entire system when sentiment analysis fails
             raise RuntimeError(error_msg)
+        """
+        # END OF COMMENTED OUT SENTIMENT CODE FOR RL_ONLY
     
     async def risk_assessment_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Assess portfolio risk and check limits."""
@@ -2074,7 +2091,7 @@ class TradingWorkflow:
             
             # STEP 3: Execute net orders (replaces individual signal processing)
             signals_to_execute = []
-            for net_order in net_orders[:6]:  # Limit to 6 orders total
+            for net_order in net_orders:  # RL_ONLY: No limit on orders - execute all FinRL recommendations
                 # Convert net order back to signal format for existing execution logic
                 signals_to_execute.append({
                     "symbol": net_order["symbol"],

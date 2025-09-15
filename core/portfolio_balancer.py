@@ -174,18 +174,22 @@ class IntelligentPortfolioBalancer:
     
     async def generate_rebalancing_orders(self, 
                                         position_analyses: List[PositionAnalysis],
-                                        max_orders: int = 10) -> List[RebalanceDecision]:
+                                        max_orders: int = None) -> List[RebalanceDecision]:
         """
         Generate specific rebalancing orders based on position analyses.
         
         Args:
             position_analyses: List of position analyses
-            max_orders: Maximum number of orders to generate
+            max_orders: Maximum number of orders to generate (None for unlimited)
             
         Returns:
             List of rebalancing decisions with specific order instructions
         """
-        logger.info(f"🎯 Generating rebalancing orders (max: {max_orders})...")
+        if max_orders is None:
+            logger.info(f"🎯 Generating rebalancing orders (unlimited - RL_ONLY mode)...")
+            max_orders = len(position_analyses)  # Process all analyses
+        else:
+            logger.info(f"🎯 Generating rebalancing orders (max: {max_orders})...")
         
         orders = []
         risk_budget_used = 0.0
@@ -761,7 +765,7 @@ async def analyze_portfolio_balance(target_allocation: Dict[str, float],
     return await portfolio_balancer.analyze_portfolio_balance(target_allocation, current_signals)
 
 async def generate_rebalancing_orders(position_analyses: List[PositionAnalysis], 
-                                    max_orders: int = 10) -> List[RebalanceDecision]:
+                                    max_orders: int = None) -> List[RebalanceDecision]:
     """Generate rebalancing orders from position analyses."""
     return await portfolio_balancer.generate_rebalancing_orders(position_analyses, max_orders)
 

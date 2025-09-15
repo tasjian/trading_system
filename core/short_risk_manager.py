@@ -620,7 +620,7 @@ class PositionRiskCalculator:
     def __init__(self):
         """Initialize position risk calculator."""
         self.base_limits = {
-            'max_single_position': 0.05,  # 5% max single position
+            'max_single_position': 0.08,  # 8% max single position (increased for better signal execution)
             'max_sector_exposure': 0.15,  # 15% max sector exposure
             'max_correlation_group': 0.10,  # 10% max correlated positions
             'min_liquidity_score': 0.3,   # Minimum liquidity requirement
@@ -659,7 +659,7 @@ class PositionRiskCalculator:
             
             # Calculate effective limit
             effective_limit = base_limit * squeeze_adjustment * volatility_adjustment * market_adjustment * liquidity_adjustment
-            effective_limit = max(0.001, min(effective_limit, 0.05))  # Cap between 0.1% and 5%
+            effective_limit = max(0.003, min(effective_limit, 0.08))  # Cap between 0.3% and 8% (increased for better execution)
             
             # Calculate margin requirement
             margin_requirement = self._estimate_margin_requirement(symbol, volatility)

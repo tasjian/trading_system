@@ -494,11 +494,18 @@ class ContinuousRebalancer:
             state = await self.workflow.universe_filter_agent(state, config)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 3: Sentiment Analysis (only on filtered stocks, every 90 minutes)
+            # Step 3: Sentiment Analysis (DISABLED FOR RL_ONLY - FinRL picks stocks directly)
+            # pipeline_stage = "sentiment_analysis"
+            # stage_start = time.time()
+            # state = await self._run_scheduled_sentiment_analysis(state, config)
+            # stage_timings[pipeline_stage] = time.time() - stage_start
+            
+            # RL_ONLY: Skip sentiment analysis, initialize empty sentiment data
             pipeline_stage = "sentiment_analysis"
             stage_start = time.time()
-            state = await self._run_scheduled_sentiment_analysis(state, config)
+            state["sentiment_data"] = {}  # Empty sentiment data for RL-only mode
             stage_timings[pipeline_stage] = time.time() - stage_start
+            logger.info("🤖 RL_ONLY MODE: Skipped sentiment analysis - FinRL will pick stocks directly")
             
             # Check for API rate limits
             if self._check_rate_limit_indicators(state):
@@ -568,8 +575,9 @@ class ContinuousRebalancer:
             stage_start = time.time()
             logger.info("🎯 Converting Hybrid Portfolio Decisions to Trading Signals...")
             
-            # Enhanced Short-Selling Intelligence Integration
-            await self._integrate_enhanced_short_analysis(state, config)
+            # Enhanced Short-Selling Intelligence Integration (DISABLED FOR RL_ONLY)
+            # await self._integrate_enhanced_short_analysis(state, config)
+            logger.info("🤖 RL_ONLY MODE: Skipped enhanced short analysis - FinRL handles all signal generation")
             
             pre_signals = len(state.get("signals", []))
             
@@ -746,10 +754,10 @@ class ContinuousRebalancer:
                             target_allocation=target_allocation
                         )
                         
-                        # Generate tax-aware rebalancing orders
+                        # Generate tax-aware rebalancing orders (RL_ONLY: Remove order limit)
                         rebalancing_decisions = await balancer.generate_tax_aware_rebalancing_orders(
                             analysis=tax_analysis,
-                            max_orders=30
+                            max_orders=None  # RL_ONLY: Let FinRL pick unlimited stocks
                         )
                         
                         # Log tax benefits
@@ -764,10 +772,10 @@ class ContinuousRebalancer:
                             target_allocation=target_allocation
                         )
                         
-                        # Generate traditional rebalancing orders
+                        # Generate traditional rebalancing orders (RL_ONLY: Remove order limit)
                         rebalancing_decisions = await balancer.generate_rebalancing_orders(
                             position_analyses=position_analyses,
-                            max_orders=30
+                            max_orders=None  # RL_ONLY: Let FinRL pick unlimited stocks
                         )
                     
                     logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
@@ -1624,10 +1632,20 @@ class ContinuousRebalancer:
             # even if they don't have strong sentiment (for comprehensive short coverage)
             additional_short_candidates = []
             
-            # Look through all universe-filtered symbols for bearish technical patterns
+            # CRITICAL FIX: Add popular large-cap stocks that are commonly shorted when overbought
+            popular_short_candidates = [
+                'AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'SPY', 'QQQ',
+                'NFLX', 'AMD', 'PLTR', 'RIVN', 'LCID', 'AMC', 'GME', 'COIN', 'ROKU'
+            ]
+            
+            for symbol in popular_short_candidates:
+                if symbol not in symbols_to_analyze and len(additional_short_candidates) < 15:
+                    additional_short_candidates.append(symbol)
+            
+            # Also look through universe-filtered symbols for additional technical candidates
             all_filtered_symbols = state.get("filtered_symbols", [])
-            for symbol in all_filtered_symbols[:50]:  # Check top 50 for technical bearish signals
-                if symbol not in symbols_to_analyze and len(additional_short_candidates) < 10:
+            for symbol in all_filtered_symbols[:30]:  # Check top 30 for technical bearish signals
+                if symbol not in symbols_to_analyze and len(additional_short_candidates) < 20:
                     additional_short_candidates.append(symbol)
             
             symbols_to_analyze.extend(additional_short_candidates)
