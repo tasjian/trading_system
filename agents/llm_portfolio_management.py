@@ -279,10 +279,10 @@ class LLMPortfolioManager:
         try:
             from core.batch_sentiment_processor import batch_sentiment_processor
             
-            # Use the optimized batch processor
+            # Use the optimized batch processor with longer timeout for FinRL
             sentiment_results = await batch_sentiment_processor.analyze_stocks_batch(
                 symbols,
-                timeout_seconds=min(180.0, len(symbols) * 2.0)  # 2 seconds per symbol or 3 minutes max
+                timeout_seconds=min(300.0, len(symbols) * 5.0)  # 5 seconds per symbol or 5 minutes max
             )
             
             logger.info(f"✅ Batch sentiment analysis: {len(sentiment_results)}/{len(symbols)} successful")
