@@ -583,15 +583,31 @@ class RLBacktestingFramework:
         
         returns = simulation_results['returns']
         
-        # Monthly returns
-        if len(returns) > 30:
-            monthly_returns = returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
+        # Ensure returns has proper datetime index for resampling
+        if isinstance(returns.index, pd.RangeIndex):
+            logger.warning("Converting RangeIndex to DatetimeIndex for backtesting analysis")
+            # Create a datetime index - assume daily frequency starting from config start date
+            start_date = pd.to_datetime(self.config.start_date)
+            date_index = pd.date_range(start=start_date, periods=len(returns), freq='D')
+            returns.index = date_index
+        
+        # Monthly returns (only if datetime index is available)
+        if len(returns) > 30 and isinstance(returns.index, pd.DatetimeIndex):
+            try:
+                monthly_returns = returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
+            except Exception as e:
+                logger.warning(f"Monthly returns calculation failed: {e}")
+                monthly_returns = pd.DataFrame()
         else:
             monthly_returns = pd.DataFrame()
         
-        # Yearly returns  
-        if len(returns) > 252:
-            yearly_returns = returns.resample('Y').apply(lambda x: (1 + x).prod() - 1)
+        # Yearly returns (only if datetime index is available)
+        if len(returns) > 252 and isinstance(returns.index, pd.DatetimeIndex):
+            try:
+                yearly_returns = returns.resample('Y').apply(lambda x: (1 + x).prod() - 1)
+            except Exception as e:
+                logger.warning(f"Yearly returns calculation failed: {e}")
+                yearly_returns = pd.DataFrame()
         else:
             yearly_returns = pd.DataFrame()
         
@@ -664,13 +680,19 @@ class RLBacktestingFramework:
         if data.isnull().any().any():
             quality_score -= 0.2
         
-        # Penalize for gaps
-        time_diff = data.index.to_series().diff()
-        expected_freq = time_diff.mode()[0] if len(time_diff.mode()) > 0 else pd.Timedelta(hours=1)
-        gaps = time_diff > expected_freq * 2
-        
-        if gaps.sum() > len(data) * 0.01:  # More than 1% gaps
-            quality_score -= 0.3
+        # Penalize for gaps (only if datetime index available)
+        if isinstance(data.index, pd.DatetimeIndex):
+            try:
+                time_diff = data.index.to_series().diff()
+                expected_freq = time_diff.mode()[0] if len(time_diff.mode()) > 0 else pd.Timedelta(hours=1)
+                gaps = time_diff > expected_freq * 2
+                
+                if gaps.sum() > len(data) * 0.01:  # More than 1% gaps
+                    quality_score -= 0.3
+            except Exception as e:
+                logger.warning(f"Gap analysis failed: {e}")
+        else:
+            logger.debug("Skipping gap analysis - no datetime index available")
         
         # Penalize for extreme volatility
         returns = data['close'].pct_change()

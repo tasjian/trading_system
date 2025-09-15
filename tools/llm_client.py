@@ -381,9 +381,10 @@ class LLMClient:
         query_lower = user_message.lower()
         system_lower = system_prompt.lower()
         
-        # Financial sentiment analysis fallback
+        # REMOVED: Financial sentiment analysis fallback 
+        # No sentiment fallbacks allowed per fail-fast architecture
         if "sentiment" in query_lower or "sentiment" in system_lower:
-            content = self._generate_sentiment_fallback(user_message)
+            raise RuntimeError("LLM sentiment analysis unavailable. No fallback mechanisms permitted.")
         # Portfolio analysis fallback  
         elif any(word in query_lower for word in ["portfolio", "allocation", "risk", "diversification"]):
             content = self._generate_portfolio_fallback(user_message)
@@ -409,64 +410,8 @@ class LLMClient:
             }
         )
     
-    def _generate_sentiment_fallback(self, text: str) -> str:
-        """Generate sentiment analysis fallback using keyword analysis."""
-        import json
-        
-        # Enhanced keyword-based sentiment analysis
-        positive_words = [
-            'profit', 'growth', 'increase', 'positive', 'strong', 'beat', 'exceeded', 
-            'outperform', 'bullish', 'upgrade', 'buy', 'optimistic', 'confident',
-            'expansion', 'revenue', 'earnings', 'success', 'improvement', 'gain'
-        ]
-        
-        negative_words = [
-            'loss', 'decline', 'decrease', 'negative', 'weak', 'miss', 'failed',
-            'underperform', 'bearish', 'downgrade', 'sell', 'pessimistic', 'concern',
-            'contraction', 'debt', 'bankruptcy', 'crisis', 'deterioration', 'fall'
-        ]
-        
-        text_lower = text.lower()
-        pos_count = sum(1 for word in positive_words if word in text_lower)
-        neg_count = sum(1 for word in negative_words if word in text_lower)
-        
-        total_sentiment_words = pos_count + neg_count
-        
-        if total_sentiment_words == 0:
-            sentiment = "neutral"
-            score = 0.0
-            confidence = 0.4
-        else:
-            score = (pos_count - neg_count) / max(total_sentiment_words, 1)
-            confidence = min(0.7, total_sentiment_words / 10)
-            
-            if score > 0.5:
-                sentiment = "positive"
-            elif score > 0.1:
-                sentiment = "neutral"
-            elif score > -0.1:
-                sentiment = "neutral"
-            elif score > -0.5:
-                sentiment = "negative"
-            else:
-                sentiment = "very_negative"
-        
-        # Extract key phrases
-        key_phrases = []
-        for word in positive_words + negative_words:
-            if word in text_lower and len(key_phrases) < 3:
-                key_phrases.append(word)
-        
-        return json.dumps({
-            "sentiment": sentiment,
-            "confidence": confidence,
-            "score": score,
-            "reasoning": f"Keyword-based analysis: {pos_count} positive, {neg_count} negative terms found",
-            "key_phrases": key_phrases or ["market", "analysis"],
-            "financial_impact": f"Based on sentiment indicators: {sentiment} market outlook",
-            "risk_factors": ["keyword_analysis", "llm_unavailable"],
-            "opportunities": ["monitor_sentiment_trends"]
-        })
+    # REMOVED: Sentiment fallback generation method
+    # No sentiment fallbacks allowed per fail-fast architecture
     
     def _generate_portfolio_fallback(self, text: str) -> str:
         """Generate portfolio analysis fallback."""

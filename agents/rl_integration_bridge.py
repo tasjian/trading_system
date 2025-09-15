@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-Simplified RL Integration Bridge
-Consolidated RL integration module that provides all RL functionality in a single clean interface.
-Eliminates the complex multi-layer architecture while maintaining all core RL capabilities.
+Enhanced RL Integration Bridge with FinRL DRL Agents
+Advanced RL integration module that provides sophisticated Deep Reinforcement Learning functionality
+using FinRL's proven DRL agents architecture while maintaining compatibility with the existing trading system.
+
+Key Features:
+- FinRL DRL Agents (A2C, PPO, DDPG, SAC, TD3)
+- Ensemble strategy selection
+- Professional-grade DRL training and inference
+- Advanced portfolio management
+- Turbulence-based risk management
 """
 
 import asyncio
@@ -14,7 +21,18 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 import json
 
-logger = logging.getLogger(__name__)
+# Import FinRL components
+try:
+    from agents.finrl_agent_wrapper import FinRLAgentWrapper, create_finrl_agent, generate_finrl_signals
+    from agents.finrl_trading_env import AlpacaFinRLEnvironment
+    FINRL_AVAILABLE = True
+    logger = logging.getLogger(__name__)
+    logger.info("✅ FinRL DRL agents successfully imported")
+except ImportError as e:
+    FINRL_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.error(f"❌ FinRL DRL agents not available: {e}")
+    logger.error("🔄 Falling back to simplified RL implementation")
 
 @dataclass
 class TradingSignal:
@@ -28,17 +46,21 @@ class TradingSignal:
     regime: str
     uncertainty: float
 
-class SimplifiedRLAgent:
-    """Simplified RL agent that provides all necessary RL functionality."""
+class EnhancedRLAgent:
+    """Enhanced RL agent using FinRL DRL algorithms or simplified fallback."""
     
     def __init__(self, symbols: List[str], alpaca_client=None):
         self.symbols = symbols
         self.alpaca_client = alpaca_client
         self.initialized = False
+        self.is_trained = False
         self.last_portfolio_value = None
         self.signal_history = []
         
-        # CRITICAL FIX: Action tracking for experience buffer population
+        # ENFORCE RL-ONLY CONFIGURATION
+        self._load_and_enforce_rl_config()
+        
+        # Action tracking for experience buffer population
         self.previous_action = None
         self.previous_state = None
         self.step_counter = 0
@@ -50,60 +72,90 @@ class SimplifiedRLAgent:
         self.features_per_symbol = 20  # Updated feature count
         self.total_expected_features = len(symbols) * self.features_per_symbol
         
-        logger.info(f"🎯 Initialized SimplifiedRLAgent: {len(symbols)} symbols, {self.total_expected_features} total features")
+        logger.info(f"🎯 Initialized Enhanced RL Agent: {len(symbols)} symbols, {self.total_expected_features} total features")
         
-        # Try to import advanced RL components, fallback to simple implementation
-        self.has_advanced_rl = False
+        # ENFORCE FinRL DRL agents only - no fallbacks allowed
+        self.finrl_agent = None
+        self.system = None  # Will be set to finrl_agent when initialized
+        self.has_advanced_rl = True  # Feature flag - FinRL DRL agents available
+        self.has_finrl = False
+        
+        if not FINRL_AVAILABLE:
+            logger.critical("🚫 CRITICAL: FinRL DRL agents not available")
+            logger.critical("❌ FinRL is REQUIRED - no fallback systems allowed")
+            logger.critical("🔧 Install FinRL library and dependencies")
+            logger.critical("📚 Refer to: https://github.com/AI4Finance-Foundation/FinRL")
+            raise RuntimeError("FinRL DRL agents required but not available - install FinRL library")
+        
         try:
-            from agents.online_rl_system import create_online_rl_system, OnlineLearningConfig
-            from agents.unified_reward_calculator import UnifiedRewardCalculator
-            
-            self.config = OnlineLearningConfig()
-            self.reward_calculator = UnifiedRewardCalculator()
-            self.system = None
-            self.has_advanced_rl = True
-            logger.info(f"🤖 Advanced RL system available for {len(symbols)} symbols")
-            
-        except ImportError as e:
-            logger.warning(f"Advanced RL components not available: {e}")
-            logger.info(f"🎲 Using simplified RL fallback for {len(symbols)} symbols")
-    
-    async def initialize_system(self):
-        """Initialize the RL system."""
-        if self.initialized:
-            return
-            
-        try:
-            if self.has_advanced_rl:
-                from agents.online_rl_system import create_online_rl_system
-                
-                self.system = create_online_rl_system(
-                    symbols=self.symbols,
-                    alpaca_client=self.alpaca_client,
-                    **self.config.__dict__
-                )
-                
-                # Try to load previous state
-                try:
-                    self.system.load_system_state("data/online_rl_state.json")
-                    logger.info("✅ Loaded previous RL system state")
-                except Exception as e:
-                    logger.info(f"No previous state found, starting fresh: {e}")
-                    
-            self.initialized = True
-            logger.info("🚀 RL system initialized successfully")
+            # Use FinRL DRL agents (ONLY option)
+            logger.info("🚀 Initializing FinRL DRL Agent System (REQUIRED)...")
+            self.has_finrl = True
+            logger.info(f"✅ FinRL DRL system ready for {len(symbols)} symbols")
             
         except Exception as e:
-            logger.error(f"❌ Failed to initialize RL system: {e}")
-            # Continue with simplified mode
-            self.has_advanced_rl = False
+            logger.critical(f"🚫 CRITICAL: FinRL DRL Agent initialization failed: {e}")
+            logger.critical("❌ System cannot proceed without FinRL DRL agents")
+            logger.critical("🔧 Fix FinRL installation or dependencies")
+            raise RuntimeError(f"FinRL DRL Agent system failed to initialize: {e}")
+    
+    def _load_and_enforce_rl_config(self):
+        """Load and enforce RL-only configuration."""
+        try:
+            with open('/Users/zac/Desktop/02_PROJECTS/01_ML4T/trading_system/data/rl_config.json', 'r') as f:
+                config = json.load(f)
+            
+            integration_config = config.get('integration', {})
+            
+            # Enforce RL-only mode
+            if not integration_config.get('enforce_rl_only_mode', False):
+                logger.critical("🚫 RL-ONLY MODE NOT ENABLED in configuration")
+                raise ValueError("RL-only mode must be enabled in rl_config.json")
+            
+            if integration_config.get('fallback_to_existing', True):
+                logger.critical("🚫 FALLBACK TO EXISTING ENABLED - This bypasses RL decisions")
+                raise ValueError("fallback_to_existing must be disabled for RL-only mode")
+                
+            logger.info("✅ RL-ONLY MODE ENFORCED - No fallback bypasses allowed")
+            
+        except FileNotFoundError:
+            logger.critical("🚫 RL configuration file not found")
+            raise RuntimeError("RL config required for operation")
+    
+    async def initialize_system(self):
+        """Initialize the RL system with validation."""
+        if self.initialized:
+            return
+        
+        # VALIDATE RL SYSTEM BEFORE INITIALIZATION
+        await self._validate_rl_system_health()
+            
+        try:
+            # Initialize FinRL DRL agent (REQUIRED - no alternatives)
+            logger.info("🚀 Initializing FinRL DRL Agent (REQUIRED)...")
+            self.finrl_agent = await create_finrl_agent(
+                symbols=self.symbols,
+                alpaca_client=self.alpaca_client,
+                config=self._get_finrl_config()
+            )
+            self.system = self.finrl_agent  # Set system reference for compatibility
+            self.is_trained = self.finrl_agent.is_trained
+            logger.info("✅ FinRL DRL Agent initialized successfully")
+                    
             self.initialized = True
+            logger.info("🚀 FinRL DRL system initialized successfully")
+            
+        except Exception as e:
+            logger.critical(f"🚫 CRITICAL: Failed to initialize FinRL DRL system: {e}")
+            logger.critical("❌ System cannot proceed without FinRL DRL agents")
+            logger.critical("🔧 Check FinRL installation, dependencies, and configuration")
+            raise RuntimeError(f"FinRL DRL system initialization failed: {e}")
     
     async def generate_trading_signals(self, 
                                      market_data: Dict[str, Any],
                                      portfolio_data: Dict[str, Any],
                                      portfolio_value: float) -> List[TradingSignal]:
-        """Generate trading signals using RL system."""
+        """Generate trading signals using enhanced RL system."""
         
         if not self.initialized:
             await self.initialize_system()
@@ -112,19 +164,80 @@ class SimplifiedRLAgent:
         await self._update_symbols_from_portfolio(portfolio_data)
         
         try:
-            if self.has_advanced_rl and self.system:
-                # Use advanced RL system
-                return await self._generate_advanced_signals(
-                    market_data, portfolio_data, portfolio_value
-                )
-            else:
-                # Use simplified signal generation
-                return self._generate_simple_signals(
-                    market_data, portfolio_data, portfolio_value
-                )
+            # Use FinRL DRL agents (ONLY option - no fallbacks)
+            if not (self.has_finrl and self.finrl_agent):
+                logger.critical("🚫 CRITICAL: FinRL DRL agent not available for signal generation")
+                logger.critical("❌ System REQUIRES FinRL DRL agents - no alternatives")
+                raise RuntimeError("FinRL DRL agent required but not available")
+            
+            return await self._generate_finrl_signals(
+                market_data, portfolio_data, portfolio_value
+            )
                 
         except Exception as e:
-            logger.error(f"❌ RL signal generation failed: {e}")
+            logger.critical(f"🚫 CRITICAL: FinRL DRL signal generation failed: {e}")
+            logger.critical("❌ System cannot proceed without FinRL DRL signals")
+            logger.critical("🔧 Check FinRL agent status and configuration")
+            raise RuntimeError(f"FinRL DRL signal generation failed: {e}")
+    
+    def _get_finrl_config(self) -> Dict[str, Any]:
+        """Get configuration for FinRL agents."""
+        return {
+            'initial_amount': 100000,
+            'hmax': 100,
+            'buy_cost_pct': 0.001,
+            'sell_cost_pct': 0.001,
+            'reward_scaling': 1e-4,
+            'tech_indicator_list': [
+                'macd', 'rsi_30', 'cci_30', 'dx_30', 'bb_bbm', 'bb_bbh', 'bb_bbl'
+            ],
+            'turbulence_threshold': None,
+            'rebalance_window': 63,
+            'validation_window': 21,
+            'timesteps_dict': {
+                'a2c': 50000,
+                'ppo': 50000,
+                'ddpg': 50000,
+                'sac': 50000,
+                'td3': 50000
+            },
+            # Date configurations for FinRL training and trading
+            'train_start_date': '2020-01-01',
+            'train_end_date': '2022-12-31',
+            'trade_start_date': '2023-01-01',
+            'trade_end_date': '2024-12-31'
+        }
+    
+    async def _generate_finrl_signals(self, market_data, portfolio_data, portfolio_value):
+        """Generate signals using FinRL DRL agents."""
+        try:
+            # Generate FinRL signals
+            finrl_signals = await self.finrl_agent.generate_trading_signals(
+                market_data, portfolio_data, portfolio_value
+            )
+            
+            # Convert FinRL signals to TradingSignal format
+            trading_signals = []
+            for signal in finrl_signals:
+                trading_signal = TradingSignal(
+                    symbol=signal.symbol,
+                    action=signal.action,
+                    quantity=signal.quantity,
+                    confidence=signal.confidence,
+                    reasoning=f"[FinRL DRL] {signal.reasoning}",
+                    rl_score=signal.drl_score,
+                    regime=signal.regime,
+                    uncertainty=signal.uncertainty
+                )
+                trading_signals.append(trading_signal)
+            
+            # Store signals for performance tracking
+            self.signal_history.extend(trading_signals)
+            
+            return trading_signals
+            
+        except Exception as e:
+            logger.error(f"❌ FinRL signal generation failed: {e}")
             return []
     
     async def _generate_advanced_signals(self, market_data, portfolio_data, portfolio_value):
@@ -396,30 +509,52 @@ class SimplifiedRLAgent:
             self.system.save_system_state(filepath)
     
     def get_performance_metrics(self) -> Dict[str, Any]:
-        """Get performance metrics from the RL system."""
-        if self.has_advanced_rl and self.system and self.initialized:
-            return self.system.get_training_stats()
-        return {
+        """Get performance metrics from the FinRL DRL system."""
+        base_metrics = {
+            "system_type": "finrl_drl_agent_only",
             "signals_generated": len(self.signal_history),
             "expected_features": self.total_expected_features,
             "features_per_symbol": self.features_per_symbol,
             "symbol_count": len(self.symbols),
-            "step_counter": self.step_counter
+            "step_counter": self.step_counter,
+            "has_finrl": self.has_finrl,
+            "is_trained": self.is_trained,
+            "primary_system": "finrl_drl_agents_required"
         }
+        
+        if not (self.has_finrl and self.finrl_agent and self.initialized):
+            logger.critical("🚫 CRITICAL: FinRL DRL agent not available for performance metrics")
+            base_metrics["error"] = "FinRL DRL agent required but not available"
+            return base_metrics
+        
+        try:
+            # Get FinRL metrics (ONLY source)
+            finrl_metrics = self.finrl_agent.get_performance_metrics()
+            base_metrics.update(finrl_metrics)
+            base_metrics["status"] = "operational"
+        except Exception as e:
+            logger.error(f"❌ Failed to get FinRL performance metrics: {e}")
+            base_metrics["error"] = f"FinRL metrics unavailable: {e}"
+            
+        return base_metrics
     
     async def force_training_update(self, min_batch_size: int = 16):
         """Force a training update regardless of normal triggers."""
-        if self.has_advanced_rl and self.system and self.initialized:
-            try:
-                result = await self.system.force_training_update(min_batch_size)
-                logger.info(f"🚀 Force training result: {result}")
-                return result
-            except Exception as e:
-                logger.error(f"❌ Force training failed: {e}")
-                return False
-        else:
-            logger.warning("⚠️ Advanced RL system not available for force training")
-            return False
+        if not (self.has_finrl and self.finrl_agent and self.initialized):
+            logger.critical("🚫 CRITICAL: FinRL DRL agent not available for training")
+            logger.critical("❌ System REQUIRES FinRL DRL agents for training")
+            raise RuntimeError("FinRL DRL agent required for training but not available")
+        
+        try:
+            # Force FinRL model retraining
+            await self.finrl_agent.retrain_models(force=True)
+            self.is_trained = True
+            logger.info("🚀 FinRL force training completed")
+            return True
+        except Exception as e:
+            logger.critical(f"🚫 CRITICAL: FinRL force training failed: {e}")
+            logger.critical("❌ System cannot proceed without FinRL training capability")
+            raise RuntimeError(f"FinRL force training failed: {e}")
     
     def get_learning_diagnostics(self) -> Dict[str, Any]:
         """Get detailed diagnostics for learning system health."""
@@ -447,6 +582,66 @@ class SimplifiedRLAgent:
                 logger.warning(f"Could not get training diagnostics: {e}")
                 
         return diagnostics
+    
+    async def predict(self, observation: Any, deterministic: bool = True) -> Tuple[float, float]:
+        """
+        Generate trading action prediction for backtesting compatibility.
+        
+        Args:
+            observation: Market observation/state
+            deterministic: Whether to use deterministic action selection
+            
+        Returns:
+            Tuple of (action, confidence)
+        """
+        try:
+            if not self.initialized:
+                await self.initialize_system()
+            
+            # Handle observation format
+            if isinstance(observation, (list, tuple)):
+                state = np.array(observation, dtype=np.float32)
+            elif isinstance(observation, np.ndarray):
+                state = observation.astype(np.float32)
+            else:
+                # Fallback for other formats
+                state = np.array([0.0], dtype=np.float32)
+            
+            # Ensure proper state dimensions
+            expected_size = len(self.symbols) * self.features_per_symbol
+            if len(state) != expected_size:
+                state = self._normalize_feature_vector(state, expected_size)
+            
+            if self.has_advanced_rl and self.system:
+                # Use advanced RL system
+                action, action_info = await self.system.process_market_step(
+                    market_state=state,
+                    market_data={'volatility': 0.02, 'trend': 0.0, 'portfolio_value': 10000},
+                    previous_action=self.previous_action,
+                    previous_reward=0.0,
+                    deterministic=deterministic
+                )
+                
+                # Return single action value and confidence
+                if action is not None and len(action) > 0:
+                    action_value = float(np.mean(action))  # Average across symbols
+                    confidence = action_info.get('confidence', 0.7)
+                else:
+                    action_value = 0.0
+                    confidence = 0.5
+            else:
+                # Simple fallback prediction
+                if len(state) > 0:
+                    action_value = float(np.tanh(np.mean(state[:5])))  # Simple momentum
+                else:
+                    action_value = 0.0
+                confidence = 0.5
+                
+            return action_value, confidence
+            
+        except Exception as e:
+            logger.error(f"❌ Prediction failed: {e}")
+            return 0.0, 0.5  # Safe fallback
     
     async def _update_symbols_from_portfolio(self, portfolio_data: Dict[str, Any]):
         """Update RL symbols based on current portfolio positions."""
@@ -505,23 +700,85 @@ class SimplifiedRLAgent:
                     
         except Exception as e:
             logger.error(f"Failed to update symbols from portfolio: {e}")
+    
+    async def _validate_rl_system_health(self):
+        """Validate FinRL DRL system health before initialization."""
+        logger.info("🔍 Validating FinRL DRL system health...")
+        
+        # Check if FinRL components are available
+        if not FINRL_AVAILABLE:
+            logger.critical("🚫 FinRL DRL system not available")
+            logger.critical("❌ FinRL is REQUIRED - install FinRL library")
+            logger.critical("📚 Install: pip install finrl")
+            raise RuntimeError("FinRL DRL system validation failed: FinRL not available")
+        
+        # Validate FinRL import paths
+        try:
+            import sys
+            finrl_path = '/Users/zac/Desktop/02_PROJECTS/FinRL'
+            if finrl_path not in sys.path:
+                sys.path.insert(0, finrl_path)
+                logger.info(f"✅ Added FinRL path: {finrl_path}")
+            
+            # Test critical FinRL imports
+            from finrl.agents.stablebaselines3.models import DRLAgent, DRLEnsembleAgent
+            from finrl.meta.env_stock_trading.env_stocktrading import StockTradingEnv
+            from finrl.meta.data_processor import DataProcessor
+            logger.info("✅ Critical FinRL components imported successfully")
+            
+        except ImportError as e:
+            logger.critical(f"🚫 FinRL import validation failed: {e}")
+            logger.critical("❌ FinRL installation incomplete or corrupted")
+            logger.critical("🔧 Reinstall FinRL: pip install --upgrade finrl")
+            raise RuntimeError(f"FinRL import validation failed: {e}")
+        
+        # Validate required data directories
+        data_dirs = [
+            '/Users/zac/Desktop/02_PROJECTS/01_ML4T/trading_system/data',
+            '/Users/zac/Desktop/02_PROJECTS/01_ML4T/trading_system/data/finrl_models'
+        ]
+        
+        for data_dir in data_dirs:
+            try:
+                import os
+                os.makedirs(data_dir, exist_ok=True)
+                logger.info(f"✅ Data directory validated: {data_dir}")
+            except Exception as e:
+                logger.critical(f"🚫 Data directory validation failed: {data_dir} - {e}")
+                raise RuntimeError(f"Data directory validation failed: {e}")
+        
+        # Validate RL configuration
+        try:
+            with open('/Users/zac/Desktop/02_PROJECTS/01_ML4T/trading_system/data/rl_config.json', 'r') as f:
+                rl_config = json.load(f)
+                if not rl_config.get('integration', {}).get('enforce_rl_only_mode', False):
+                    logger.critical("🚫 RL-only mode not enforced in configuration")
+                    raise RuntimeError("RL-only mode must be enabled for FinRL operation")
+                logger.info("✅ RL configuration validated")
+        except FileNotFoundError:
+            logger.warning("⚠️ RL config file not found - will use defaults")
+        except Exception as e:
+            logger.critical(f"🚫 RL configuration validation failed: {e}")
+            raise RuntimeError(f"RL configuration validation failed: {e}")
+        
+        logger.info("✅ FinRL DRL system health validation passed")
 
 # Global instance management
-_global_rl_agent: Optional[SimplifiedRLAgent] = None
+_global_rl_agent: Optional[EnhancedRLAgent] = None
 
-def initialize_rl_agent(symbols: List[str], alpaca_client=None) -> SimplifiedRLAgent:
-    """Initialize global RL agent instance."""
+def initialize_rl_agent(symbols: List[str], alpaca_client=None) -> EnhancedRLAgent:
+    """Initialize global enhanced RL agent instance."""
     global _global_rl_agent
     
     if _global_rl_agent is None:
-        _global_rl_agent = SimplifiedRLAgent(symbols, alpaca_client=alpaca_client)
+        _global_rl_agent = EnhancedRLAgent(symbols, alpaca_client=alpaca_client)
         # Set as current agent for backtesting validation
         _set_current_rl_agent(_global_rl_agent)
     
     return _global_rl_agent
 
-def get_rl_agent() -> Optional[SimplifiedRLAgent]:
-    """Get the global RL agent instance."""
+def get_rl_agent() -> Optional[EnhancedRLAgent]:
+    """Get the global enhanced RL agent instance."""
     return _global_rl_agent
 
 async def generate_rl_enhanced_signals(market_data: Dict[str, Any],
@@ -657,34 +914,11 @@ async def integrate_hybrid_llm_rl_portfolio_system(state: Dict[str, Any], config
             llm_allocations = portfolio_recommendation.allocations
             
         except Exception as e:
-            logger.error(f"❌ LLM Portfolio Manager failed: {e}")
-            # Fallback to basic diversified allocation
-            llm_allocations = []
-            from dataclasses import dataclass
-            @dataclass
-            class StockAllocation:
-                symbol: str
-                target_weight: float
-                confidence: float
-                recommended_action: str
-                reasoning: str
-                sentiment_score: float
-                industry: str
-                risk_level: str
-            
-            # Create basic diversified allocation
-            base_weight = 0.05  # 5% per position
-            for i, symbol in enumerate(symbols[:10]):  # Max 10 positions for fallback
-                llm_allocations.append(StockAllocation(
-                    symbol=symbol,
-                    target_weight=base_weight,
-                    confidence=0.6,
-                    recommended_action="buy",
-                    reasoning="Basic diversification fallback",
-                    sentiment_score=0.1,
-                    industry="Unknown",
-                    risk_level="medium"
-                ))
+            logger.critical(f"🚫 LLM Portfolio Manager CRITICAL FAILURE: {e}")
+            logger.critical("❌ FALLBACK DISABLED: No basic diversification allowed")
+            logger.critical("💡 System requires proper LLM analysis for intelligent stock selection")
+            logger.critical("🔧 Fix LLM integration or check model availability")
+            raise RuntimeError(f"LLM Portfolio Manager failed and fallback disabled: {e}")
             
             logger.info(f"🔄 Using basic diversification fallback: {len(llm_allocations)} positions")
         
@@ -1051,21 +1285,31 @@ def _set_current_rl_agent(agent):
     _current_rl_agent = agent
 
 # Backward compatibility aliases
-OnlineRLAgent = SimplifiedRLAgent
+OnlineRLAgent = EnhancedRLAgent
+SimplifiedRLAgent = EnhancedRLAgent  # Legacy alias
 create_rl_bridge = initialize_rl_agent
 
 # Export all functions for compatibility
 __all__ = [
-    'SimplifiedRLAgent',
-    'OnlineRLAgent',
+    'EnhancedRLAgent',
+    'SimplifiedRLAgent',  # Legacy alias
+    'OnlineRLAgent',      # Legacy alias
     'TradingSignal',
     'initialize_rl_agent',
     'get_rl_agent',
     'get_current_rl_agent',
     'generate_rl_enhanced_signals',
     'integrate_comprehensive_rl_system',
+    'integrate_hybrid_llm_rl_portfolio_system',
     'cleanup_rl_agent',
     'create_rl_bridge'
 ]
 
-logger.info("✅ Simplified RL Integration Bridge loaded - all functionality consolidated")
+if FINRL_AVAILABLE:
+    logger.info("✅ Enhanced RL Integration Bridge loaded with FinRL DRL Agents (REQUIRED)")
+else:
+    logger.critical("🚫 CRITICAL: FinRL DRL Agents not available")
+    logger.critical("❌ System requires FinRL DRL agents - no fallbacks allowed")
+    logger.critical("🔧 Install FinRL: pip install finrl")
+    logger.critical("📚 Documentation: https://github.com/AI4Finance-Foundation/FinRL")
+    raise RuntimeError("FinRL DRL agents required but not available - system cannot proceed")

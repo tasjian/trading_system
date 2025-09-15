@@ -275,17 +275,10 @@ class TradingWorkflow:
     async def sentiment_analysis_agent(self, state: TradingState, config: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze comprehensive sentiment for pre-filtered stocks using enhanced sentiment engine."""
         try:
-            from core.gpt_batch_sentiment_analyzer import GPTBatchSentimentAnalyzer
+            from core.batch_sentiment_processor import batch_sentiment_processor
             from core.market_intelligence import UnifiedMarketIntelligence
             
-            logger.info("Sentiment Analysis Agent: Running GPT-5-nano batch sentiment analysis on pre-filtered stocks")
-            
-            # Initialize comprehensive sentiment system (includes social media)
-            from agents.sentiment_agent import SentimentAgent
-            sentiment_agent = SentimentAgent()
-            
-            # Initialize GPT-5-nano batch sentiment analyzer
-            sentiment_engine = GPTBatchSentimentAnalyzer()
+            logger.info("Sentiment Analysis Agent: Using optimized batch sentiment processing")
             
             # Get market intelligence for news data
             market_intel = UnifiedMarketIntelligence()
@@ -325,207 +318,169 @@ class TradingWorkflow:
             logger.info(f"   📊 Portfolio positions: {len(portfolio_positions)} (all included)")
             logger.info(f"   🔍 Additional filtered: {len(symbols_to_analyze) - len(portfolio_positions)}")
             
-            # Run comprehensive sentiment analysis for each symbol
+            # Use optimized batch sentiment processing
+            logger.info(f"🚀 Processing {len(symbols_to_analyze)} symbols with batch sentiment processor")
+            
+            # Process all symbols efficiently in batches
+            try:
+                comprehensive_results = await asyncio.wait_for(
+                    batch_sentiment_processor.analyze_stocks_batch(
+                        symbols_to_analyze,
+                        timeout_seconds=300.0  # 5 minute total timeout
+                    ),
+                    timeout=320.0  # Buffer time
+                )
+                
+                logger.info(f"✅ Batch sentiment processing completed: {len(comprehensive_results)}/{len(symbols_to_analyze)} successful")
+                
+            except asyncio.TimeoutError:
+                logger.error("Batch sentiment processing timed out, using empty results")
+                comprehensive_results = {}
+            except Exception as e:
+                logger.error(f"Batch sentiment processing failed: {e}, using empty results")
+                comprehensive_results = {}
+            
+            # Convert batch results to expected format
             sentiment_data = {}
             sentiment_signals = []
             
-            # Process symbols in parallel batches to speed up analysis  
-            batch_size = 20  # GPT-5-nano can handle larger batches efficiently
-            
-            async def analyze_symbol_sentiment(symbol: str):
-                """Analyze sentiment for a single symbol using comprehensive sentiment agent."""
-                try:
-                    logger.info(f"Running comprehensive sentiment analysis (including social media) for {symbol}")
+            # Process batch results from the optimized processor
+            for symbol, comprehensive_sentiment in comprehensive_results.items():
+                if comprehensive_sentiment:
+                    sentiment_data[symbol] = {
+                        'overall_sentiment': str(comprehensive_sentiment.overall_sentiment),
+                        'overall_score': comprehensive_sentiment.overall_score,
+                        'confidence': comprehensive_sentiment.confidence,
+                        'ensemble_used': False,  # Not using ensemble anymore
+                        'models_successful': 1,  # Single GPT-5-nano model
+                        'reasoning': f"Combined analysis from {comprehensive_sentiment.data_sources_count} sources",
+                        'model_results': {'gpt5_nano': comprehensive_sentiment.overall_sentiment},
+                        'analysis_timestamp': None  # Not tracked in simple version
+                    }
                     
-                    # Use comprehensive sentiment agent which includes social media analysis
-                    comprehensive_sentiment = await asyncio.wait_for(
-                        sentiment_agent.analyze_comprehensive_sentiment(symbol),
-                        timeout=240.0  # Increased to account for SEC filings analysis (17s) + LLM processing + network delays
-                    )
+                    # Log detailed sentiment breakdown from GPT-5-nano analysis
+                    logger.info(f"{symbol} sentiment breakdown:")
+                    logger.info(f"  Overall: {comprehensive_sentiment.overall_sentiment} (score: {comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
+                    logger.info(f"  Sources: {comprehensive_sentiment.data_sources_count} data sources")  
+                    logger.info(f"  Key themes: {', '.join(comprehensive_sentiment.key_themes[:3])}")
                     
-                    # If comprehensive sentiment succeeds, return it
-                    if comprehensive_sentiment:
-                        logger.info(f"✅ Comprehensive sentiment completed for {symbol} (social platforms: {len(comprehensive_sentiment.social_sentiment)})")
-                        return symbol, comprehensive_sentiment
+                    # Generate trading signals based on enhanced sentiment
+                    signal_strength = 0.0
+                    signal_type = None
+                    signal_reason = []
                     
-                    # Fallback to basic LLM sentiment if comprehensive fails
-                    logger.warning(f"Comprehensive sentiment failed for {symbol}, falling back to basic LLM analysis")
-                    combined_text = f"Market analysis for {symbol} shows mixed sentiment with moderate trading volume and technical indicators suggesting neutral outlook."
+                    # Extract sentiment values
+                    overall_sentiment = str(comprehensive_sentiment.overall_sentiment)
+                    overall_score = comprehensive_sentiment.overall_score
+                    confidence = comprehensive_sentiment.confidence
                     
-                    basic_sentiment = await asyncio.wait_for(
-                        sentiment_engine.analyze_text(combined_text, "financial_news"),
-                        timeout=30.0
-                    )
-                    return symbol, basic_sentiment
-                    
-                except asyncio.TimeoutError:
-                    logger.warning(f"Comprehensive sentiment analysis timed out for {symbol}")
-                    return symbol, None
-                except asyncio.CancelledError:
-                    logger.warning(f"Comprehensive sentiment analysis cancelled for {symbol}")
-                    return symbol, None
-                except Exception as e:
-                    logger.error(f"Error in comprehensive sentiment analysis for {symbol}: {e}")
-                    return symbol, None
-            
-            # Process symbols in parallel batches
-            for i in range(0, len(symbols_to_analyze), batch_size):
-                batch = symbols_to_analyze[i:i + batch_size]
-                logger.info(f"Processing batch {i//batch_size + 1}: {', '.join(batch)}")
-                
-                # Run batch in parallel with timeout
-                try:
-                    batch_results = await asyncio.wait_for(
-                        asyncio.gather(
-                            *[analyze_symbol_sentiment(symbol) for symbol in batch],
-                            return_exceptions=True
-                        ),
-                        timeout=300.0  # 5 minute timeout for batch with comprehensive sentiment analysis
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"Batch {i//batch_size + 1} timed out after 300 seconds")
-                    batch_results = [(symbol, None) for symbol in batch]
-                
-                # Process batch results
-                for result in batch_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"Batch processing error: {result}")
-                        continue
-                    
-                    symbol, comprehensive_sentiment = result
-                    
-                    if comprehensive_sentiment:
-                        sentiment_data[symbol] = {
-                            'overall_sentiment': str(comprehensive_sentiment.overall_sentiment),
-                            'overall_score': comprehensive_sentiment.overall_score,
-                            'confidence': comprehensive_sentiment.confidence,
-                            'ensemble_used': False,  # Not using ensemble anymore
-                            'models_successful': 1,  # Single GPT-5-nano model
-                            'reasoning': f"Combined analysis from {comprehensive_sentiment.data_sources_count} sources",
-                            'model_results': {'gpt5_nano': comprehensive_sentiment.overall_sentiment},
-                            'analysis_timestamp': None  # Not tracked in simple version
-                        }
+                    # Strong signals based on score thresholds
+                    if overall_score > 0.4 and confidence > 0.6:
+                        signal_strength += 0.5
+                        signal_type = 'BUY'
+                        signal_reason.append('Strong positive sentiment with high confidence')
+                    elif overall_score < -0.2 and confidence > 0.4:  # LOWERED THRESHOLDS for more short opportunities
+                        signal_strength += 0.5
+                        signal_type = 'SELL'
+                        signal_reason.append('Strong negative sentiment with high confidence')
                         
-                        # Log detailed sentiment breakdown from GPT-5-nano analysis
-                        logger.info(f"{symbol} sentiment breakdown:")
-                        logger.info(f"  Overall: {comprehensive_sentiment.overall_sentiment} (score: {comprehensive_sentiment.overall_score:.3f}, confidence: {comprehensive_sentiment.confidence:.3f})")
-                        logger.info(f"  Sources: {comprehensive_sentiment.data_sources_count} data sources")
-                        logger.info(f"  Key themes: {', '.join(comprehensive_sentiment.key_themes[:3])}")
+                    
+                    # Overall sentiment signals
+                    if overall_sentiment == 'positive':
+                        signal_strength += 0.3
+                        signal_type = 'BUY'
+                        signal_reason.append('Positive overall sentiment')
+                    elif overall_sentiment == 'negative':
+                        signal_strength += 0.3
+                        signal_type = 'SELL' 
+                        signal_reason.append('Negative overall sentiment')
                         
-                        # Generate trading signals based on enhanced sentiment
-                        signal_strength = 0.0
-                        signal_type = None
-                        signal_reason = []
+                    
+                    # Enhanced extreme sentiment detection based on numerical scores (MORE AGGRESSIVE)
+                    if overall_score <= -0.5:  # Extremely negative numerical score (lowered from -0.7)
+                        signal_strength += 0.5  # Increased strength
+                        signal_type = 'SHORT'  # Override with SHORT if not already set
+                        signal_reason.append('EXTREME negative sentiment score (≤-0.5)')
+                    elif overall_score <= -0.3:  # Very negative numerical score (lowered from -0.5)
+                        signal_strength += 0.4  # Increased strength
+                        signal_type = 'SHORT'
+                        signal_reason.append('Strong negative sentiment score (≤-0.3)')
+                    elif overall_score <= -0.2:  # Moderate negative for short consideration (new threshold)
+                        signal_strength += 0.3
+                        signal_type = 'SHORT'
+                        signal_reason.append('Moderate negative sentiment score for short opportunity (≤-0.2)')
+                    elif overall_score >= 0.5:  # Very positive numerical score
+                        signal_strength += 0.3
+                        signal_type = 'BUY'
+                        signal_reason.append('Strong positive sentiment score (≥0.5)')
+                    
+                    # Crisis/panic sentiment detection with high confidence (MORE SENSITIVE)
+                    if (confidence > 0.4 and overall_score <= -0.2):  # AGGRESSIVE THRESHOLDS for more short signals
+                        signal_strength += 0.5  # Major boost for high-confidence extreme negativity
+                        signal_type = 'SHORT'
+                        signal_reason.append('CRISIS-LEVEL sentiment - High confidence extreme negative')
                         
-                        # Extract sentiment values
-                        overall_sentiment = str(comprehensive_sentiment.overall_sentiment)
-                        overall_score = comprehensive_sentiment.overall_score
-                        confidence = comprehensive_sentiment.confidence
+                    
+                    # Additional short opportunity: Negative sentiment with very negative classification
+                    if overall_sentiment == 'very_negative':
+                        signal_strength += 0.4
+                        signal_type = 'SHORT'
+                        signal_reason.append('Very negative sentiment classification - short opportunity')
                         
-                        # Strong signals based on score thresholds
-                        if overall_score > 0.4 and confidence > 0.6:
-                            signal_strength += 0.5
-                            signal_type = 'BUY'
-                            signal_reason.append('Strong positive sentiment with high confidence')
-                        elif overall_score < -0.4 and confidence > 0.6:
-                            signal_strength += 0.5
-                            signal_type = 'SELL'
-                            signal_reason.append('Strong negative sentiment with high confidence')
+                    
+                    # Social media driven short opportunities
+                    social_sentiment = getattr(comprehensive_sentiment, 'social_sentiment', {})
+                    if social_sentiment:
+                        reddit_sentiment = social_sentiment.get('reddit')
+                        twitter_sentiment = social_sentiment.get('twitter')
                         
-                        # Overall sentiment signals
-                        if overall_sentiment == 'positive':
-                            signal_strength += 0.3
-                            signal_type = 'BUY'
-                            signal_reason.append('Positive overall sentiment')
-                        elif overall_sentiment == 'negative':
-                            signal_strength += 0.3
-                            signal_type = 'SELL' 
-                            signal_reason.append('Negative overall sentiment')
+                        # Multiple social platforms showing negative sentiment
+                        negative_platforms = []
+                        if reddit_sentiment and getattr(reddit_sentiment, 'sentiment', '') in ['negative', 'very_negative']:
+                            negative_platforms.append('reddit')
+                        if twitter_sentiment and getattr(twitter_sentiment, 'sentiment', '') in ['negative', 'very_negative']:
+                            negative_platforms.append('twitter')
                         
-                        # Enhanced extreme sentiment detection based on numerical scores (MORE AGGRESSIVE)
-                        if overall_score <= -0.5:  # Extremely negative numerical score (lowered from -0.7)
-                            signal_strength += 0.5  # Increased strength
-                            signal_type = 'SHORT'  # Override with SHORT if not already set
-                            signal_reason.append('EXTREME negative sentiment score (≤-0.5)')
-                        elif overall_score <= -0.3:  # Very negative numerical score (lowered from -0.5)
-                            signal_strength += 0.4  # Increased strength
-                            signal_type = 'SHORT'
-                            signal_reason.append('Strong negative sentiment score (≤-0.3)')
-                        elif overall_score <= -0.2:  # Moderate negative for short consideration (new threshold)
+                        if len(negative_platforms) >= 2:  # Multiple platforms bearish
                             signal_strength += 0.3
                             signal_type = 'SHORT'
-                            signal_reason.append('Moderate negative sentiment score for short opportunity (≤-0.2)')
-                        elif overall_score >= 0.5:  # Very positive numerical score
-                            signal_strength += 0.3
-                            signal_type = 'BUY'
-                            signal_reason.append('Strong positive sentiment score (≥0.5)')
-                        
-                        # Crisis/panic sentiment detection with high confidence (MORE SENSITIVE)
-                        if (confidence > 0.7 and overall_score <= -0.4):  # Lowered confidence and score thresholds
-                            signal_strength += 0.5  # Major boost for high-confidence extreme negativity
-                            signal_type = 'SHORT'
-                            signal_reason.append('CRISIS-LEVEL sentiment - High confidence extreme negative')
-                        
-                        # Additional short opportunity: Negative sentiment with very negative classification
-                        if overall_sentiment == 'very_negative':
-                            signal_strength += 0.4
-                            signal_type = 'SHORT'
-                            signal_reason.append('Very negative sentiment classification - short opportunity')
-                        
-                        # Social media driven short opportunities
-                        social_sentiment = getattr(comprehensive_sentiment, 'social_sentiment', {})
-                        if social_sentiment:
-                            reddit_sentiment = social_sentiment.get('reddit')
-                            twitter_sentiment = social_sentiment.get('twitter')
-                            
-                            # Multiple social platforms showing negative sentiment
-                            negative_platforms = []
-                            if reddit_sentiment and getattr(reddit_sentiment, 'sentiment', '') in ['negative', 'very_negative']:
-                                negative_platforms.append('reddit')
-                            if twitter_sentiment and getattr(twitter_sentiment, 'sentiment', '') in ['negative', 'very_negative']:
-                                negative_platforms.append('twitter')
-                            
-                            if len(negative_platforms) >= 2:  # Multiple platforms bearish
-                                signal_strength += 0.3
+                            signal_reason.append(f'Bearish sentiment across {len(negative_platforms)} social platforms')
+                        elif len(negative_platforms) == 1:  # Single platform very bearish
+                            platform_sentiment = reddit_sentiment if 'reddit' in negative_platforms else twitter_sentiment
+                            if getattr(platform_sentiment, 'score', 0) <= -0.4:  # Very negative social score
+                                signal_strength += 0.2
                                 signal_type = 'SHORT'
-                                signal_reason.append(f'Bearish sentiment across {len(negative_platforms)} social platforms')
-                            elif len(negative_platforms) == 1:  # Single platform very bearish
-                                platform_sentiment = reddit_sentiment if 'reddit' in negative_platforms else twitter_sentiment
-                                if getattr(platform_sentiment, 'score', 0) <= -0.4:  # Very negative social score
-                                    signal_strength += 0.2
-                                    signal_type = 'SHORT'
-                                    signal_reason.append(f'Very bearish {negative_platforms[0]} sentiment')
+                                signal_reason.append(f'Very bearish {negative_platforms[0]} sentiment')
                         
-                        # Confidence boosts
-                        if confidence > 0.7:
-                            signal_strength += 0.1
-                            signal_reason.append('High confidence analysis')
+                    
+                    # Confidence boosts
+                    if confidence > 0.7:
+                        signal_strength += 0.1
+                        signal_reason.append('High confidence analysis')
+                    
+                    # GPT-5-nano model quality boost
+                    if confidence > 0.8:
+                        signal_strength += 0.1
+                        signal_reason.append('Very high confidence GPT-5-nano analysis')
+                    
+                    # Generate signal if significant
+                    if signal_type and signal_strength > 0.3:
+                        sentiment_signals.append({
+                            'symbol': symbol,
+                            'signal': signal_type,
+                            'strength': min(signal_strength, 1.0),
+                            'reason': ', '.join(signal_reason),
+                            'source': 'comprehensive_sentiment',
+                            'has_earnings': comprehensive_sentiment.has_recent_earnings,
+                            'sentiment_score': comprehensive_sentiment.overall_score
+                        })
                         
-                        # GPT-5-nano model quality boost
-                        if confidence > 0.8:
-                            signal_strength += 0.1
-                            signal_reason.append('Very high confidence GPT-5-nano analysis')
-                        
-                        # Generate signal if significant
-                        if signal_type and signal_strength > 0.3:
-                            sentiment_signals.append({
-                                'symbol': symbol,
-                                'signal': signal_type,
-                                'strength': min(signal_strength, 1.0),
-                                'reason': ', '.join(signal_reason),
-                                'source': 'comprehensive_sentiment',
-                                'has_earnings': comprehensive_sentiment.has_recent_earnings,
-                                'sentiment_score': comprehensive_sentiment.overall_score
-                            })
-                            
-                            logger.info(f"Generated {signal_type} signal for {symbol} (strength: {signal_strength:.2f}): {', '.join(signal_reason)}")
+                        logger.info(f"Generated {signal_type} signal for {symbol} (strength: {signal_strength:.2f}): {', '.join(signal_reason)}")
                     
                     else:
                         logger.warning(f"No comprehensive sentiment data for {symbol}")
                 
-                # Rate limiting between batches (reduced since we're processing in parallel)
-                if i + batch_size < len(symbols_to_analyze):
-                    await asyncio.sleep(2)  # 2 second delay between batches
+                # Note: Rate limiting handled by batch processor internally
             
             # Update state with comprehensive sentiment data
             state["sentiment_data"] = sentiment_data
@@ -1125,7 +1080,7 @@ class TradingWorkflow:
                     data_sources = 1
                 
                 # Multi-tier sentiment analysis for short selling (ENHANCED - more aggressive)
-                if sentiment_score <= -0.4:  # Extremely negative (lowered from -0.7)
+                if sentiment_score <= -0.2:  # AGGRESSIVE: Moderate negative triggers short (lowered from -0.4)
                     extremely_negative_sentiment = True
                     logger.info(f"🔥 EXTREMELY negative sentiment detected for {symbol}: {sentiment_score:.2f}")
                 elif sentiment_score <= -0.3:  # Very negative (lowered from -0.5)
@@ -1547,11 +1502,12 @@ class TradingWorkflow:
                     valid_market_data_count = len(recovered_data)
                     logger.info(f"✅ Recovered {valid_market_data_count} symbols with fallback data")
                 else:
-                    # Use synthetic data as last resort for RL training
-                    logger.warning("⚠️ Using synthetic market data for RL signal generation")
-                    synthetic_data = self._generate_synthetic_market_data(symbols[:10])  # Limit to 10 for safety
-                    rl_market_data.update(synthetic_data)
-                    valid_market_data_count = len(synthetic_data)
+                    # ENFORCE REAL DATA ONLY: No synthetic data generation for production RL
+                    error_msg = "❌ CRITICAL: No real market data available for RL system"
+                    logger.critical(error_msg)
+                    logger.critical("🚫 Synthetic data generation DISABLED for production trading")
+                    logger.critical("💡 System requires real market data for intelligent stock selection")
+                    raise ValueError("Real market data required - synthetic data disabled for production RL system")
                     
             elif valid_market_data_count < len(symbols) * 0.3:  # Less than 30% valid data (lowered threshold)
                 logger.warning(f"⚠️ Low market data quality: only {valid_market_data_count}/{len(symbols)} symbols have valid data")
@@ -1643,49 +1599,10 @@ class TradingWorkflow:
                 try:
                     # Try to generate signals with minimal market data
                     minimal_symbols = symbols[:5] if symbols else []
-                    synthetic_data = self._generate_synthetic_market_data(minimal_symbols)
-                    
-                    if synthetic_data:
-                        logger.info(f"🧩 Generated synthetic data for {len(synthetic_data)} symbols")
-                        
-                        # Retry signal generation with synthetic data
-                        # Use dual agent system with synthetic data state
-                        synthetic_state = state.copy()
-                        synthetic_state["market_data"] = {"symbols": synthetic_data}
-                        
-                        rl_allocations = await self.dual_agent_system.get_portfolio_allocations(synthetic_state)
-                        rl_signals = await self._convert_allocations_to_signals(
-                            rl_allocations, synthetic_state, portfolio_value
-                        )
-                        
-                        if rl_signals:
-                            # Convert to workflow format with synthetic data flag
-                            signals = []
-                            for rl_signal in rl_signals:
-                                signal = {
-                                    'symbol': rl_signal['symbol'],
-                                    'action': rl_signal['action'],
-                                    'quantity': rl_signal['quantity'],
-                                    'price': synthetic_data.get(rl_signal['symbol'], {}).get('price', 100.0),
-                                    'confidence': rl_signal['confidence'] * 0.6,  # Reduce confidence for synthetic data
-                                    'reasoning': f"[SYNTHETIC DATA] {rl_signal['reasoning']}",
-                                    'strategy': 'online_rl_synthetic',
-                                    'priority': 'low',  # Lower priority for synthetic signals
-                                    'rl_score': rl_signal.get('rl_score', 0.0),
-                                    'regime': rl_signal.get('regime', 'unknown'),
-                                    'uncertainty': rl_signal.get('uncertainty', 0.7),  # Higher uncertainty
-                                    'timestamp': datetime.now()
-                                }
-                                signals.append(signal)
-                            
-                            # Update state with synthetic signals
-                            state["trading_signals"] = signals
-                            state["signals_generated"] = len(signals)
-                            state["rl_enhanced"] = True
-                            state["signal_generation_method"] = "online_rl_synthetic"
-                            
-                            logger.warning(f"⚠️ Generated {len(signals)} RL signals using synthetic data (reduced confidence)")
-                            return update_state_timestamp(state)
+                    # ENFORCE REAL DATA ONLY: No synthetic fallback retry
+                    logger.critical("🚫 SYNTHETIC DATA RETRY DISABLED - Real market data required")
+                    logger.critical("💡 RL system must use authentic market signals for intelligent decisions")
+                    raise ValueError("Cannot generate RL signals without real market data - synthetic fallback disabled")
                             
                 except Exception as recovery_error:
                     logger.error(f"❌ RL signal recovery failed: {recovery_error}")
@@ -1764,45 +1681,8 @@ class TradingWorkflow:
             
         return recovered_data
     
-    def _generate_synthetic_market_data(self, symbols: List[str]) -> Dict[str, Dict]:
-        """Generate synthetic market data for RL training when real data unavailable."""
-        import random
-        
-        synthetic_data = {}
-        
-        # Base prices for common symbols (rough estimates)
-        base_prices = {
-            'AAPL': 175, 'MSFT': 350, 'GOOGL': 140, 'TSLA': 200, 'NVDA': 450,
-            'AMZN': 140, 'META': 300, 'NFLX': 400, 'AMD': 110, 'INTC': 45
-        }
-        
-        for symbol in symbols:
-            # Use known price or random price
-            base_price = base_prices.get(symbol, random.uniform(50, 300))
-            
-            # Add some realistic market noise
-            price = base_price * random.uniform(0.95, 1.05)
-            price_change = random.uniform(-0.03, 0.03)  # -3% to +3% daily change
-            volume = random.randint(500000, 5000000)  # Realistic volume range
-            
-            synthetic_data[symbol] = {
-                'price': round(price, 2),
-                'price_change_pct': round(price_change, 4),
-                'volume': volume,
-                'avg_volume': int(volume * random.uniform(0.8, 1.2)),
-                'rsi': random.uniform(30, 70),  # Realistic RSI range
-                'macd': random.uniform(-2, 2),
-                'bb_position': random.uniform(0.2, 0.8),
-                'volatility': random.uniform(0.01, 0.05),
-                'sentiment_score': random.uniform(-0.3, 0.3),
-                'sentiment_confidence': random.uniform(0.4, 0.8),
-                'news_count': random.randint(0, 10),
-                'social_sentiment_strength': random.uniform(0, 0.5),
-                'data_source': 'synthetic'
-            }
-            
-        logger.info(f"🧩 Generated synthetic market data for {len(synthetic_data)} symbols")
-        return synthetic_data
+    # REMOVED: Synthetic market data generation
+    # No synthetic data allowed per fail-fast architecture
     
     async def _cleanup_signal_generation_resources(self):
         """Clean up resources used in signal generation."""
@@ -2063,11 +1943,11 @@ class TradingWorkflow:
                     confidence = 0.5
                     logger.warning(f"Signal {i} ({symbol}): invalid confidence value, using default 0.5")
                 
-                if confidence > 0.15:  # Lowered threshold to allow portfolio rebalancing signals
+                if confidence > 0.60:  # RAISED threshold to improve signal quality and reduce losses
                     optimized_signals.append(signal)
                     logger.info(f"✅ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): RETAINED with confidence={confidence}")
                 else:
-                    logger.warning(f"❌ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): FILTERED OUT with confidence={confidence} <= 0.15")
+                    logger.warning(f"❌ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): FILTERED OUT with confidence={confidence} <= 0.60 (improved quality filter)")
             
             # Sort signals by confidence to prioritize highest confidence trades
             def get_signal_confidence(signal):

@@ -553,25 +553,18 @@ class DualProviderMarketData:
                 logger.error(f"❌ Alpha Vantage failed: {e}")
                 self._provider_health['alpha_vantage'] = False
         
-        # Enhanced fallback: Generate synthetic market data if all sources fail
+        # FAIL-FAST: No synthetic data generation allowed
         if len(results) == 0:
-            logger.error("All external data sources failed - generating emergency synthetic market data")
-            results = self._generate_emergency_market_data(symbols)
-            
-            # Only raise error if even synthetic data fails
-            if len(results) == 0:
-                error_message = (
-                    f"❌ CRITICAL SYSTEM FAILURE: All data sources including emergency fallback failed\n"
-                    f"Finnhub Status: {'❌ FAILED' if not finnhub_success else '✅ SUCCESS'}\n"
-                    f"Alpha Vantage Status: {'❌ FAILED' if not alpha_vantage_success else '✅ SUCCESS'}\n"
-                    f"Symbols Requested: {symbols}\n"
-                    f"Results Retrieved: 0\n"
-                    f"SYSTEM REQUIRES VALID MARKET DATA TO OPERATE SAFELY"
-                )
-                logger.error(error_message)
-                raise RuntimeError(error_message)
-            else:
-                logger.warning(f"Using emergency synthetic market data for {len(results)} symbols")
+            error_message = (
+                f"❌ CRITICAL SYSTEM FAILURE: All real market data sources failed\n"
+                f"Finnhub Status: {'❌ FAILED' if not finnhub_success else '✅ SUCCESS'}\n"
+                f"Alpha Vantage Status: {'❌ FAILED' if not alpha_vantage_success else '✅ SUCCESS'}\n"
+                f"Symbols Requested: {symbols}\n"
+                f"Results Retrieved: 0\n"
+                f"🚫 NO SYNTHETIC DATA ALLOWED - System halting to prevent losses"
+            )
+            logger.error(error_message)
+            raise RuntimeError(error_message)
         
         # Log provider health status
         logger.info(f"🎯 Total market data retrieved: {len(results)} symbols")
@@ -604,41 +597,8 @@ class DualProviderMarketData:
         logger.info(f"✅ Generated {len(signals)} price signals")
         return signals
     
-    def _generate_emergency_market_data(self, symbols: List[str]) -> Dict[str, StandardizedMarketData]:
-        """Generate emergency synthetic market data when all providers fail."""
-        logger.warning("🚨 Generating emergency synthetic market data - this is a last resort fallback")
-        
-        results = {}
-        
-        # Use basic market data patterns for emergency fallback
-        for symbol in symbols:
-            # Generate realistic but conservative market data
-            # Base price on symbol characteristics
-            if symbol in ['SPY', 'QQQ', 'IWM']:  # ETFs
-                base_price = 400.0 + hash(symbol) % 200  # $400-$600 range
-            elif symbol.startswith('BTC') or symbol.startswith('ETH'):  # Crypto
-                base_price = 50000.0 + hash(symbol) % 20000  # Crypto range
-            else:  # Individual stocks
-                base_price = 100.0 + hash(symbol) % 300  # $100-$400 range
-            
-            # Small random price movements (-0.5% to +0.5%)
-            price_change_pct = (hash(symbol + str(datetime.now().hour)) % 100 - 50) / 10000.0
-            current_price = base_price * (1 + price_change_pct)
-            previous_close = base_price
-            
-            results[symbol] = StandardizedMarketData(
-                symbol=symbol,
-                current_price=current_price,
-                previous_close=previous_close,
-                price_change=current_price - previous_close,
-                price_change_percent=price_change_pct,
-                volume=1000000.0,  # Standard volume
-                data_source="emergency_synthetic",
-                confidence=0.1  # Very low confidence
-            )
-        
-        logger.info(f"🚨 Generated emergency synthetic data for {len(results)} symbols")
-        return results
+    # REMOVED: Emergency synthetic market data generation
+    # No synthetic data allowed per fail-fast architecture
     
     async def close(self):
         """Close all provider sessions."""

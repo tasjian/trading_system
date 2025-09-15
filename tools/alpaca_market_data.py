@@ -56,14 +56,28 @@ class AlpacaMarketData:
         
         for symbol in tickers:
             try:
-                # Use Alpaca's latest quote API
-                quote = self.api.get_latest_trade(symbol)
-                if quote and hasattr(quote, 'price'):
-                    current_price = float(quote.price)
-                    data[symbol] = round(current_price, 2)
-                    logger.debug(f"📈 {symbol}: ${current_price:.2f}")
-                else:
-                    logger.warning(f"⚠️ No quote data for {symbol}")
+                # Use delayed quote API to avoid SIP subscription warnings
+                try:
+                    # Try latest quote first (delayed data, avoids subscription issues)
+                    quote = self.api.get_latest_quote(symbol)
+                    if quote and hasattr(quote, 'bid_price'):
+                        # Use mid-price of bid/ask
+                        bid = float(quote.bid_price)
+                        ask = float(quote.ask_price) if hasattr(quote, 'ask_price') else bid
+                        current_price = (bid + ask) / 2
+                        data[symbol] = round(current_price, 2)
+                        logger.debug(f"📈 {symbol}: ${current_price:.2f} (delayed quote)")
+                    else:
+                        raise ValueError("No quote data")
+                except:
+                    # Fallback to latest trade if quote fails
+                    quote = self.api.get_latest_trade(symbol)
+                    if quote and hasattr(quote, 'price'):
+                        current_price = float(quote.price)
+                        data[symbol] = round(current_price, 2)
+                        logger.debug(f"📈 {symbol}: ${current_price:.2f} (trade)")
+                    else:
+                        logger.warning(f"⚠️ No quote data for {symbol}")
                     
             except Exception as e:
                 logger.warning(f"❌ Error fetching {symbol}: {e}")
@@ -123,35 +137,47 @@ class AlpacaMarketData:
             # For paper trading: Use current price to create minimal historical data
             # This avoids SIP data subscription errors
             try:
-                current_trade = self.api.get_latest_trade(symbol)
-                if current_trade and hasattr(current_trade, 'price'):
-                    current_price = float(current_trade.price)
-                    
-                    # Create minimal mock historical data for compatibility
-                    import pandas as pd
-                    dates = pd.date_range(end=end_time, periods=20, freq='D')
-                    
-                    # Generate realistic price variations around current price
-                    import numpy as np
-                    np.random.seed(hash(symbol) % 1000)  # Consistent seed per symbol
-                    price_variations = np.random.normal(1.0, 0.02, len(dates))  # 2% daily volatility
-                    prices = current_price * np.cumprod(price_variations)
-                    
-                    bars = pd.DataFrame({
-                        'Open': prices * np.random.uniform(0.99, 1.01, len(dates)),
-                        'High': prices * np.random.uniform(1.00, 1.03, len(dates)),  
-                        'Low': prices * np.random.uniform(0.97, 1.00, len(dates)),
-                        'Close': prices,
-                        'Volume': np.random.randint(100000, 1000000, len(dates))
-                    }, index=dates)
-                    
-                    logger.debug(f"📊 Generated {len(bars)} synthetic bars for {symbol} (paper trading mode)")
-                    return bars
-                else:
-                    logger.warning(f"⚠️ No current price available for {symbol}")
-                    return None
+                # Use delayed quote to avoid subscription issues
+                try:
+                    current_quote = self.api.get_latest_quote(symbol)
+                    if current_quote and hasattr(current_quote, 'bid_price'):
+                        bid = float(current_quote.bid_price)
+                        ask = float(current_quote.ask_price) if hasattr(current_quote, 'ask_price') else bid
+                        current_price = (bid + ask) / 2
+                    else:
+                        raise ValueError("No quote data")
+                except:
+                    # Fallback to latest trade
+                    current_trade = self.api.get_latest_trade(symbol)
+                    if current_trade and hasattr(current_trade, 'price'):
+                        current_price = float(current_trade.price)
+                    else:
+                        raise ValueError("No trade data")
+                
+                # Create minimal mock historical data for compatibility
+                import pandas as pd
+                dates = pd.date_range(end=end_time, periods=20, freq='D')
+                
+                # Generate realistic price variations around current price
+                import numpy as np
+                np.random.seed(hash(symbol) % 1000)  # Consistent seed per symbol
+                price_variations = np.random.normal(1.0, 0.02, len(dates))  # 2% daily volatility
+                prices = current_price * np.cumprod(price_variations)
+                
+                bars = pd.DataFrame({
+                    'Open': prices * np.random.uniform(0.99, 1.01, len(dates)),
+                    'High': prices * np.random.uniform(1.00, 1.03, len(dates)),  
+                    'Low': prices * np.random.uniform(0.97, 1.00, len(dates)),
+                    'Close': prices,
+                    'Volume': np.random.randint(100000, 1000000, len(dates))
+                }, index=dates)
+                
+                logger.debug(f"📊 Generated {len(bars)} synthetic bars for {symbol} (paper trading mode)")
+                return bars
+                
             except Exception as e:
                 logger.debug(f"Unable to get current price for {symbol}: {e}")
+                logger.warning(f"⚠️ No current price available for {symbol}")
                 return None
                 
         except Exception as e:
@@ -299,18 +325,26 @@ class AlpacaMarketData:
             Dictionary with quote data or None
         """
         try:
-            # Get latest trade
-            trade = self.api.get_latest_trade(symbol)
-            
-            # Get latest quote (bid/ask)
+            # Get latest quote (bid/ask) first - delayed data to avoid subscription issues
             quote = self.api.get_latest_quote(symbol)
             
-            if trade and quote:
+            # Try to get latest trade as backup
+            try:
+                trade = self.api.get_latest_trade(symbol)
+            except:
+                trade = None
+            
+            if quote:
+                # Use quote data (delayed, always available)
+                bid = float(quote.bid_price) if hasattr(quote, 'bid_price') else 0.0
+                ask = float(quote.ask_price) if hasattr(quote, 'ask_price') else bid
+                mid_price = (bid + ask) / 2 if bid > 0 else ask
+                
                 return {
                     'symbol': symbol,
-                    'price': float(trade.price),
-                    'size': float(trade.size),
-                    'timestamp': trade.timestamp,
+                    'price': float(trade.price) if trade and hasattr(trade, 'price') else mid_price,
+                    'size': float(trade.size) if trade and hasattr(trade, 'size') else 100,
+                    'timestamp': trade.timestamp if trade and hasattr(trade, 'timestamp') else quote.timestamp,
                     'bid': float(quote.bid_price),
                     'ask': float(quote.ask_price),
                     'bid_size': float(quote.bid_size),

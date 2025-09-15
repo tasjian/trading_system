@@ -97,7 +97,7 @@ class UnifiedTradingEngine:
         self.pairs_z_threshold = 2.0  # Z-score threshold for pairs trading
     
     async def validate_cash_balance(self) -> bool:
-        """Validate cash balance and halt system if insufficient funds - margin account aware."""
+        """Validate cash balance and enable swing trading when PDT exhausted - margin account aware."""
         try:
             account_info = alpaca_client.get_account_info()
             cash_balance = float(account_info.get('cash', 0))
@@ -110,12 +110,29 @@ class UnifiedTradingEngine:
             # Check for day trading power issues (skip for paper accounts)
             is_paper_account = 'paper' in account_info.get('id', '').lower() or buying_power > equity * 2.5
             
-            if pattern_day_trader and not is_paper_account and day_trading_buying_power <= 0:
-                logger.warning(f"⚠️ DAY TRADING POWER EXHAUSTED: ${day_trading_buying_power:.2f}")
-                logger.warning("   Reason: Likely unsettled funds or recent day trades")
-                logger.warning("   System will operate in limited mode (sells only)")
-                # Don't halt system, just log the limitation
-                return True
+            # Check for PDT restrictions - but accounts >$25K have unlimited day trading
+            if equity >= 25000:
+                # Accounts with $25K+ equity have unlimited day trading power
+                logger.info(f"✅ UNLIMITED DAY TRADING: Account equity ${equity:,.2f} >= $25,000")
+                logger.info(f"   Day Trading Power: UNLIMITED (equity-based)")
+                logger.info(f"   Regular Buying Power: ${buying_power:,.2f}")
+                logger.info(f"   STRATEGY: Full day trading capabilities available")
+            elif day_trading_buying_power <= 0 and buying_power > 1000:
+                logger.warning(f"🔄 SWING TRADING MODE ACTIVATED")
+                logger.warning(f"   Day Trading Power: ${day_trading_buying_power:.2f} (EXHAUSTED)")
+                logger.warning(f"   Regular Buying Power: ${buying_power:,.2f} (AVAILABLE)")
+                logger.warning(f"   STRATEGY: Overnight positions only - no day trading")
+                logger.warning(f"   RISK: Positions will be held overnight to avoid PDT violations")
+                # Continue with swing trading - don't halt system
+                
+            elif pattern_day_trader and not is_paper_account and day_trading_buying_power <= 0 and buying_power <= 1000:
+                logger.critical(f"🛑 EMERGENCY HALT: INSUFFICIENT TRADING POWER")
+                logger.critical(f"   Day Trading Power: ${day_trading_buying_power:.2f}")
+                logger.critical(f"   Regular Buying Power: ${buying_power:.2f}")
+                logger.critical("   REASON: Cannot execute safe trades with current power")
+                # EMERGENCY PROTECTION: Halt only when both PDT and buying power exhausted
+                raise RuntimeError(f"EMERGENCY HALT: Insufficient trading power. Day trading: ${day_trading_buying_power:.2f}, Regular: ${buying_power:.2f}")
+                
             elif is_paper_account:
                 logger.debug(f"📝 Paper trading account detected - using buying power: ${buying_power:,.2f}")
                 # Paper accounts don't have real day trading power restrictions
@@ -398,15 +415,22 @@ class UnifiedTradingEngine:
                 order.status = OrderStatus.REJECTED
                 return order
             
-            # Execute via Alpaca
-            result = alpaca_client.place_order(
-                symbol=order.symbol,
-                qty=order.quantity,
-                side=order.side,
-                order_type=order.order_type,
-                limit_price=order.limit_price,
-                stop_price=order.stop_price
-            )
+            # ADVANCED STRATEGY ACTIVATION: Use advanced orders for significant positions
+            order_value = order.quantity * (order.limit_price or await self._get_current_price(order.symbol) or 100)
+            
+            if order_value >= 1000:  # Force advanced orders for positions > $1000
+                logger.info(f"🚀 ADVANCED ORDER: ${order_value:.2f} position triggers advanced execution for {order.symbol}")
+                result = await self._execute_advanced_order(order)
+            else:
+                # Execute via standard Alpaca for smaller positions
+                result = alpaca_client.place_order(
+                    symbol=order.symbol,
+                    qty=order.quantity,
+                    side=order.side,
+                    order_type=order.order_type,
+                    limit_price=order.limit_price,
+                    stop_price=order.stop_price
+                )
             
             # Update order with result
             order.order_id = result['id']
@@ -423,6 +447,53 @@ class UnifiedTradingEngine:
             logger.error(f"Order execution failed for {order.symbol}: {e}")
             order.status = OrderStatus.REJECTED
             return order
+    
+    async def _execute_advanced_order(self, order: TradingOrder) -> dict:
+        """Execute advanced order with OCO capabilities for significant positions."""
+        try:
+            from order_types.advanced_orders import advanced_order_manager, AdvancedOrderRequest
+            from order_types.advanced_orders import OrderSide
+            
+            # Map order side to advanced order format
+            side_mapping = {"buy": "buy", "sell": "sell", "sell_short": "sell_short"}
+            advanced_side = side_mapping.get(order.side, "buy")
+            
+            # Create advanced order request
+            advanced_request = AdvancedOrderRequest(
+                symbol=order.symbol,
+                quantity=order.quantity,
+                side=advanced_side,
+                order_type=order.order_type or "market",
+                limit_price=order.limit_price,
+                stop_price=order.stop_price,
+                enable_oco=True,  # Force OCO for advanced orders
+                auto_bracket=True  # Enable automatic take-profit/stop-loss
+            )
+            
+            logger.info(f"🎯 Executing ADVANCED ORDER with OCO for {order.symbol}")
+            result = await advanced_order_manager.place_advanced_order(advanced_request)
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Advanced order failed for {order.symbol}, falling back to standard: {e}")
+            # Fallback to standard order
+            return alpaca_client.place_order(
+                symbol=order.symbol,
+                qty=order.quantity,
+                side=order.side,
+                order_type=order.order_type,
+                limit_price=order.limit_price,
+                stop_price=order.stop_price
+            )
+    
+    async def _get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current price for a symbol."""
+        try:
+            market_data = alpaca_client.get_latest_trade(symbol)
+            return float(market_data.price) if market_data else None
+        except:
+            return None
     
     async def _validate_order(self, order: TradingOrder) -> bool:
         """FAIL-FAST order validation - strict cash balance enforcement."""
@@ -568,17 +639,17 @@ class UnifiedTradingEngine:
             # Calculate final size with safety caps
             position_value = base_size * confidence_multiplier * signal_multiplier * risk_multiplier
             
-            # Additional safety: Never exceed available cash
-            position_value = min(position_value, available_cash)
+            # Additional safety: Never exceed available funds
+            position_value = min(position_value, available_funds)
             
             # Convert to quantity
             if analysis.price > 0:
                 quantity = position_value / analysis.price
-                # Final validation: ensure position value doesn't exceed cash
+                # Final validation: ensure position value doesn't exceed available funds
                 final_position_value = quantity * analysis.price
-                if final_position_value > available_cash:
-                    logger.warning(f"Position value ${final_position_value:,.2f} exceeds available cash ${available_cash:,.2f}, reducing...")
-                    quantity = available_cash / analysis.price
+                if final_position_value > available_funds:
+                    logger.warning(f"Position value ${final_position_value:,.2f} exceeds available funds ${available_funds:,.2f}, reducing...")
+                    quantity = available_funds / analysis.price
                 
                 return max(1.0, quantity) if quantity >= 1.0 else 0.0
             

@@ -668,8 +668,23 @@ class EnhancedShortSignalEngine:
                 if posts:
                     sentiment_scores = []
                     for post in posts:
-                        # Simple sentiment analysis based on content
-                        content = getattr(post, 'content', '') or ''
+                        # Handle both cached string data and fresh object data
+                        if isinstance(post, str):
+                            # Extract content from cached string representation
+                            # Format: "SocialMediaPost(platform='reddit', post_id='...', content='...', ...)"
+                            if "content='" in post:
+                                try:
+                                    content_start = post.find("content='") + 9
+                                    content_end = post.find("'", content_start)
+                                    content = post[content_start:content_end] if content_end != -1 else ''
+                                except:
+                                    content = post[:100]  # Fallback to truncated string
+                            else:
+                                content = post[:100]  # Use first 100 chars as content
+                        else:
+                            # Fresh object data
+                            content = getattr(post, 'content', '') or ''
+                        
                         score = self._quick_sentiment_score(content)
                         sentiment_scores.append(score)
                     
@@ -711,7 +726,22 @@ class EnhancedShortSignalEngine:
             for platform, data in social_data.items():
                 posts = data.get('posts', [])
                 for post in posts:
-                    content = getattr(post, 'content', '') or ''
+                    # Handle both cached string data and fresh object data
+                    if isinstance(post, str):
+                        # Extract content from cached string representation
+                        if "content='" in post:
+                            try:
+                                content_start = post.find("content='") + 9
+                                content_end = post.find("'", content_start)
+                                content = post[content_start:content_end] if content_end != -1 else ''
+                            except:
+                                content = post[:100]  # Fallback to truncated string
+                        else:
+                            content = post[:100]  # Use first 100 chars as content
+                    else:
+                        # Fresh object data
+                        content = getattr(post, 'content', '') or ''
+                    
                     if content:
                         all_texts.append(content)
             
@@ -762,7 +792,22 @@ class EnhancedShortSignalEngine:
             for platform, data in social_data.items():
                 posts = data.get('posts', [])
                 for post in posts:
-                    content = getattr(post, 'content', '') or ''
+                    # Handle both cached string data and fresh object data
+                    if isinstance(post, str):
+                        # Extract content from cached string representation
+                        if "content='" in post:
+                            try:
+                                content_start = post.find("content='") + 9
+                                content_end = post.find("'", content_start)
+                                content = post[content_start:content_end] if content_end != -1 else ''
+                            except:
+                                content = post[:100]  # Fallback to truncated string
+                        else:
+                            content = post[:100]  # Use first 100 chars as content
+                    else:
+                        # Fresh object data
+                        content = getattr(post, 'content', '') or ''
+                    
                     if content:
                         current_texts.append(content)
             
@@ -1029,15 +1074,15 @@ class EnhancedShortSignalEngine:
                 source_sentiments = list(cross_source_disagreement.source_sentiments.values())
                 avg_sentiment = np.mean(source_sentiments) if source_sentiments else 0.0
                 
-                if disagreement > 0.4 and avg_sentiment < -0.1:
+                if disagreement > 0.2 and avg_sentiment < -0.05:  # LOWERED thresholds for more sensitivity
                     disagreement_contribution = disagreement * abs(avg_sentiment) * 0.15
                     signal_strength += disagreement_contribution
                     reasoning_parts.append(f"Cross-source disagreement ({disagreement:.2f}) with negative consensus")
                 
                 confidence += consensus_strength * 0.1
             
-            # Price momentum contribution (contrarian)
-            if price_momentum > 0.3:  # Strong positive momentum may be overextended
+            # Price momentum contribution (contrarian) - LOWERED threshold
+            if price_momentum > 0.15:  # Moderate positive momentum may be overextended
                 momentum_contribution = price_momentum * 0.2
                 signal_strength += momentum_contribution
                 reasoning_parts.append(f"Overextended positive momentum ({price_momentum:.2f})")
@@ -1055,30 +1100,60 @@ class EnhancedShortSignalEngine:
                 signal_strength += sma_contribution
                 reasoning_parts.append(f"Price above SMA ({price_vs_sma:.1%})")
             
-            # Volume analysis
+            # Volume analysis - LOWERED threshold for more sensitivity
             volume_spike = volume_profile.get('volume_spike', 0.0)
-            if volume_spike > 0.5:  # High volume might indicate distribution
+            if volume_spike > 0.3:  # Moderate volume spike might indicate distribution
                 volume_contribution = volume_spike * 0.1
                 signal_strength += volume_contribution
                 reasoning_parts.append(f"Volume spike ({volume_spike:.2f})")
             
-            # Liquidity requirement
-            if liquidity_score < 0.3:
-                signal_strength *= 0.5  # Reduce signal for illiquid stocks
+            # Liquidity requirement - RELAXED for more opportunities  
+            if liquidity_score < 0.2:  # Only penalize very illiquid stocks
+                signal_strength *= 0.7  # Less severe penalty (was 0.5)
                 reasoning_parts.append("Low liquidity discount applied")
             
             confidence += liquidity_score * 0.1
+            
+            # INTELLIGENT CONFIDENCE BOOST: When we have strong technical signals but weak social data,
+            # boost confidence based on technical indicators to enable more short opportunities
+            technical_confidence_boost = 0.0
+            
+            # Strong RSI signal boosts confidence
+            if rsi > 75:
+                technical_confidence_boost += 0.15
+            elif rsi > 70:
+                technical_confidence_boost += 0.08
+            
+            # Price momentum vs moving average boosts confidence
+            if price_vs_sma > 0.15:  # Significantly overextended
+                technical_confidence_boost += 0.12
+            elif price_vs_sma > 0.10:
+                technical_confidence_boost += 0.06
+            
+            # Volume confirmation boosts confidence
+            if volume_spike > 0.5:
+                technical_confidence_boost += 0.10
+            elif volume_spike > 0.3:
+                technical_confidence_boost += 0.05
+            
+            # Apply technical confidence boost
+            confidence += technical_confidence_boost
+            
+            # Base confidence floor for stocks with any bearish signals
+            if signal_strength > 0.05:
+                confidence = max(confidence, 0.12)  # Minimum confidence for any meaningful signal
             
             # Normalize and cap values
             signal_strength = min(signal_strength, 1.0)
             confidence = min(confidence, 1.0)
             
-            # Determine signal type
-            if signal_strength >= 0.7 and confidence >= 0.6:
+            # Determine signal type - INTELLIGENT BALANCED THRESHOLDS
+            # Lower signal strength but higher confidence for quality shorts
+            if signal_strength >= 0.12 and confidence >= 0.20:  # High quality shorts
                 signal_type = "SHORT"
-            elif signal_strength >= 0.4 and confidence >= 0.4:
+            elif signal_strength >= 0.06 and confidence >= 0.15:  # Medium quality shorts  
                 signal_type = "WEAK_SHORT"
-            elif signal_strength >= 0.2:
+            elif signal_strength >= 0.03:
                 signal_type = "MONITOR"
             else:
                 signal_type = "AVOID"

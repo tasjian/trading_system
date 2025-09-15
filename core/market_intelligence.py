@@ -610,8 +610,10 @@ class UnifiedMarketIntelligence:
             return SignalType.HOLD
         elif score > -0.4:
             return SignalType.SELL
+        elif score > -0.6:
+            return SignalType.SHORT  # Short sell for moderately negative scores
         else:
-            return SignalType.STRONG_SELL
+            return SignalType.STRONG_SELL  # Very negative scores
     
     def _calculate_confidence(self, components: Dict[str, float], market_data: MarketData) -> ConfidenceLevel:
         """Calculate confidence level."""

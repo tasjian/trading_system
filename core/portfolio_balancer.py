@@ -101,7 +101,7 @@ class IntelligentPortfolioBalancer:
         }
         
         # Rebalancing thresholds - BALANCED to prevent churning while capturing opportunities  
-        self.rebalance_threshold = 0.02  # 2% threshold (more aggressive to ensure trades execute)
+        self.rebalance_threshold = 0.005  # 0.5% threshold (more sensitive for better rebalancing)
         self.significant_deviation_threshold = 0.05  # 5% for high urgency (more aggressive)
         self.critical_deviation_threshold = 0.12     # 12% for critical urgency (balanced approach)
         
@@ -494,12 +494,12 @@ class IntelligentPortfolioBalancer:
         if order_action == PositionAction.HOLD:
             return False, None, None, None
         
-        # Use OCO for significant positions (relaxed thresholds for more usage)
+        # Use OCO for positions - AGGRESSIVE ACTIVATION (lowered thresholds)
         use_oco = (
             settings.oco_enabled and
-            confidence >= 0.3 and  # Medium confidence trades (lowered to match realistic confidence levels)
-            abs(analysis.deviation) >= 0.05 and  # 5% deviation (lowered from 10%)
-            analysis.target_weight >= 0.02  # 2% position size (lowered from 5%)
+            confidence >= 0.15 and  # Low confidence trades to capture more opportunities
+            abs(analysis.deviation) >= 0.02 and  # 2% deviation to catch smaller rebalances  
+            analysis.target_weight >= 0.01  # 1% position size for broader OCO usage
         )
         
         if not use_oco:

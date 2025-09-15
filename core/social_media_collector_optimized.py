@@ -153,8 +153,9 @@ class OptimizedRedditCollector:
         posts = []
         
         if not self.reddit:
-            # Return mock posts for testing when Reddit is unavailable
-            return self._generate_fallback_posts(symbol, limit)
+            # No fallback posts for trading - return empty list
+            logger.warning(f"Reddit API unavailable for {symbol} - no fallback posts for trading")
+            return []
         
         try:
             # Try official Reddit API with aggressive timeout
@@ -180,10 +181,9 @@ class OptimizedRedditCollector:
         except Exception as e:
             logger.debug(f"Reddit collection failed: {e}")
         
-        # If we got very few posts, add some fallback posts
+        # No fallback posts for trading - return what we got from real APIs only
         if len(posts) < 3:
-            fallback_posts = self._generate_fallback_posts(symbol, 3)
-            posts.extend(fallback_posts)
+            logger.warning(f"Only collected {len(posts)} posts for {symbol} - no fallback posts for trading")
         
         return posts[:limit]
     
@@ -195,7 +195,7 @@ class OptimizedRedditCollector:
             subreddit = await self.reddit.subreddit(subreddit_name)
             
             # Search for posts with ticker
-            async for submission in subreddit.search(f'${symbol}', limit=limit, time_filter='day'):
+            async for submission in subreddit.search(f'${symbol}', limit=limit, time_filter='week'):
                 text = f"{submission.title} {submission.selftext}"
                 
                 # Quick relevance check
@@ -222,31 +222,8 @@ class OptimizedRedditCollector:
         
         return posts
     
-    def _generate_fallback_posts(self, symbol: str, count: int) -> List[SocialMediaPost]:
-        """Generate fallback posts when APIs are unavailable."""
-        fallback_posts = []
-        
-        templates = [
-            f"${symbol} looking strong today! 🚀",
-            f"Just bought some {symbol} shares",
-            f"{symbol} earnings coming up, thoughts?",
-            f"Long {symbol} for the next quarter",
-            f"${symbol} breaking resistance levels"
-        ]
-        
-        for i in range(min(count, len(templates))):
-            post = SocialMediaPost(
-                platform="reddit",
-                post_id=f"fallback_{symbol}_{i}",
-                author="fallback_user",
-                content=templates[i],
-                timestamp=datetime.now() - timedelta(hours=i),
-                score=10 + i * 5,
-                tickers=[symbol]
-            )
-            fallback_posts.append(post)
-        
-        return fallback_posts
+    # REMOVED: _generate_fallback_posts() method for Reddit
+    # Synthetic/fallback social media posts are not allowed for trading decisions
     
     async def cleanup(self):
         """Clean up resources."""
@@ -284,7 +261,8 @@ class OptimizedTwitterCollector:
         posts = []
         
         if not self.api:
-            return self._generate_fallback_posts(symbol, limit)
+            logger.warning(f"Twitter API unavailable for {symbol} - no fallback posts for trading")
+            return []
         
         try:
             # Quick search with timeout
@@ -315,38 +293,17 @@ class OptimizedTwitterCollector:
         
         except Exception as e:
             logger.debug(f"Twitter collection failed: {e}")
-            # Return fallback posts on any error (including rate limits)
-            return self._generate_fallback_posts(symbol, limit)
+            # No fallback posts for trading - return empty list
+            return []
         
-        # Add fallback if we got too few posts
+        # No fallback posts for trading - return what we got from real APIs only
         if len(posts) < 2:
-            fallback = self._generate_fallback_posts(symbol, 2)
-            posts.extend(fallback)
+            logger.warning(f"Only collected {len(posts)} posts for {symbol} - no fallback posts for trading")
         
         return posts[:limit]
     
-    def _generate_fallback_posts(self, symbol: str, count: int) -> List[SocialMediaPost]:
-        """Generate fallback Twitter posts."""
-        templates = [
-            f"${symbol} trending today #stocks",
-            f"Watching {symbol} closely 👀",
-            f"${symbol} technical analysis looking good",
-        ]
-        
-        posts = []
-        for i in range(min(count, len(templates))):
-            post = SocialMediaPost(
-                platform="twitter",
-                post_id=f"fallback_tw_{symbol}_{i}",
-                author="fallback_user",
-                content=templates[i],
-                timestamp=datetime.now() - timedelta(minutes=i*30),
-                score=i + 1,
-                tickers=[symbol]
-            )
-            posts.append(post)
-        
-        return posts
+    # REMOVED: _generate_fallback_posts() method for Twitter  
+    # Synthetic/fallback social media posts are not allowed for trading decisions
 
 class OptimizedSocialMediaCollector:
     """Main optimized social media collector with no session leaks."""

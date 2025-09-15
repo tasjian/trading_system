@@ -270,50 +270,132 @@ class LLMPortfolioManager:
         )
     
     async def _analyze_candidate_sentiments(self, symbols: List[str]) -> Dict[str, ComprehensiveSentiment]:
-        """Analyze sentiment for all candidate stocks."""
-        sentiment_results = {}
+        """Analyze sentiment for all candidate stocks using optimized batch processing with dynamic substitution."""
+        if not symbols:
+            return {}
         
-        # Analyze in batches to avoid overwhelming APIs
-        batch_size = 5
-        for i in range(0, len(symbols), batch_size):
-            batch = symbols[i:i + batch_size]
-            
-            tasks = [sentiment_agent.analyze_comprehensive_sentiment(symbol) for symbol in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for symbol, result in zip(batch, results):
-                if isinstance(result, Exception):
-                    logger.warning(f"Sentiment analysis failed for {symbol}: {result}")
-                    # Create neutral sentiment as fallback
-                    sentiment_results[symbol] = self._create_neutral_sentiment(symbol)
-                else:
-                    sentiment_results[symbol] = result
-            
-            # Brief pause between batches
-            if i + batch_size < len(symbols):
-                await asyncio.sleep(2)
+        logger.info(f"🚀 Using batch sentiment processing for {len(symbols)} portfolio candidates")
         
-        logger.info(f"Completed sentiment analysis for {len(sentiment_results)} stocks")
-        return sentiment_results
+        try:
+            from core.batch_sentiment_processor import batch_sentiment_processor
+            
+            # Use the optimized batch processor
+            sentiment_results = await batch_sentiment_processor.analyze_stocks_batch(
+                symbols,
+                timeout_seconds=min(180.0, len(symbols) * 2.0)  # 2 seconds per symbol or 3 minutes max
+            )
+            
+            logger.info(f"✅ Batch sentiment analysis: {len(sentiment_results)}/{len(symbols)} successful")
+            
+            # Check for missing sentiment data and attempt substitution
+            missing_symbols = [symbol for symbol in symbols if symbol not in sentiment_results]
+            if missing_symbols:
+                logger.warning(f"⚠️ Sentiment analysis failed for {len(missing_symbols)} symbols: {missing_symbols}")
+                
+                # Attempt to get substitute symbols from universe filter
+                substituted_results = await self._substitute_failed_symbols(missing_symbols, len(missing_symbols))
+                if substituted_results:
+                    sentiment_results.update(substituted_results)
+                    logger.info(f"✅ Successfully substituted {len(substituted_results)} symbols from universe filter")
+                
+                # Final check - if we still don't have enough symbols, that's acceptable
+                final_missing = [symbol for symbol in symbols if symbol not in sentiment_results]
+                if final_missing:
+                    logger.warning(f"⚠️ Final missing symbols after substitution: {final_missing}")
+                    # Don't fail completely - work with what we have
+            
+            if not sentiment_results:
+                raise RuntimeError("No symbols available for sentiment analysis after substitution attempts")
+            
+            return sentiment_results
+            
+        except Exception as e:
+            logger.error(f"❌ CRITICAL: Batch sentiment analysis failed: {e}")
+            # Try one more time with emergency symbol substitution
+            try:
+                emergency_results = await self._get_emergency_symbols()
+                if emergency_results:
+                    logger.warning(f"🆘 Using emergency symbol substitution: {len(emergency_results)} symbols")
+                    return emergency_results
+            except Exception as emergency_error:
+                logger.error(f"Emergency substitution also failed: {emergency_error}")
+            
+            raise RuntimeError(f"Sentiment analysis system failure: {str(e)}. Unable to get alternative symbols.")
     
-    def _create_neutral_sentiment(self, symbol: str) -> ComprehensiveSentiment:
-        """Create neutral sentiment fallback."""
-        from agents.sentiment_agent import ComprehensiveSentiment
+    async def _substitute_failed_symbols(self, failed_symbols: List[str], needed_count: int) -> Dict[str, ComprehensiveSentiment]:
+        """Get substitute symbols from universe filter when sentiment analysis fails."""
+        logger.info(f"🔄 Attempting to substitute {len(failed_symbols)} failed symbols with universe filter alternatives")
         
-        return ComprehensiveSentiment(
-            symbol=symbol,
-            timestamp=datetime.now(),
-            overall_score=0.0,
-            overall_sentiment="neutral",
-            confidence=0.3,
-            data_sources_count=0,
-            news_articles_count=0,
-            social_posts_count=0,
-            has_recent_earnings=False,
-            key_themes=[],
-            risk_factors=[],
-            opportunities=[]
-        )
+        try:
+            # Import universe filter and get alternative symbols
+            from core.universe_filter import universe_filter
+            
+            # Get a fresh set of symbols from universe filter
+            filter_result = await universe_filter.filter_universe(
+                max_symbols=needed_count * 3,  # Get 3x what we need for better selection
+                include_watchlist=True
+            )
+            
+            # Filter out the failed symbols
+            substitute_candidates = [symbol for symbol in filter_result.filtered_symbols if symbol not in failed_symbols]
+            
+            if not substitute_candidates:
+                logger.warning("No substitute candidates available from universe filter")
+                return {}
+            
+            logger.info(f"Found {len(substitute_candidates)} substitute candidates from universe filter")
+            
+            # Try sentiment analysis on substitute candidates
+            from core.batch_sentiment_processor import batch_sentiment_processor
+            substitute_results = await batch_sentiment_processor.analyze_stocks_batch(
+                substitute_candidates[:needed_count],
+                timeout_seconds=60.0  # Shorter timeout for substitutes
+            )
+            
+            logger.info(f"✅ Substitute sentiment analysis: {len(substitute_results)} successful")
+            return substitute_results
+            
+        except Exception as e:
+            logger.error(f"Symbol substitution failed: {e}")
+            return {}
+    
+    async def _get_emergency_symbols(self) -> Dict[str, ComprehensiveSentiment]:
+        """Last resort: get a small set of highly liquid symbols for emergency trading."""
+        logger.warning("🆘 Attempting emergency symbol acquisition")
+        
+        try:
+            # Get the most liquid, stable symbols from Alpaca
+            from tools.alpaca_client import alpaca_client
+            
+            # Focus on major ETFs and blue-chip stocks that typically have good data coverage
+            emergency_symbols = ['SPY', 'QQQ', 'VTI', 'IWM', 'GLD', 'TLT', 'XLF', 'XLK', 'XLE', 'XLV']
+            
+            # Filter to only those we can actually trade
+            tradeable_symbols = []
+            for symbol in emergency_symbols:
+                try:
+                    current_price = alpaca_client.get_current_price(symbol)
+                    if current_price and current_price > 0:
+                        tradeable_symbols.append(symbol)
+                except Exception:
+                    continue
+            
+            if not tradeable_symbols:
+                raise RuntimeError("No emergency symbols are tradeable")
+            
+            # Try sentiment analysis on emergency symbols
+            from core.batch_sentiment_processor import batch_sentiment_processor
+            emergency_results = await batch_sentiment_processor.analyze_stocks_batch(
+                tradeable_symbols[:5],  # Limit to top 5 for speed
+                timeout_seconds=30.0
+            )
+            
+            logger.info(f"🆘 Emergency symbols available: {list(emergency_results.keys())}")
+            return emergency_results
+            
+        except Exception as e:
+            logger.error(f"Emergency symbol acquisition failed: {e}")
+            return {}
     
     async def _score_candidates(
         self, 

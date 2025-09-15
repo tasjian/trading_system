@@ -111,6 +111,18 @@ class AlpacaClient:
             logger.error(f"Failed to get positions: {e}")
             raise
     
+    def _get_position_qty(self, symbol: str) -> float:
+        """Get current position quantity for a symbol."""
+        try:
+            positions = self.api.list_positions()
+            for pos in positions:
+                if pos.symbol == symbol:
+                    return float(pos.qty)
+            return 0.0  # No position found
+        except Exception as e:
+            logger.warning(f"Failed to get position qty for {symbol}: {e}")
+            return 0.0
+    
     def get_asset_info(self, symbol: str) -> Dict:
         """Get asset information including fractionability."""
         try:
@@ -238,32 +250,108 @@ class AlpacaClient:
             #         except Exception as fallback_error:
             #             logger.warning(f"Crypto fallback failed for {symbol}: {fallback_error}")
             
-            # For stocks or when crypto fails, use traditional approach
+            # For stocks, get historical bars for FinRL training
             try:
-                # Try to get latest quote from Alpaca
-                quote = self.api.get_latest_trade(symbol)
-                price = float(quote.price)
-                volume = float(quote.size)
+                # Try to get historical bars from Alpaca
+                from datetime import datetime, timedelta
                 
-                # Create a simple dataframe with current data
-                import pandas as pd
-                df = pd.DataFrame({
-                    'timestamp': [datetime.now()],
-                    'open': [price],
-                    'high': [price],
-                    'low': [price], 
-                    'close': [price],
-                    'volume': [volume]
-                })
+                # Calculate date range for historical data - ensure 15+ minute delay for SIP data
+                end_date = datetime.now() - timedelta(minutes=20)  # 20 minutes ago to ensure SIP data availability
+                start_date = end_date - timedelta(days=min(limit * 2, 1095))  # Ensure enough data
                 
-                logger.info(f"Got current quote for {symbol}: ${price:.2f}")
-                return df
+                # Get historical bars with feed parameter for delayed SIP data
+                try:
+                    # Try with SIP feed for comprehensive delayed data
+                    bars = self.api.get_bars(
+                        symbol,
+                        timeframe,
+                        start=start_date.strftime('%Y-%m-%d'),
+                        end=end_date.strftime('%Y-%m-%d'),
+                        limit=limit,
+                        feed='sip'  # Use delayed SIP data (15+ minutes delayed, no subscription required)
+                    )
+                except Exception as sip_error:
+                    logger.debug(f"SIP feed failed for {symbol}, falling back to IEX: {sip_error}")
+                    # Fallback to IEX feed if SIP fails
+                    bars = self.api.get_bars(
+                        symbol,
+                        timeframe,
+                        start=start_date.strftime('%Y-%m-%d'),
+                        end=end_date.strftime('%Y-%m-%d'),
+                        limit=limit,
+                        feed='iex'  # Free IEX feed as fallback
+                    )
                 
-            except Exception as quote_error:
-                logger.warning(f"Alpaca quote failed for {symbol}: {quote_error}")
+                if bars and len(bars) > 0:
+                    # Convert to DataFrame
+                    import pandas as pd
+                    data = []
+                    for bar in bars:
+                        try:
+                            # Handle different Bar object attributes (alpaca-trade-api vs alpaca-py)
+                            timestamp = getattr(bar, 'timestamp', getattr(bar, 't', datetime.now()))
+                            
+                            # Handle different OHLCV attribute names
+                            open_price = getattr(bar, 'open', getattr(bar, 'o', 0.0))
+                            high_price = getattr(bar, 'high', getattr(bar, 'h', 0.0))
+                            low_price = getattr(bar, 'low', getattr(bar, 'l', 0.0))
+                            close_price = getattr(bar, 'close', getattr(bar, 'c', 0.0))
+                            volume = getattr(bar, 'volume', getattr(bar, 'v', 0))
+                            
+                            data.append({
+                                'timestamp': timestamp,
+                                'open': float(open_price),
+                                'high': float(high_price),
+                                'low': float(low_price),
+                                'close': float(close_price),
+                                'volume': int(volume)
+                            })
+                        except Exception as bar_error:
+                            logger.debug(f"Error processing bar for {symbol}: {bar_error}")
+                            continue
+                    
+                    df = pd.DataFrame(data)
+                    logger.info(f"Got {len(df)} historical bars for {symbol}")
+                    return df
+                else:
+                    raise ValueError(f"No historical data available for {symbol}")
+                    
+            except Exception as bars_error:
+                logger.warning(f"Historical bars failed for {symbol}: {bars_error}")
                 
-                # NO FALLBACKS - fail fast with clear error
-                error_msg = (
+                # Fallback to latest quote if historical data fails
+                try:
+                    # Try to get a delayed quote instead of real-time trade
+                    try:
+                        # Use get_latest_quote for delayed data (avoid SIP subscription issues)
+                        quote = self.api.get_latest_quote(symbol)
+                        price = float(quote.bid_price) if hasattr(quote, 'bid_price') else float(quote.ask_price)
+                        volume = 100  # Default volume since quotes don't have volume
+                    except:
+                        # Fallback to latest trade if quote fails
+                        quote = self.api.get_latest_trade(symbol)
+                        price = float(quote.price)
+                        volume = float(quote.size)
+                    
+                    # Create a simple dataframe with current data
+                    import pandas as pd
+                    df = pd.DataFrame({
+                        'timestamp': [datetime.now()],
+                        'open': [price],
+                        'high': [price],
+                        'low': [price], 
+                        'close': [price],
+                        'volume': [volume]
+                    })
+                    
+                    logger.info(f"Got current quote for {symbol}: ${price:.2f}")
+                    return df
+                
+                except Exception as quote_error:
+                    logger.warning(f"Alpaca quote failed for {symbol}: {quote_error}")
+                    
+                    # NO FALLBACKS - fail fast with clear error
+                    error_msg = (
                     f"❌ CRITICAL SYSTEM FAILURE: Alpaca market data unavailable\n"
                     f"Symbol: {symbol}\n"
                     f"Error: {quote_error}\n"
@@ -274,9 +362,9 @@ class AlpacaClient:
                     f"- API rate limits exceeded\n\n"
                     f"SYSTEM REQUIRES VALID MARKET DATA TO OPERATE SAFELY\n"
                     f"No hardcoded fallback mechanisms are permitted per system design"
-                )
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
+                    )
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
             
         except Exception as e:
             logger.error(f"Failed to get market data for {symbol}: {e}")
@@ -322,8 +410,17 @@ class AlpacaClient:
                 raise ValueError("Pre-trade safety checks failed")
             
             # Prepare order parameters
-            # Handle sell_short by converting to sell with proper side
+            # Handle sell_short: In Alpaca, short selling is done with "sell" side but selling more than owned
             alpaca_side = "sell" if side.lower() == "sell_short" else side.lower()
+            
+            # For short selling, we need to check if we're selling more than we own
+            if side.lower() == "sell_short":
+                current_position = self._get_position_qty(symbol)
+                # Add current_position to short qty to ensure we're selling more than owned
+                actual_qty = qty + max(0, current_position)  # If we own shares, add them to short qty
+                logger.info(f"🩳 Short selling {symbol}: requested_qty={qty}, current_position={current_position}, actual_sell_qty={actual_qty}")
+            else:
+                actual_qty = qty
             
             # CRYPTO TRADING DISABLED - Comment out crypto detection
             # is_crypto = self._is_crypto_symbol(symbol)
@@ -342,7 +439,7 @@ class AlpacaClient:
             #     order_params["notional"] = str(notional)
             #     logger.info(f"Using notional amount ${notional} for crypto order")
             # else:
-            order_params["qty"] = abs(qty)  # Always use quantity for non-crypto
+            order_params["qty"] = abs(actual_qty)  # Use actual_qty which includes short selling logic
             
             # Check if this is a fractional stock order (non-crypto)
             is_fractional_stock_order = not is_crypto and float(qty) != int(float(qty))
@@ -612,12 +709,16 @@ class AlpacaClient:
                 return 0.0, "hold"
             
             # STEP 3: Validate we can execute this trade
-            if side.lower() in ["sell", "sell_short"] and current_position <= 0:
+            if side.lower() == "sell" and current_position <= 0:
                 logger.warning(f"⚠️ Cannot sell {symbol}: no current position (current={current_position})")
                 return 0.0, "hold"
             
-            if side.lower() in ["sell", "sell_short"] and qty > current_position:
-                # Can only sell what we own - adjust quantity
+            if side.lower() == "sell_short":
+                # Short selling: allowed even if current_position <= 0
+                logger.info(f"🩳 Short sell order for {symbol}: qty={qty}, current_position={current_position}")
+                return qty, side  # Allow full short quantity
+            elif side.lower() == "sell" and qty > current_position:
+                # Regular sell: can only sell what we own - adjust quantity
                 logger.warning(f"⚠️ Cannot sell {qty} shares of {symbol}: only {current_position} available")
                 reconciled_qty = current_position
                 logger.info(f"✅ Adjusted sell quantity to available shares: {reconciled_qty}")

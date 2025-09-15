@@ -17,8 +17,8 @@ from collections import deque
 # Handle optional dependencies
 try:
     import torch
-    import gym
-    from gym import spaces
+    import gymnasium as gym
+    from gymnasium import spaces
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
