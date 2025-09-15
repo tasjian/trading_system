@@ -89,11 +89,12 @@ from config.settings import settings  # , get_crypto_pairs
 from utils.market_open_scheduler import market_open_scheduler
 from utils.cache_manager import cache_manager
 
-# Tax-Loss Harvesting Integration
-from core.tax_loss_harvesting import tax_loss_harvesting_engine, TaxLossOpportunity
-from core.tax_aware_portfolio_balancer import (
-    tax_aware_portfolio_balancer, TaxAwareRebalanceStrategy
-)
+# Tax-Loss Harvesting Integration (DISABLED FOR RL_ONLY)
+# from core.tax_loss_harvesting import tax_loss_harvesting_engine, TaxLossOpportunity
+# Tax-Aware Portfolio Balancer (DISABLED FOR RL_ONLY)
+# from core.tax_aware_portfolio_balancer import (
+#     tax_aware_portfolio_balancer, TaxAwareRebalanceStrategy
+# )
 from core.lot_tracking import lot_tracker
 from core.wash_sale_monitor import wash_sale_monitor
 
@@ -580,13 +581,16 @@ class ContinuousRebalancer:
             state = await self._run_hybrid_portfolio_decision_layer(state, config)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 4.6: Tax-Loss Harvesting Analysis (if enabled)
-            if self.tlh_enabled:
-                pipeline_stage = "tax_loss_harvesting"
-                stage_start = time.time()
-                logger.info("💰 Scanning for Tax-Loss Harvesting Opportunities...")
-                await self._run_tax_loss_harvesting_analysis(state, config)
-                stage_timings[pipeline_stage] = time.time() - stage_start
+            # Step 4.6: Tax-Loss Harvesting Analysis (DISABLED FOR RL_ONLY)
+            # if self.tlh_enabled:
+            #     pipeline_stage = "tax_loss_harvesting"
+            #     stage_start = time.time()
+            #     logger.info("💰 Scanning for Tax-Loss Harvesting Opportunities...")
+            #     await self._run_tax_loss_harvesting_analysis(state, config)
+            #     stage_timings[pipeline_stage] = time.time() - stage_start
+            
+            # RL_ONLY: Skip tax-loss harvesting for pure FinRL focus
+            logger.info("🤖 RL_ONLY MODE: Tax-Loss Harvesting disabled - pure FinRL optimization")
             
             # Step 5: Signal Generation (Convert Hybrid Portfolio Decisions to Trading Signals)
             pipeline_stage = "signal_generation"
@@ -691,14 +695,10 @@ class ContinuousRebalancer:
                 # Convert to list format for portfolio balancer compatibility
                 current_positions = [{"symbol": symbol, **pos_data} for symbol, pos_data in current_positions_dict.items()]
                 
-                # Initialize tax-aware portfolio balancer for intelligent buy/sell decisions with tax optimization
-                if self.tlh_enabled:
-                    balancer = tax_aware_portfolio_balancer
-                    logger.info("🎯 Using tax-aware portfolio balancer for optimal after-tax returns")
-                else:
-                    from core.portfolio_balancer import IntelligentPortfolioBalancer
-                    balancer = IntelligentPortfolioBalancer()
-                    logger.info("📊 Using traditional portfolio balancer")
+                # RL_ONLY: Always use traditional portfolio balancer for pure FinRL focus
+                from core.portfolio_balancer import IntelligentPortfolioBalancer
+                balancer = IntelligentPortfolioBalancer()
+                logger.info("🤖 RL_ONLY MODE: Using traditional portfolio balancer - pure FinRL optimization")
                 
                 # Build target allocation from RL recommendations
                 target_allocation = {}
@@ -765,36 +765,17 @@ class ContinuousRebalancer:
                 
                 # Generate intelligent rebalancing decisions with tax awareness
                 try:
-                    if self.tlh_enabled and hasattr(balancer, 'analyze_tax_aware_portfolio_balance'):
-                        # Use tax-aware analysis
-                        logger.info("🎯 Running tax-aware portfolio analysis...")
-                        tax_analysis = await balancer.analyze_tax_aware_portfolio_balance(
-                            target_allocation=target_allocation
-                        )
-                        
-                        # Generate tax-aware rebalancing orders (RL_ONLY: Remove order limit)
-                        rebalancing_decisions = await balancer.generate_tax_aware_rebalancing_orders(
-                            analysis=tax_analysis,
-                            max_orders=None  # RL_ONLY: Let FinRL pick unlimited stocks
-                        )
-                        
-                        # Log tax benefits
-                        total_tax_benefits = sum(
-                            d.estimated_tax_benefit or 0 for d in rebalancing_decisions
-                        )
-                        logger.info(f"💰 Tax-aware rebalancing: ${total_tax_benefits:,.2f} estimated tax benefits")
-                        
-                    else:
-                        # Traditional portfolio analysis
-                        position_analyses = await balancer.analyze_portfolio_balance(
-                            target_allocation=target_allocation
-                        )
-                        
-                        # Generate traditional rebalancing orders (RL_ONLY: Remove order limit)
-                        rebalancing_decisions = await balancer.generate_rebalancing_orders(
-                            position_analyses=position_analyses,
-                            max_orders=None  # RL_ONLY: Let FinRL pick unlimited stocks
-                        )
+                    # RL_ONLY: Always use traditional portfolio analysis for pure FinRL focus
+                    logger.info("🤖 RL_ONLY MODE: Running traditional portfolio analysis...")
+                    position_analyses = await balancer.analyze_portfolio_balance(
+                        target_allocation=target_allocation
+                    )
+                    
+                    # Generate traditional rebalancing orders (RL_ONLY: Remove order limit)
+                    rebalancing_decisions = await balancer.generate_rebalancing_orders(
+                        position_analyses=position_analyses,
+                        max_orders=None  # RL_ONLY: Let FinRL pick unlimited stocks
+                    )
                     
                     logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
                     
