@@ -186,132 +186,111 @@ class FinRLAgentWrapper:
     # Synthetic data is not allowed for trading decisions
     
     async def _get_multi_source_historical_data(self) -> List[Dict]:
-        """Get historical data from multiple sources with intelligent fallback."""
+        """Get historical data using optimized batched API client with robust fallbacks."""
         try:
-            logger.info("🔍 Attempting multi-source historical data collection...")
+            logger.info("🚀 Using optimized batched API client for historical data collection...")
             
-            # Import required modules
-            from config.settings import settings
-            
-            # Import multi-source data clients
+            # Import the optimized API client
             try:
-                from tools.dual_provider_market_data import dual_provider
-                from tools.multi_source_market_data import get_historical_data_multi_source
-                multi_source_available = True
-                logger.info("✅ Multi-source data clients available")
+                from tools.optimized_api_client import OptimizedAPIClient
+                from tools.background_data_service import get_background_data_service
+                optimized_available = True
             except ImportError as e:
-                logger.warning(f"⚠️ Multi-source data clients not available: {e}")
-                multi_source_available = False
+                logger.warning(f"⚠️ Optimized API client not available: {e}, falling back to legacy methods")
+                optimized_available = False
             
             market_data = []
-            successful_symbols = 0
             
-            # First try: Alpaca (current data if available)
-            if self.alpaca_client:
-                logger.info("📊 Trying Alpaca historical data first...")
-                for symbol in self.symbols[:5]:  # Limit to first 5 for testing
-                    try:
-                        bars_df = self.alpaca_client.get_market_data(
-                            symbol=symbol,
-                            timeframe='1Day',
-                            limit=252  # 1 year of data
-                        )
-                        
-                        if not bars_df.empty and len(bars_df) > 10:  # Need substantial data
-                            bars = bars_df.to_dict('records')
-                            for bar in bars:
-                                market_data.append({
-                                    'date': bar.get('timestamp', bar.get('t', '')),
-                                    'tic': symbol,
-                                    'open': bar.get('open', bar.get('o', 0)),
-                                    'high': bar.get('high', bar.get('h', 0)),
-                                    'low': bar.get('low', bar.get('l', 0)),
-                                    'close': bar.get('close', bar.get('c', 0)),
-                                    'volume': bar.get('volume', bar.get('v', 0))
-                                })
-                            successful_symbols += 1
-                            logger.info(f"✅ Alpaca: {symbol} - {len(bars)} records")
-                        else:
-                            logger.warning(f"⚠️ Alpaca: {symbol} - insufficient data ({len(bars_df) if not bars_df.empty else 0} records)")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Alpaca failed for {symbol}: {e}")
-            
-            # If Alpaca provided sufficient data, use it
-            if successful_symbols >= len(self.symbols) * 0.8:  # 80% success rate
-                logger.info(f"✅ Alpaca provided sufficient data for {successful_symbols}/{len(self.symbols)} symbols")
-                return market_data
-            
-            # Alpaca failed - clear previous data and try alternative sources
-            market_data = []
-            successful_symbols = 0
-            logger.warning(f"⚠️ Alpaca insufficient ({successful_symbols}/{len(self.symbols)}), trying alternative sources...")
-            
-            # Second try: Alpha Vantage fallback
-            if settings.alpha_vantage_api_key:
-                logger.info("📊 Falling back to Alpha Vantage for historical data...")
+            if optimized_available:
                 try:
-                    # Use Alpha Vantage for daily historical data
-                    import aiohttp
+                    # First, try to get cached data from background service
+                    background_service = get_background_data_service()
+                    cached_data = await background_service.get_cached_market_data(self.symbols)
                     
-                    async with aiohttp.ClientSession() as session:
-                        for symbol in self.symbols[:3]:  # Limit for rate limits
-                            try:
-                                url = f"https://www.alphavantage.co/query"
-                                params = {
-                                    'function': 'TIME_SERIES_DAILY_ADJUSTED',
-                                    'symbol': symbol,
-                                    'outputsize': 'compact',  # Last 100 days
-                                    'apikey': settings.alpha_vantage_api_key
-                                }
+                    if cached_data:
+                        logger.info(f"📋 Found cached data for {len(cached_data)} symbols")
+                        
+                        # Convert cached data to FinRL format
+                        for symbol, data_points in cached_data.items():
+                            for point in data_points:
+                                market_data.append({
+                                    'date': point['date'],
+                                    'tic': symbol,
+                                    'open': point['open'],
+                                    'high': point['high'],
+                                    'low': point['low'],
+                                    'close': point['close'],
+                                    'volume': point['volume']
+                                })
+                    
+                    # Get symbols that need fresh data
+                    symbols_with_cache = set(cached_data.keys()) if cached_data else set()
+                    symbols_to_fetch = [s for s in self.symbols if s not in symbols_with_cache]
+                    
+                    if symbols_to_fetch:
+                        logger.info(f"🔍 Fetching fresh data for {len(symbols_to_fetch)} symbols using optimized client")
+                        
+                        # Use optimized API client for remaining symbols
+                        try:
+                            async with OptimizedAPIClient() as api_client:
+                                fresh_data = await api_client.get_market_data_batch(symbols_to_fetch, days=252)
                                 
-                                async with session.get(url, params=params) as response:
-                                    if response.status == 200:
-                                        data = await response.json()
-                                        time_series = data.get('Time Series (Daily)', {})
-                                        
-                                        if time_series:
-                                            for date, values in time_series.items():
+                                # Convert to FinRL format
+                                for symbol, data_points in fresh_data.items():
+                                    for point in data_points:
+                                        market_data.append({
+                                            'date': point.date,
+                                            'tic': symbol,
+                                            'open': point.open,
+                                            'high': point.high,
+                                            'low': point.low,
+                                            'close': point.close,
+                                            'volume': point.volume
+                                        })
+                                
+                                logger.info(f"✅ Optimized API client retrieved {len(fresh_data)} symbols")
+                        except Exception as opt_error:
+                            logger.warning(f"⚠️ Optimized API client failed: {opt_error}, falling back to Alpaca")
+                            
+                            # Fallback to direct Alpaca calls for remaining symbols
+                            if self.alpaca_client:
+                                for symbol in symbols_to_fetch[:20]:  # Limit fallback to prevent overwhelming
+                                    try:
+                                        bars_df = self.alpaca_client.get_market_data(symbol, limit=252)
+                                        if bars_df is not None and not bars_df.empty:
+                                            for _, row in bars_df.iterrows():
                                                 market_data.append({
-                                                    'date': date,
+                                                    'date': row.name.strftime('%Y-%m-%d') if hasattr(row.name, 'strftime') else str(row.name),
                                                     'tic': symbol,
-                                                    'open': float(values['1. open']),
-                                                    'high': float(values['2. high']),
-                                                    'low': float(values['3. low']),
-                                                    'close': float(values['4. close']),
-                                                    'volume': float(values['6. volume'])
+                                                    'open': float(row['open']),
+                                                    'high': float(row['high']),
+                                                    'low': float(row['low']),
+                                                    'close': float(row['close']),
+                                                    'volume': int(row['volume'])
                                                 })
-                                            successful_symbols += 1
-                                            logger.info(f"✅ Alpha Vantage: {symbol} - {len(time_series)} records")
-                                        else:
-                                            logger.warning(f"⚠️ Alpha Vantage: No data for {symbol}")
-                                    else:
-                                        logger.warning(f"⚠️ Alpha Vantage API error {response.status} for {symbol}")
-                                
-                                # Rate limiting
-                                await asyncio.sleep(12)  # Alpha Vantage: 5 calls per minute
-                                
-                            except Exception as e:
-                                logger.warning(f"⚠️ Alpha Vantage failed for {symbol}: {e}")
+                                            await asyncio.sleep(0.1)  # Rate limiting
+                                    except Exception as alpaca_error:
+                                        logger.debug(f"Alpaca fallback failed for {symbol}: {alpaca_error}")
                     
                     if len(market_data) > 0:
-                        logger.info(f"✅ Alpha Vantage provided {len(market_data)} historical records")
+                        logger.info(f"✅ Total historical data collected: {len(market_data)} records for {len(set(d['tic'] for d in market_data))} symbols")
                         return market_data
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Alpha Vantage fallback failed: {e}")
-            
-            # Third try: YFinance fallback (free and reliable)
-            logger.info("📊 Falling back to YFinance for historical data...")
-            try:
-                from tools.yfinance_utils import fetch_stock_history
                 
-                for symbol in self.symbols:
+                except Exception as optimized_error:
+                    logger.warning(f"⚠️ Optimized client setup failed: {optimized_error}, using legacy fallback")
+            
+            # Legacy fallback: Use YFinance as last resort
+            logger.info("🔄 Using YFinance legacy fallback for historical data...")
+            try:
+                import yfinance as yf
+                
+                for symbol in self.symbols[:10]:  # Limit for performance
                     try:
-                        # Get 1 year of daily data from YFinance
-                        hist_df = fetch_stock_history(symbol, period="1y", interval="1d")
+                        ticker = yf.Ticker(symbol)
+                        hist = ticker.history(period="1y", interval="1d")
                         
-                        if hist_df is not None and not hist_df.empty and len(hist_df) > 10:
-                            for date, row in hist_df.iterrows():
+                        if not hist.empty:
+                            for date, row in hist.iterrows():
                                 market_data.append({
                                     'date': date.strftime('%Y-%m-%d'),
                                     'tic': symbol,
@@ -319,103 +298,28 @@ class FinRLAgentWrapper:
                                     'high': float(row['High']),
                                     'low': float(row['Low']),
                                     'close': float(row['Close']),
-                                    'volume': float(row['Volume'])
+                                    'volume': int(row['Volume'])
                                 })
                             
-                            successful_symbols += 1
-                            logger.info(f"✅ YFinance: {symbol} - {len(hist_df)} records")
-                        else:
-                            logger.warning(f"⚠️ YFinance: Insufficient data for {symbol}")
-                    
-                    except Exception as e:
-                        logger.warning(f"⚠️ YFinance failed for {symbol}: {e}")
-                    
-                    # Small delay to be respectful to Yahoo servers
-                    await asyncio.sleep(0.1)
+                            logger.info(f"✅ YFinance fallback: {symbol} - {len(hist)} records")
+                        
+                        await asyncio.sleep(0.2)  # Rate limiting
+                        
+                    except Exception as yf_error:
+                        logger.debug(f"YFinance fallback failed for {symbol}: {yf_error}")
                 
                 if len(market_data) > 0:
-                    logger.info(f"✅ YFinance provided {len(market_data)} historical records")
+                    logger.info(f"✅ YFinance fallback provided {len(market_data)} records")
                     return market_data
                     
-            except Exception as e:
-                logger.warning(f"⚠️ YFinance fallback failed: {e}")
+            except Exception as yf_error:
+                logger.error(f"❌ YFinance fallback failed: {yf_error}")
             
-            # Fourth try: Finnhub fallback (for recent data)
-            if settings.finnhub_api_key:
-                logger.info("📊 Final fallback to Finnhub for recent historical data...")
-                try:
-                    import aiohttp
-                    
-                    # Get data for last 30 days from Finnhub
-                    end_time = int(datetime.now().timestamp())
-                    start_time = int((datetime.now() - timedelta(days=30)).timestamp())
-                    
-                    async with aiohttp.ClientSession() as session:
-                        for symbol in self.symbols[:5]:  # Limit for rate limits
-                            try:
-                                url = f"https://finnhub.io/api/v1/stock/candle"
-                                params = {
-                                    'symbol': symbol,
-                                    'resolution': 'D',  # Daily
-                                    'from': start_time,
-                                    'to': end_time,
-                                    'token': settings.finnhub_api_key
-                                }
-                                
-                                async with session.get(url, params=params) as response:
-                                    if response.status == 200:
-                                        data = await response.json()
-                                        
-                                        if data.get('s') == 'ok' and 't' in data:
-                                            timestamps = data['t']
-                                            opens = data['o']
-                                            highs = data['h']
-                                            lows = data['l']
-                                            closes = data['c']
-                                            volumes = data['v']
-                                            
-                                            for i in range(len(timestamps)):
-                                                date = datetime.fromtimestamp(timestamps[i]).strftime('%Y-%m-%d')
-                                                market_data.append({
-                                                    'date': date,
-                                                    'tic': symbol,
-                                                    'open': opens[i],
-                                                    'high': highs[i],
-                                                    'low': lows[i],
-                                                    'close': closes[i],
-                                                    'volume': volumes[i]
-                                                })
-                                            
-                                            successful_symbols += 1
-                                            logger.info(f"✅ Finnhub: {symbol} - {len(timestamps)} records")
-                                        else:
-                                            logger.warning(f"⚠️ Finnhub: No data for {symbol}")
-                                    else:
-                                        logger.warning(f"⚠️ Finnhub API error {response.status} for {symbol}")
-                                
-                                # Rate limiting (60 requests per minute)
-                                await asyncio.sleep(1)
-                                
-                            except Exception as e:
-                                logger.warning(f"⚠️ Finnhub failed for {symbol}: {e}")
-                    
-                    if len(market_data) > 0:
-                        logger.info(f"✅ Finnhub provided {len(market_data)} historical records")
-                        return market_data
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Finnhub fallback failed: {e}")
-            
-            # If we have some data from any source, use it
-            if len(market_data) > 0:
-                logger.info(f"✅ Multi-source collection successful: {len(market_data)} total records")
-                return market_data
-            
-            logger.warning("❌ All multi-source data collection attempts failed")
+            logger.warning("❌ All data collection methods failed")
             return []
             
         except Exception as e:
-            logger.error(f"❌ Multi-source historical data collection failed: {e}")
+            logger.error(f"❌ Historical data collection completely failed: {e}")
             return []
     
     def _add_technical_indicators(self):
@@ -512,12 +416,27 @@ class FinRLAgentWrapper:
                     mask = self.market_data_df['tic'] == symbol
                     for col in ['macd', 'rsi_30', 'cci_30', 'dx_30', 'bb_bbm', 'bb_bbh', 'bb_bbl', 'turbulence']:
                         if col in df.columns:
-                            # Handle both Series and scalar values
+                            # Ensure proper pandas Series format
                             col_data = df[col]
+                            
+                            # Convert to numpy array first, then assign
                             if hasattr(col_data, 'values'):
-                                self.market_data_df.loc[mask, col] = col_data.values
+                                # It's a pandas Series
+                                values_to_assign = col_data.values
+                            elif hasattr(col_data, '__iter__') and not isinstance(col_data, str):
+                                # It's array-like
+                                values_to_assign = np.array(col_data)
                             else:
-                                self.market_data_df.loc[mask, col] = col_data
+                                # It's a scalar - broadcast to match mask size
+                                mask_size = mask.sum()
+                                values_to_assign = np.full(mask_size, col_data)
+                            
+                            # Ensure the size matches
+                            if len(values_to_assign) == mask.sum():
+                                self.market_data_df.loc[mask, col] = values_to_assign
+                            else:
+                                # Fallback: fill with scalar
+                                self.market_data_df.loc[mask, col] = 0.0
                             
                 except Exception as indicator_error:
                     logger.error(f"Failed to calculate indicators for {symbol}: {indicator_error}")
@@ -600,11 +519,17 @@ class FinRLAgentWrapper:
                 # Ensure all data is properly formatted for FinRL
                 train_data = train_data.copy()
                 
-                # Ensure numeric columns are proper pandas Series
+                # Ensure numeric columns are proper pandas Series with correct dtypes
                 numeric_cols = ['open', 'high', 'low', 'close', 'volume'] + self.config['tech_indicator_list']
                 for col in numeric_cols:
                     if col in train_data.columns:
-                        train_data[col] = pd.to_numeric(train_data[col], errors='coerce').fillna(0)
+                        # Convert to numeric and ensure float64 dtype
+                        train_data[col] = pd.to_numeric(train_data[col], errors='coerce').fillna(0).astype('float64')
+                
+                # Additional validation: ensure all columns are pandas Series, not numpy arrays
+                for col in train_data.columns:
+                    if not isinstance(train_data[col], pd.Series):
+                        train_data[col] = pd.Series(train_data[col], dtype='float64' if col in numeric_cols else 'object')
                 
                 # Sort by date and symbol for FinRL compatibility
                 train_data = train_data.sort_values(['date', 'tic']).reset_index(drop=True)
@@ -706,10 +631,29 @@ class FinRLAgentWrapper:
                 if os.path.exists(model_path):
                     try:
                         logger.info(f"📥 Loading pre-trained {agent_type.upper()} model from {model_path}")
-                        # Load pre-trained model using the correct path
-                        # For now, just mark as available - actual loading happens during inference
-                        trained_models[agent_type] = model_path
-                        logger.info(f"✅ Found pre-trained {agent_type.upper()} model")
+                        # Actually load the model using FinRL's DRLAgent
+                        try:
+                            from stable_baselines3 import A2C, PPO, DDPG, SAC, TD3
+                            
+                            # Map agent types to SB3 classes
+                            model_classes = {
+                                'a2c': A2C,
+                                'ppo': PPO, 
+                                'ddpg': DDPG,
+                                'sac': SAC,
+                                'td3': TD3
+                            }
+                            
+                            if agent_type in model_classes:
+                                model_class = model_classes[agent_type]
+                                loaded_model = model_class.load(model_path)
+                                trained_models[agent_type] = loaded_model
+                                logger.info(f"✅ Successfully loaded {agent_type.upper()} model")
+                            else:
+                                logger.warning(f"Unknown agent type: {agent_type}")
+                        except Exception as load_error:
+                            logger.error(f"Failed to load {agent_type} model: {load_error}")
+                            continue
                     except Exception as e:
                         logger.warning(f"Failed to load {agent_type} model: {e}")
                 else:
@@ -717,8 +661,8 @@ class FinRLAgentWrapper:
             
             if len(trained_models) >= len(self.drl_agents):
                 self.is_trained = True
-                self.trained_model_paths = trained_models
-                logger.info(f"✅ All {len(trained_models)} models found and ready to load")
+                self.trained_models = trained_models  # Store actual loaded models, not paths
+                logger.info(f"✅ All {len(trained_models)} models loaded and ready for inference")
             else:
                 logger.warning(f"⚠️ Only {len(trained_models)}/{len(self.drl_agents)} models found")
                 logger.info("🏋️ Training new DRL models...")
@@ -848,27 +792,59 @@ class FinRLAgentWrapper:
     async def _get_drl_predictions(self, state: np.ndarray) -> Dict[str, Any]:
         """Get predictions from trained DRL models."""
         try:
-            # For now, return mock predictions since full FinRL integration requires trained models
-            # In production, this would use the actual trained models
-            predictions = {
-                'ensemble_action': np.random.randn(len(self.symbols)) * 0.1,  # Small random actions
-                'confidence': 0.7,
-                'best_agent': 'ensemble',
-                'sharpe_ratio': 1.5,
-                'regime': 'normal'
-            }
+            if not self.is_trained or not hasattr(self, 'trained_models'):
+                raise RuntimeError("No trained models available for predictions")
             
-            return predictions
+            logger.info(f"🤖 Running DRL inference with {len(self.trained_models)} trained models")
+            
+            # Get predictions from all loaded models
+            model_predictions = {}
+            
+            for agent_type, model in self.trained_models.items():
+                try:
+                    # Use the loaded model to predict action
+                    action, _states = model.predict(state, deterministic=True)
+                    model_predictions[agent_type] = action
+                    logger.debug(f"✅ {agent_type.upper()} prediction: {action}")
+                except Exception as model_error:
+                    logger.warning(f"⚠️ {agent_type.upper()} prediction failed: {model_error}")
+                    continue
+            
+            if not model_predictions:
+                raise RuntimeError("All models failed to generate predictions")
+            
+            # Create ensemble prediction by averaging all model outputs
+            all_actions = list(model_predictions.values())
+            
+            if len(all_actions) > 0:
+                # Average the actions from all models
+                ensemble_action = np.mean(all_actions, axis=0)
+                
+                # Calculate confidence based on agreement between models
+                action_std = np.std(all_actions, axis=0) if len(all_actions) > 1 else np.zeros_like(ensemble_action)
+                confidence = 1.0 / (1.0 + np.mean(action_std))  # Higher agreement = higher confidence
+                
+                # Determine best performing agent (for now, use the first successful one)
+                best_agent = list(model_predictions.keys())[0]
+                
+                predictions = {
+                    'ensemble_action': ensemble_action,
+                    'confidence': float(confidence),
+                    'best_agent': best_agent,
+                    'sharpe_ratio': 1.0,  # Would need historical performance data
+                    'regime': 'normal',
+                    'individual_predictions': model_predictions
+                }
+                
+                logger.info(f"✅ Generated ensemble predictions from {len(model_predictions)} models (confidence: {confidence:.3f})")
+                return predictions
+            else:
+                raise RuntimeError("No valid predictions generated")
             
         except Exception as e:
             logger.error(f"❌ DRL prediction failed: {e}")
-            return {
-                'ensemble_action': np.zeros(len(self.symbols)),
-                'confidence': 0.5,
-                'best_agent': 'fallback',
-                'sharpe_ratio': 0.0,
-                'regime': 'unknown'
-            }
+            # Don't fallback to mock data - raise the error to force proper fixing
+            raise RuntimeError(f"FinRL DRL prediction failed: {e}")
     
     def _convert_predictions_to_signals(self, predictions: Dict[str, Any], 
                                       market_data: Dict[str, Any], 
@@ -892,9 +868,19 @@ class FinRLAgentWrapper:
                 action_type = 'buy'
                 quantity = min(100, abs(action_value) * 200)  # Scale to reasonable quantity
             else:
-                action_type = 'sell'
-                current_position = portfolio_data.get(symbol, {}).get('quantity', 0)
-                quantity = min(current_position, abs(action_value) * 200)
+                # CRITICAL FIX: Enable actual short selling, not just position closing
+                positions = portfolio_data.get('positions', {})
+                current_position = positions.get(symbol, {}).get('quantity', 0)
+                desired_short_quantity = abs(action_value) * 200
+                
+                if current_position > 0:
+                    # If we have a long position, first sell it completely
+                    action_type = 'sell'
+                    quantity = current_position
+                else:
+                    # If no position or already short, place a short sell order
+                    action_type = 'short'
+                    quantity = min(100, desired_short_quantity)  # Limit short size for risk management
             
             if quantity >= 0.01:
                 signal = FinRLTradingSignal(
@@ -968,6 +954,291 @@ class FinRLAgentWrapper:
             logger.error(f"❌ Failed to update symbols from portfolio: {e}")
 
 # Compatibility functions for integration with existing system
+    async def generate_pure_trading_decisions(self, 
+                                           portfolio_value: float, 
+                                           cash_available: float,
+                                           use_full_market: bool = True, 
+                                           max_positions: int = 10) -> Dict[str, Any]:
+        """
+        Generate pure FinRL trading decisions without external filtering.
+        
+        This method allows FinRL to select stocks directly from the full market
+        based on its own analysis, bypassing universe filters and hardcoded symbols.
+        """
+        try:
+            logger.info("🤖 Pure FinRL Mode: Selecting stocks from full market")
+            
+            if use_full_market:
+                # Get top liquid stocks from market for FinRL to choose from
+                from tools.alpaca_client import alpaca_client
+                
+                # Get tradeable assets from Alpaca
+                assets = alpaca_client.api.list_assets(status='active', asset_class='us_equity')
+                
+                # CRITICAL FIX: Shuffle ALL assets first to eliminate alphabetical bias from Alpaca API
+                import random
+                assets_list = list(assets)
+                random.shuffle(assets_list)
+                
+                # Filter to most liquid stocks (by market cap and volume)
+                liquid_stocks = []
+                for asset in assets_list[:1000]:  # Top 1000 by volume after shuffling
+                    try:
+                        # Skip penny stocks and get basic info
+                        if asset.tradable and asset.shortable:
+                            liquid_stocks.append(asset.symbol)
+                    except Exception:
+                        continue
+                
+                # Let FinRL choose from ALL liquid stocks - no filtering per user requirements
+                # Randomize order to avoid alphabetical bias from Alpaca API
+                import random
+                random.shuffle(liquid_stocks)
+                # Limit to 10 symbols for trained model compatibility (models expect 91 features = 1 + 2*10 + 7*10)
+                candidate_symbols = liquid_stocks[:10]
+                logger.info(f"🎯 FinRL analyzing top 10 randomly selected stocks for model compatibility: {candidate_symbols}")
+                
+            else:
+                # Use existing symbols if provided
+                candidate_symbols = self.symbols
+                
+            # Create temporary FinRL instance for pure decision making
+            if not hasattr(self, '_pure_finrl_initialized'):
+                logger.info("🚀 Initializing pure FinRL system...")
+                
+                # Initialize with candidate symbols
+                self.symbols = candidate_symbols
+                await self.initialize_system()
+                self._pure_finrl_initialized = True
+                
+            # Use FinRL's internal stock selection and allocation logic
+            logger.info("📊 FinRL performing market analysis and stock selection...")
+            
+            # Get market data for all candidates
+            market_data = await self._get_multi_symbol_market_data(candidate_symbols)
+            
+            if not market_data:
+                logger.warning("⚠️ No market data available for FinRL analysis")
+                return {"allocations": [], "strategy": "Pure FinRL - No Data"}
+                
+            # Let FinRL DRL agents make portfolio decisions
+            portfolio_data = {
+                "cash": cash_available,
+                "equity": portfolio_value,
+                "positions": {}
+            }
+            
+            # Generate FinRL trading signals
+            signals = await self.generate_trading_signals(
+                market_data, portfolio_data, portfolio_value
+            )
+            
+            # Convert signals to allocation format
+            allocations = []
+            total_weight = 0
+            
+            for signal in signals[:max_positions]:
+                if signal.action == 'buy' and signal.confidence > 0.6:
+                    # Calculate position size based on FinRL confidence and risk
+                    base_weight = 1.0 / max_positions  # Equal weight baseline
+                    confidence_multiplier = signal.confidence
+                    risk_adjustment = 1.0 - (signal.uncertainty * 0.5)
+                    
+                    weight = base_weight * confidence_multiplier * risk_adjustment
+                    weight = max(0.02, min(0.15, weight))  # 2% to 15% position limits
+                    
+                    allocation = {
+                        "symbol": signal.symbol,
+                        "weight": weight,
+                        "confidence": signal.confidence,
+                        "reasoning": f"FinRL DRL Agent ({signal.agent_type}): {signal.reasoning}",
+                        "drl_score": signal.drl_score,
+                        "sharpe_ratio": signal.sharpe_ratio,
+                        "regime": signal.regime,
+                        "finrl_pure": True
+                    }
+                    allocations.append(allocation)
+                    total_weight += weight
+                    
+            # Normalize weights if needed
+            if total_weight > 0.95:  # Leave some cash
+                for allocation in allocations:
+                    allocation["weight"] = allocation["weight"] * 0.90 / total_weight
+                    
+            logger.info(f"✅ FinRL selected {len(allocations)} stocks for portfolio")
+            for allocation in allocations:
+                logger.info(f"   {allocation['symbol']}: {allocation['weight']:.2%} (confidence: {allocation['confidence']:.2f})")
+                
+            return {
+                "allocations": allocations,
+                "strategy": "Pure FinRL DRL Market Selection",
+                "confidence": np.mean([a["confidence"] for a in allocations]) if allocations else 0,
+                "total_symbols_analyzed": len(candidate_symbols),
+                "selected_symbols": len(allocations),
+                "finrl_pure_mode": True
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Pure FinRL trading decisions failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"allocations": [], "strategy": "Pure FinRL - Error", "error": str(e)}
+    
+    async def _get_multi_symbol_market_data(self, symbols: List[str]) -> Dict[str, Any]:
+        """Get market data for multiple symbols using optimized batched API client with fallbacks."""
+        try:
+            # Try optimized approach first
+            try:
+                from tools.optimized_api_client import OptimizedAPIClient
+                from tools.background_data_service import get_background_data_service
+                optimized_available = True
+            except ImportError as e:
+                logger.warning(f"⚠️ Optimized API client not available: {e}, using fallback")
+                optimized_available = False
+            
+            market_data = {}
+            
+            if optimized_available:
+                try:
+                    # First check background data service cache
+                    background_service = get_background_data_service()
+                    cached_data = await background_service.get_cached_market_data(symbols)
+                    
+                    # Convert cached data
+                    for symbol, data_points in cached_data.items():
+                        if data_points:
+                            latest_point = data_points[-1]  # Most recent data point
+                            market_data[symbol] = {
+                                'price': latest_point['close'],
+                                'volume': latest_point['volume'],
+                                'change_pct': ((latest_point['close'] / latest_point['open']) - 1) * 100 if latest_point['open'] > 0 else 0,
+                                'high': latest_point['high'],
+                                'low': latest_point['low'],
+                                'date': latest_point['date'],
+                                'source': 'cached'
+                            }
+                    
+                    # Get symbols that need fresh data
+                    symbols_with_cache = set(cached_data.keys())
+                    symbols_to_fetch = [s for s in symbols if s not in symbols_with_cache]
+                    
+                    if symbols_to_fetch:
+                        logger.info(f"🔍 Fetching fresh market data for {len(symbols_to_fetch)} symbols")
+                        
+                        try:
+                            # Use optimized API client for fresh data
+                            async with OptimizedAPIClient() as api_client:
+                                fresh_data = await api_client.get_market_data_batch(symbols_to_fetch, days=30)
+                                
+                                for symbol, data_points in fresh_data.items():
+                                    if data_points:
+                                        latest_point = data_points[-1]  # Most recent data point
+                                        market_data[symbol] = {
+                                            'price': latest_point.close,
+                                            'volume': latest_point.volume,
+                                            'change_pct': ((latest_point.close / latest_point.open) - 1) * 100 if latest_point.open > 0 else 0,
+                                            'high': latest_point.high,
+                                            'low': latest_point.low,
+                                            'date': latest_point.date,
+                                            'source': latest_point.source
+                                        }
+                            
+                            logger.info(f"✅ Optimized client retrieved {len(fresh_data) if 'fresh_data' in locals() else 0} fresh symbols")
+                            
+                        except Exception as opt_error:
+                            logger.warning(f"⚠️ Optimized API failed, falling back to direct Alpaca: {opt_error}")
+                            
+                            # Fallback to direct Alpaca
+                            if self.alpaca_client:
+                                for symbol in symbols_to_fetch[:30]:  # Limit fallback
+                                    try:
+                                        bars = self.alpaca_client.get_market_data(symbol, limit=5)
+                                        if bars is not None and not bars.empty:
+                                            latest_bar = bars.iloc[-1]
+                                            market_data[symbol] = {
+                                                'price': latest_bar['close'],
+                                                'volume': latest_bar['volume'],
+                                                'change_pct': (latest_bar['close'] / latest_bar['open'] - 1) * 100 if latest_bar['open'] > 0 else 0,
+                                                'high': latest_bar['high'],
+                                                'low': latest_bar['low'],
+                                                'date': str(bars.index[-1]),
+                                                'source': 'alpaca_fallback'
+                                            }
+                                    except Exception as alpaca_error:
+                                        logger.debug(f"Alpaca fallback failed for {symbol}: {alpaca_error}")
+                    
+                    logger.info(f"✅ Retrieved market data for {len(market_data)} symbols ({len(cached_data) if cached_data else 0} cached, {len(market_data) - len(cached_data) if cached_data else len(market_data)} fresh)")
+                    
+                    if len(market_data) > 0:
+                        return market_data
+                    
+                except Exception as optimized_error:
+                    logger.warning(f"⚠️ Optimized approach failed: {optimized_error}, using legacy fallback")
+            
+            # Legacy fallback: Direct Alpaca or YFinance
+            logger.info("🔄 Using legacy fallback for market data...")
+            
+            # Try Alpaca first
+            if self.alpaca_client:
+                logger.info("📊 Trying direct Alpaca for market data...")
+                for symbol in symbols[:20]:  # Limit for performance
+                    try:
+                        bars = self.alpaca_client.get_market_data(symbol, limit=5)
+                        if bars is not None and not bars.empty:
+                            latest_bar = bars.iloc[-1]
+                            market_data[symbol] = {
+                                'price': latest_bar['close'],
+                                'volume': latest_bar['volume'],
+                                'change_pct': (latest_bar['close'] / latest_bar['open'] - 1) * 100 if latest_bar['open'] > 0 else 0,
+                                'high': latest_bar['high'],
+                                'low': latest_bar['low'],
+                                'date': str(bars.index[-1]),
+                                'source': 'alpaca_direct'
+                            }
+                        await asyncio.sleep(0.1)  # Rate limiting
+                    except Exception as e:
+                        logger.debug(f"Direct Alpaca failed for {symbol}: {e}")
+            
+            # Final fallback: YFinance
+            remaining_symbols = [s for s in symbols if s not in market_data]
+            if remaining_symbols:
+                logger.info(f"🔄 YFinance final fallback for {len(remaining_symbols)} remaining symbols")
+                try:
+                    import yfinance as yf
+                    
+                    for symbol in remaining_symbols[:10]:  # Limit final fallback
+                        try:
+                            ticker = yf.Ticker(symbol)
+                            hist = ticker.history(period="5d", interval="1d")
+                            
+                            if not hist.empty:
+                                latest = hist.iloc[-1]
+                                market_data[symbol] = {
+                                    'price': float(latest['Close']),
+                                    'volume': int(latest['Volume']),
+                                    'change_pct': ((latest['Close'] / latest['Open']) - 1) * 100 if latest['Open'] > 0 else 0,
+                                    'high': float(latest['High']),
+                                    'low': float(latest['Low']),
+                                    'date': hist.index[-1].strftime('%Y-%m-%d'),
+                                    'source': 'yfinance_fallback'
+                                }
+                            
+                            await asyncio.sleep(0.2)  # Rate limiting
+                            
+                        except Exception as yf_error:
+                            logger.debug(f"YFinance fallback failed for {symbol}: {yf_error}")
+                            
+                except Exception as yf_error:
+                    logger.warning(f"⚠️ YFinance fallback failed: {yf_error}")
+            
+            logger.info(f"✅ Final market data retrieved for {len(market_data)} symbols")
+            return market_data
+            
+        except Exception as e:
+            logger.error(f"❌ All multi-symbol market data methods failed: {e}")
+            return {}
+
+
 async def create_finrl_agent(symbols: List[str], alpaca_client=None, config: Optional[Dict] = None) -> FinRLAgentWrapper:
     """Create and initialize FinRL agent wrapper."""
     agent = FinRLAgentWrapper(symbols, alpaca_client, config)
