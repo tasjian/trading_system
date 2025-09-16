@@ -192,7 +192,7 @@ class ContinuousRebalancer:
         self.tlh_scan_interval_minutes = 120  # Scan for TLH opportunities every 2 hours
         self.last_tlh_scan = None
         self.cached_tlh_opportunities = []  # Cache TLH opportunities
-        self.tlh_strategy = TaxAwareRebalanceStrategy.BALANCED_APPROACH
+        # self.tlh_strategy = TaxAwareRebalanceStrategy.BALANCED_APPROACH  # Disabled for RL_ONLY
     
     def _setup_market_open_callback(self):
         """Setup callback for market open pipeline refresh."""
@@ -1848,7 +1848,7 @@ class ContinuousRebalancer:
             traceback.print_exc()
             return state
     
-    async def _integrate_tlh_opportunities_into_signals(self, state: Dict[str, Any], tlh_opportunities: List[TaxLossOpportunity]):
+    async def _integrate_tlh_opportunities_into_signals(self, state: Dict[str, Any], tlh_opportunities: List[Any]):  # TaxLossOpportunity disabled for RL_ONLY
         """Integrate tax-loss harvesting opportunities into trading signals."""
         try:
             from agents.state import TradingSignal, add_signal_to_state
