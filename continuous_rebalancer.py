@@ -106,16 +106,35 @@ from utils.daily_summary_scheduler import daily_scheduler, start_daily_summary_s
 # CRYPTO TRADING DISABLED - Comment out for later implementation
 # from core.crypto_data_collector import crypto_collector
 
-# Configure logging with rotation
+# Configure logging with rotation - RL_ONLY branch
+from config.settings import settings
+
+# Determine log file based on environment
+log_file = getattr(settings, 'log_file', 'logs/rl_only_trading_system.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/continuous_rebalancer.log'),
+        logging.FileHandler(log_file),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Log RL_ONLY branch startup
+logger.info("=" * 80)
+logger.info("🤖 RL_ONLY BRANCH STARTUP")
+logger.info("=" * 80)
+logger.info(f"Timestamp: {datetime.now()}")
+logger.info(f"Log File: {log_file}")
+logger.info("Configuration: Pure FinRL-driven trading")
+logger.info("- Universe Filter: DISABLED")
+logger.info("- Sentiment Analysis: DISABLED") 
+logger.info("- Social Media: DISABLED")
+logger.info("- Stock Limits: REMOVED")
+logger.info("- FinRL: FULL CONTROL")
+logger.info("=" * 80)
 
 @dataclass
 class RebalanceResult:
@@ -201,20 +220,8 @@ class ContinuousRebalancer:
             logger.info("🌅 Market open triggered - running full pipeline refresh...")
             
             try:
-                # Step 1: Warm up key caches
-                logger.info("🔥 Warming critical caches...")
-                
-                # Get current universe for cache warming
-                from core.universe_filter import UniverseFilter
-                universe_filter = UniverseFilter()
-                universe_signals = await universe_filter.filter_universe()
-                symbol_list = [signal.symbol for signal in universe_signals[:50]]  # Top 50 symbols
-                
-                # Warm market data cache
-                await self.cache_manager.warm_cache_category('market_data', symbol_list)
-                
-                # Warm technical indicators cache
-                await self.cache_manager.warm_cache_category('technical_indicators', symbol_list)
+                # Step 1: RL_ONLY MODE - Skip cache warming (FinRL handles internally)
+                logger.info("🤖 RL_ONLY MODE: Skipping cache warming - FinRL manages its own data")
                 
                 # Step 2: Run full pipeline with fresh data
                 logger.info("🚀 Running complete pipeline refresh...")
@@ -488,43 +495,21 @@ class ContinuousRebalancer:
             await self._monitor_active_oco_orders(state)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 2: Universe Filter (DISABLED FOR RL_ONLY - FinRL works with all stocks)
-            # pipeline_stage = "universe_filter"
-            # stage_start = time.time()
-            # logger.info("🔍 Universe Filter (99.7% processing reduction)...")
-            # state = await self.workflow.universe_filter_agent(state, config)
-            # stage_timings[pipeline_stage] = time.time() - stage_start
-            
-            # RL_ONLY: Skip universe filtering, let FinRL see all stocks
-            pipeline_stage = "universe_filter"
+            # Step 2: RL_ONLY MODE - Skip Universe Filter Completely
+            pipeline_stage = "rl_only_setup"
             stage_start = time.time()
+            logger.info("🤖 RL_ONLY MODE: Skipping universe filter - FinRL will select stocks directly from market")
             
-            # Get all tradeable symbols from Alpaca without filtering
-            from tools.alpaca_client import alpaca_client
-            try:
-                all_assets = alpaca_client.list_assets()
-                tradeable_symbols = [asset['symbol'] for asset in all_assets if asset.get('tradable', False) and asset.get('status') == 'active']
-                state["filtered_symbols"] = tradeable_symbols  # All symbols for FinRL
-                logger.info(f"🤖 RL_ONLY MODE: Providing {len(tradeable_symbols)} unfiltered symbols to FinRL")
-            except Exception as e:
-                logger.warning(f"Failed to get all symbols, using fallback: {e}")
-                # Fallback to common symbols
-                state["filtered_symbols"] = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'SPY', 'QQQ', 'IWM']
-                
+            # No pre-filtering, no hardcoded symbols - FinRL gets full market access internally
+            state["filtered_symbols"] = []  # Empty - FinRL handles stock selection internally
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 3: Sentiment Analysis (DISABLED FOR RL_ONLY - FinRL picks stocks directly)
-            # pipeline_stage = "sentiment_analysis"
-            # stage_start = time.time()
-            # state = await self._run_scheduled_sentiment_analysis(state, config)
-            # stage_timings[pipeline_stage] = time.time() - stage_start
-            
-            # RL_ONLY: Skip sentiment analysis, initialize empty sentiment data
-            pipeline_stage = "sentiment_analysis"
+            # Step 3: RL_ONLY MODE - Skip Sentiment Analysis Completely  
+            pipeline_stage = "rl_only_sentiment_skip"
             stage_start = time.time()
-            state["sentiment_data"] = {}  # Empty sentiment data for RL-only mode
+            logger.info("🤖 RL_ONLY MODE: Skipping sentiment analysis - FinRL uses internal market analysis")
+            state["sentiment_data"] = {}  # Empty - FinRL doesn't need external sentiment
             stage_timings[pipeline_stage] = time.time() - stage_start
-            logger.info("🤖 RL_ONLY MODE: Skipped sentiment analysis - FinRL will pick stocks directly")
             
             # Check for API rate limits
             if self._check_rate_limit_indicators(state):
@@ -574,11 +559,11 @@ class ContinuousRebalancer:
                 logger.warning(f"Circuit breakers active: {active_breakers}")
                 # Continue but with reduced position sizing
             
-            # Step 4.5: Hybrid LLM-RL Portfolio Decision Layer
-            pipeline_stage = "hybrid_portfolio_decision"
+            # Step 4.5: Pure FinRL Decision Layer (RL_ONLY MODE)
+            pipeline_stage = "pure_finrl_decision"
             stage_start = time.time()
-            logger.info("🚀 Hybrid LLM-RL Portfolio Decision Layer (Diversified Portfolio Management)...")
-            state = await self._run_hybrid_portfolio_decision_layer(state, config)
+            logger.info("🤖 Pure FinRL Decision Layer (RL_ONLY MODE - No LLM/Universe Filter)...")
+            state = await self._run_pure_finrl_decision_layer(state, config)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 4.6: Tax-Loss Harvesting Analysis (DISABLED FOR RL_ONLY)
@@ -604,7 +589,7 @@ class ContinuousRebalancer:
             pre_signals = len(state.get("signals", []))
             
             # Check if hybrid system generated allocations
-            rl_decisions = state.get("rl_decisions", {})
+            rl_decisions = state.get("rl_decisions") or {}
             rl_allocations = rl_decisions.get("allocations", [])
             rebalance_analysis = rl_decisions.get("rebalance_analysis", {})
             
@@ -2000,6 +1985,86 @@ class ContinuousRebalancer:
                 f"Trading system error: {str(e)}. "
                 "No fallback permitted - fix system before resuming."
             )
+    
+    async def _run_pure_finrl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Pure FinRL Decision Layer (RL_ONLY MODE)
+        
+        Completely bypasses:
+        - Universe filter
+        - Sentiment analysis  
+        - LLM portfolio management
+        - Hardcoded stocks
+        
+        FinRL directly selects stocks from the full market using:
+        - Technical indicators
+        - Price/volume patterns
+        - Risk-adjusted returns
+        """
+        try:
+            logger.info("🤖 RL_ONLY MODE: Pure FinRL system - no external filters")
+            
+            # Import FinRL agent wrapper
+            from agents.finrl_agent_wrapper import FinRLAgentWrapper
+            
+            # Get portfolio data
+            portfolio_data = state.get("portfolio", {})
+            portfolio_value = portfolio_data.get("equity", 100000)
+            cash_available = portfolio_data.get("cash", 50000)
+            
+            logger.info(f"💰 Portfolio: ${portfolio_value:,.2f}, Cash: ${cash_available:,.2f}")
+            
+            # Initialize pure FinRL agent with empty symbols list (it will discover its own)
+            finrl_agent = FinRLAgentWrapper(symbols=[])
+            
+            # Let FinRL select stocks from the entire market
+            logger.info("🎯 FinRL selecting stocks from full market without external filters")
+            rl_decisions = await finrl_agent.generate_pure_trading_decisions(
+                portfolio_value=portfolio_value,
+                cash_available=cash_available,
+                use_full_market=True,  # No pre-filtering
+                max_positions=10  # Let FinRL decide optimal position count
+            )
+            
+            if rl_decisions and rl_decisions.get("allocations"):
+                state["rl_decisions"] = rl_decisions
+                state["rl_enhanced"] = True
+                state["pure_finrl"] = True
+                state["hybrid_system"] = False  # Not hybrid, pure FinRL
+                
+                allocations = rl_decisions.get("allocations", [])
+                strategy = rl_decisions.get("strategy", "Pure FinRL")
+                
+                logger.info(f"✅ Pure FinRL generated {len(allocations)} allocation decisions")
+                logger.info(f"🎯 Strategy: {strategy}")
+                
+                # Log allocation details
+                for allocation in allocations[:5]:  # Top 5
+                    symbol = allocation.get("symbol", "Unknown")
+                    weight = allocation.get("weight", 0)
+                    logger.info(f"   {symbol}: {weight:.2%}")
+                    
+            else:
+                logger.warning("⚠️ Pure FinRL system returned no decisions")
+                # Return empty state - no fallback in RL_only mode
+                state["rl_decisions"] = {
+                    "allocations": [],
+                    "strategy": "Pure FinRL - No Decisions",
+                    "confidence": 0.0,
+                    "finrl_pure_mode": True
+                }
+                
+            return state
+            
+        except Exception as e:
+            logger.error(f"Pure FinRL Decision Layer error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            logger.error("❌ CRITICAL: Pure FinRL system failed")
+            logger.error("🚫 RL_ONLY mode: No fallback allowed")
+            state["rl_decisions"] = None
+            return state
     
     async def _validate_rl_decisions_with_backtesting(self, rl_decisions: Dict[str, Any], state: Dict[str, Any]) -> str:
         """
