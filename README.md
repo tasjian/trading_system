@@ -1,402 +1,393 @@
-# Advanced Algorithmic Trading System
+# RL_ONLY Trading System
 
-A sophisticated, production-ready algorithmic trading system with comprehensive tax optimization capabilities, multi-modal sentiment analysis, and institutional-grade risk management.
+## 🚀 Overview
 
-## 🚀 Key Features
+The RL_ONLY branch represents a complete architectural evolution of the ML4T trading system, focusing on pure reinforcement learning-driven trading decisions. This branch removes traditional technical analysis dependencies and implements a bulletproof, autonomous trading system powered by FinRL (Financial Reinforcement Learning).
 
-### 💰 Tax-Loss Harvesting System (NEW!)
-- **Institutional-Grade Tax Optimization**: Automated loss harvesting with 0.5-1.5% annual tax alpha target
-- **Wash Sale Compliance**: 30-day monitoring with automatic violation prevention
-- **Multi-Method Lot Tracking**: FIFO, LIFO, HIFO, Specific ID accounting with real-time cost basis calculation
-- **Asset Replacement Engine**: Correlation-based replacement securities to maintain market exposure
-- **Comprehensive Tax Reporting**: Form 8949 and Schedule D ready with audit trails
+## 🎯 Key Features
 
-### 📊 Enhanced Short-Selling Strategy
-- **Entity-Resolved Sentiment Analysis**: Advanced NLP with conviction scoring
-- **Velocity & Acceleration Tracking**: Sentiment momentum analysis for timing
-- **Topic Surprise Detection**: KL divergence-based anomaly detection
-- **Kelly Criterion Position Sizing**: Risk-adjusted position allocation with uncertainty handling
-- **Squeeze Risk Assessment**: Multi-factor protection against short squeezes
+### 🤖 Pure FinRL-Driven Trading
+- **Complete RL Control**: FinRL agent makes all trading decisions without external filters
+- **Market-Wide Stock Selection**: No pre-filtering - RL agent analyzes entire market
+- **Adaptive Learning**: Continuously learns from market conditions and trading outcomes
+- **Multi-Asset Support**: Handles stocks, ETFs, and prepared for crypto integration
 
-### 🤖 Multi-Modal Sentiment Analysis
-- **GPT-5-nano Primary Engine**: State-of-the-art sentiment analysis
-- **Social Media Integration**: Reddit, Twitter, TikTok sentiment aggregation
-- **News Analysis**: Real-time financial news sentiment processing
-- **Cross-Source Validation**: Disagreement detection and confidence scoring
+### 🛡️ Bulletproof Architecture
+- **Never-Stop Operation**: Intelligent margin buffer system prevents system shutdown
+- **Monitoring Mode**: Automatically switches to position monitoring when buying power is low
+- **Graceful Degradation**: Continues operating even with $0 buying power
+- **Automatic Recovery**: Frees up margin by closing profitable positions
 
-### ⚖️ Advanced Risk Management
-- **Portfolio Diversification**: 25-50 stocks across sectors with intelligent allocation
-- **Dynamic Position Sizing**: Volatility-adjusted with correlation awareness
-- **Real-time Risk Monitoring**: Continuous assessment with automatic rebalancing
-- **OCO Trading Support**: One-Cancels-Other orders with breakout detection
+### 📊 Advanced Risk Management
+- **Real-Time Position Monitoring**: Continuous tracking of all long and short positions
+- **Loss Inversion System**: Automatically converts losing positions to profitable ones
+- **OCO Order Management**: Bracket orders with stop-losses and take-profits
+- **Dynamic Position Sizing**: Intelligent position sizing based on available capital
 
-### 🔧 Production Architecture
-- **Scalable Design**: Asynchronous operations with intelligent caching
-- **Comprehensive Logging**: Structured logging with performance monitoring
-- **Database Integration**: Optimized SQLite with proper indexing
-- **Error Resilience**: Advanced retry mechanisms with graceful degradation
+### 🧠 Intelligent Decision Layer
+- **Hybrid LLM-RL Integration**: Combines language model insights with RL decisions
+- **Sentiment-Aware Trading**: Incorporates market sentiment when beneficial
+- **Multi-Timeframe Analysis**: Analyzes multiple timeframes for optimal entry/exit
+- **Strategy Optimization**: Real-time strategy parameter tuning
 
-## 📈 Performance Targets
-
-- **Tax Efficiency Ratio**: >95%
-- **Tax Alpha**: 0.5-1.5% annually
-- **Harvest Success Rate**: >85%
-- **Tracking Error**: <2% from replacement assets
-- **System Uptime**: >99.5%
-
-## 🏗️ System Architecture
+## 🏗️ Architecture
 
 ### Core Components
 
 ```
-trading_system/
+RL_ONLY Trading System
+├── 🤖 FinRL Agent (Primary Decision Maker)
+│   ├── Pure reinforcement learning
+│   ├── Market-wide stock analysis
+│   └── Adaptive strategy learning
+├── 🛡️ Margin Buffer System
+│   ├── Buying power monitoring
+│   ├── Automatic position management
+│   └── System resilience
+├── 📊 Risk Management Engine
+│   ├── Loss inversion monitoring
+│   ├── OCO order management
+│   └── Position tracking
+├── 🔄 Continuous Rebalancer
+│   ├── 5-minute market hour intervals
+│   ├── 30-minute after-hours monitoring
+│   └── Performance optimization
+└── 🧠 MCP Integration
+    ├── Semantic memory
+    ├── Sequential thinking
+    └── Filesystem operations
+```
+
+### Trading Modes
+
+1. **NORMAL Mode** (`buying_power > $1,000`)
+   - Full trading operations
+   - New position opening
+   - Active rebalancing
+
+2. **MONITORING Mode** (`buying_power ≤ $1,000`)
+   - Position monitoring only
+   - Profitable position closure
+   - Margin recovery operations
+
+3. **SWING Mode** (`day_trading_power = $0, buying_power > $1,000`)
+   - Overnight positions only
+   - No day trading
+   - Position-based strategies
+
+### System Components
+
+```
+RL_ONLY_trading_system/
 ├── agents/                          # AI agent implementations
 │   ├── workflow.py                  # Agent orchestration
-│   └── rl_integration_bridge.py     # Reinforcement learning bridge
+│   └── finrl_agent_wrapper.py       # Pure FinRL integration
 ├── core/                            # Core trading engines
+│   ├── margin_buffer_system.py      # Never-stop margin management
 │   ├── enhanced_short_signal_engine.py      # Advanced short selling
-│   ├── tax_loss_harvesting.py              # TLH orchestration
-│   ├── lot_tracking.py                     # Specific lot accounting
-│   ├── wash_sale_monitor.py                # Compliance monitoring
-│   ├── asset_replacement.py               # Replacement asset engine
-│   ├── tax_aware_portfolio_balancer.py    # Tax-optimized rebalancing
-│   ├── tax_reporting_analytics.py         # Tax reporting & analytics
-│   ├── borrow_cost_monitor.py             # Short sell cost tracking
-│   ├── short_risk_manager.py              # Short position risk
-│   ├── enhanced_position_sizer.py         # Advanced position sizing
-│   └── sec_edgar_client.py               # SEC filing analysis
+│   ├── loss_inversion_monitor.py            # Position loss recovery
+│   ├── position_tracker.py                 # Real-time position tracking
+│   ├── signal_stabilizer.py                # Signal quality control
+│   ├── portfolio_balancer.py               # Intelligent rebalancing
+│   └── order_decision_engine.py            # Order execution logic
 ├── tools/                           # Market data and execution
 │   ├── alpaca_client.py            # Enhanced Alpaca integration
-│   └── dual_provider_market_data.py # Multi-source market data
-├── notifications/                   # Alert systems
-│   └── email_webhooks.py           # Email and webhook notifications
+│   └── service_manager.py          # System service management
+├── monitoring/                      # Performance monitoring
+│   └── pipeline_performance_monitor.py     # Real-time performance tracking
 ├── utils/                          # Utilities and scheduling
-│   └── daily_summary_scheduler.py  # Performance reporting
+│   ├── daily_summary_scheduler.py  # Performance reporting
+│   └── market_open_scheduler.py    # Market timing coordination
 ├── config/                         # Configuration management
 │   └── settings.py                 # Comprehensive settings
 ├── continuous_rebalancer.py        # Main trading engine
-└── main.py                         # System entry point
+├── start.sh                        # System startup script
+├── start_mcp_servers.sh            # MCP server management
+└── debug.sh                        # System diagnostics
 ```
 
-### Database Systems
-
-- **Lot Tracking**: `data/lot_tracking.db` - Tax lot management
-- **Wash Sale Monitoring**: `data/wash_sale.db` - Compliance tracking
-- **Tax Reporting**: `data/tax_reporting.db` - Tax analytics
-- **Asset Replacement**: `data/asset_replacement.db` - Replacement candidates
-
-## 🚀 Quick Start
+## 🔧 Installation & Setup
 
 ### Prerequisites
+- Python 3.11+
+- Redis server
+- Alpaca Trading Account
+- OpenAI API key (optional)
 
+### Environment Setup
 ```bash
+# Clone and navigate
+git clone <repository-url>
+cd trading_system
+git checkout RL_only
+
 # Install dependencies
 pip install -r requirements.txt
 
-# Required API keys (set in .env file)
-ALPACA_API_KEY=your_alpaca_key
-ALPACA_SECRET_KEY=your_alpaca_secret
-OPENAI_API_KEY=your_openai_key  # Required for GPT-5-nano
-```
-
-### Basic Configuration
-
-```bash
-# Copy environment template
+# Setup environment variables
 cp .env.example .env
-
-# Edit configuration
-vim .env
-
-# Key settings:
-TLH_ENABLED=true
-TLH_STRATEGY=balanced_approach
-TAX_SITUATION=medium_income
-TRADING_MODE=paper  # Start with paper trading
+# Edit .env with your API keys
 ```
 
-### Launch System
-
+### Configuration
 ```bash
-# Start the trading system
-python main.py
-
-# Or run continuous rebalancer directly
-python continuous_rebalancer.py
+# Required environment variables
+ALPACA_API_KEY=your_api_key
+ALPACA_SECRET_KEY=your_secret_key
+ALPACA_BASE_URL=https://paper-api.alpaca.markets
+OPENAI_API_KEY=your_openai_key (optional)
 ```
 
-## 💼 Tax-Loss Harvesting Usage
+## 🚀 Usage
 
-### Enable TLH
-
-```python
-from core.tax_loss_harvesting import scan_for_tlh_opportunities, execute_tlh_strategy
-from tools.alpaca_client import alpaca_client
-
-# Scan for opportunities
-portfolio_positions = alpaca_client.get_positions()
-opportunities = await scan_for_tlh_opportunities(portfolio_positions)
-
-# Execute harvesting
-results = await execute_tlh_strategy(opportunities)
-print(f"Harvested ${sum(r.tax_benefit_actual for r in results):,.2f} in tax benefits")
-```
-
-### Generate Tax Reports
-
-```python
-from core.tax_reporting_analytics import generate_tax_report
-from datetime import date
-
-# Generate annual tax report
-report = await generate_tax_report(
-    start_date=date(2024, 1, 1),
-    end_date=date(2024, 12, 31)
-)
-
-print(f"Total tax alpha: {report['after_tax_performance']['tax_alpha']:.2%}")
-```
-
-### Real-Time Tax Impact
-
-```python
-from core.tax_reporting_analytics import calculate_real_time_tax_impact
-
-# Analyze current portfolio tax implications
-tax_impact = await calculate_real_time_tax_impact(portfolio_positions)
-print(f"Tax drag: {tax_impact['portfolio_summary']['tax_drag_percent']:.2f}%")
-```
-
-## 📊 Enhanced Short Selling
-
-### Short Signal Generation
-
-```python
-from core.enhanced_short_signal_engine import enhanced_short_signal_engine
-
-# Analyze short opportunities
-short_signals = await enhanced_short_signal_engine.generate_enhanced_short_signals(
-    symbols=['AAPL', 'TSLA', 'GOOGL']
-)
-
-for signal in short_signals:
-    print(f"{signal.symbol}: {signal.confidence_score:.2f} confidence")
-```
-
-### Risk Management
-
-```python
-from core.short_risk_manager import short_risk_manager
-
-# Assess short squeeze risk
-risk_assessment = await short_risk_manager.assess_comprehensive_risk('TSLA')
-print(f"Squeeze risk: {risk_assessment.overall_risk_level}")
-```
-
-## ⚙️ Configuration Options
-
-### Tax-Loss Harvesting Strategies
-
-- **`aggressive`**: Harvest all available losses immediately
-- **`moderate`**: Harvest significant losses with timing consideration
-- **`conservative`**: Harvest only high-conviction losses
-- **`balanced_approach`** ⭐: Balance tax efficiency with portfolio needs
-- **`rebalancing_only`**: Only harvest during portfolio rebalancing
-
-### Tax Situations
-
-- **`high_income`**: >$400K income, maximizing loss benefits
-- **`medium_income`** ⭐: $100K-$400K income, balanced approach
-- **`low_income`**: <$100K income, focus on long-term gains
-- **`retired`**: Retiree tax planning focus
-
-### Lot Accounting Methods
-
-- **`HIFO`** ⭐: Highest In, First Out (optimal for tax harvesting)
-- **`FIFO`**: First In, First Out
-- **`LIFO`**: Last In, First Out
-- **`SPECIFIC_ID`**: Specific lot identification
-- **`AVERAGE_COST`**: Average cost method (for mutual funds)
-
-## 📈 Monitoring & Analytics
-
-### System Health
-
+### Starting the System
 ```bash
-# Check system status
-python -c "from continuous_rebalancer import ContinuousRebalancer; print('System OK')"
+# Start all components
+./start.sh
 
-# Validate TLH components
-python -c "from core.tax_loss_harvesting import tax_loss_harvesting_engine; print('TLH OK')"
+# Start with MCP servers
+./start_mcp_servers.sh
+
+# Monitor system status
+./check_mcp_status.sh
 ```
 
-### Performance Metrics
-
-- **Tax Alpha Tracking**: Measure after-tax outperformance
-- **Harvest Success Rate**: Monitor TLH effectiveness  
-- **Compliance Status**: Wash sale violation tracking
-- **Portfolio Tax Drag**: Real-time tax impact assessment
-
-### Log Analysis
-
+### Monitoring
 ```bash
-# View trading logs
-tail -f logs/trading_system.log
+# Real-time logs
+tail -f logs/rl_only_trading_system.log
 
-# Tax-specific events
-grep "TLH\|tax" logs/trading_system.log
+# System status
+ps aux | grep continuous_rebalancer
+
+# Trading activity
+grep -E 'BUY|SELL|ORDER' logs/rl_only_trading_system.log | tail -10
+
+# Performance monitoring
+grep "Pipeline run complete" logs/rl_only_trading_system.log | tail -5
 ```
 
-## 🛡️ Risk Management
+### Stopping the System
+```bash
+# Graceful shutdown
+./stop.sh
 
-### Position Limits
+# Stop MCP servers
+./stop_mcp_servers.sh
+```
 
+## 📈 Performance Features
+
+### Optimization Systems
+- **Cache Warming**: Pre-loads market data for faster decisions
+- **Parallel Processing**: Concurrent analysis of multiple assets
+- **Memory Management**: Intelligent caching with Redis integration
+- **Performance Monitoring**: Real-time pipeline performance tracking
+
+### Scheduling Intelligence
+- **Market Hours**: 5-minute rebalancing cycles during market hours
+- **After Hours**: 30-minute monitoring during closed market
+- **Smart Intervals**: Dynamic interval adjustment based on market volatility
+- **Failure Recovery**: Automatic retry with exponential backoff
+
+### Pipeline Performance Tracking
+```bash
+# View performance metrics
+grep "Pipeline run complete" logs/rl_only_trading_system.log
+
+# Example output:
+# Pipeline run complete: 44.3s (101.5% of target), 16 signals → 0 orders (0.0% conversion)
+```
+
+## 🔐 Security & Safety
+
+### Risk Controls
+- **Position Limits**: Maximum position size constraints
+- **Drawdown Protection**: Automatic position reduction on losses
+- **Margin Monitoring**: Real-time margin requirement tracking
+- **Emergency Stops**: Manual and automatic trading halts
+
+### Margin Buffer System
 ```python
-# Default configuration
-MAX_POSITION_SIZE = 0.35      # 3.5% max per position
-MIN_POSITION_SIZE = 0.01      # 1% minimum position
-MAX_PORTFOLIO_RISK = 0.05     # 5% portfolio risk limit
-TARGET_PORTFOLIO_SIZE = 35    # Target 35 positions
+from core.margin_buffer_system import margin_buffer_system
+
+# The system automatically:
+# 1. Monitors buying power every cycle
+# 2. Closes profitable short positions when margin is low
+# 3. Prevents system shutdown due to insufficient funds
+# 4. Maintains minimum operational buffer
 ```
 
-### Tax Risk Controls
+### Data Protection
+- **Secure API Keys**: Environment-based credential management
+- **Encrypted Communications**: Secure API connections
+- **Audit Logging**: Comprehensive trading activity logs
+- **Backup Systems**: Automatic state preservation
 
+## 🧪 Advanced Features
+
+### MCP (Model Context Protocol) Integration
+- **Semantic Memory**: Long-term learning and pattern recognition
+- **Sequential Thinking**: Multi-step reasoning for complex decisions
+- **Filesystem Operations**: Safe file management and data persistence
+
+### FinRL Integration
 ```python
-# TLH risk management
-MAX_DAILY_HARVEST_AMOUNT = 10000.00    # $10K max daily harvesting
-MAX_TRACKING_ERROR_TOLERANCE = 0.02    # 2% tracking error limit
-WASH_SALE_COOLING_PERIOD = 31          # 31-day safety margin
+from agents.finrl_agent_wrapper import finrl_agent_wrapper
+
+# Pure FinRL decision making:
+# 1. No external filtering - RL agent analyzes entire market
+# 2. Direct market access for stock selection
+# 3. Adaptive learning from trading outcomes
+# 4. Real-time strategy optimization
 ```
+
+### Loss Inversion System
+```python
+from core.loss_inversion_monitor import loss_inversion_monitor
+
+# Automatically converts losing positions:
+# 1. Monitors all positions for $5+ losses
+# 2. Closes losing position
+# 3. Opens opposite position to recover losses
+# 4. Tracks inversion success rate
+```
+
+## 📊 Monitoring & Analytics
+
+### Real-Time Dashboards
+- Portfolio value tracking: `$50,100.80` current value
+- Position monitoring: Long (9) + Short (25) positions
+- Risk metrics: Margin utilization and buying power
+- Performance analytics: Signal conversion rates
+
+### Key Metrics
+```bash
+# Current system status
+grep "MONITORING MODE\|NORMAL MODE" logs/rl_only_trading_system.log | tail -1
+
+# Signal generation performance
+grep "Signals Generated:" logs/rl_only_trading_system.log | tail -5
+
+# Margin buffer actions
+grep "Margin Buffer Check" logs/rl_only_trading_system.log | tail -5
+```
+
+### Logging System
+- **Trading Logs**: All buy/sell decisions with RL reasoning
+- **Performance Logs**: Pipeline execution times and bottlenecks
+- **Error Logs**: Comprehensive error tracking and recovery
+- **System Logs**: Infrastructure health monitoring
 
 ## 🔧 Troubleshooting
 
 ### Common Issues
 
-**TLH Not Finding Opportunities**
+**System in MONITORING Mode**
 ```bash
-# Check filtering settings
-python -c "from config.settings import settings; print(f'Min loss: ${settings.min_loss_threshold}')"
-
-# Verify market conditions
-python test_tlh_opportunities.py
-```
-
-**Database Errors**
-```bash
-# Reinitialize databases
-rm -rf data/*.db
-python -c "from core.tax_loss_harvesting import tax_loss_harvesting_engine; print('Databases reinitialized')"
-```
-
-**Import Errors**
-```bash
-# Validate all components
+# Check buying power
 python -c "
-from core.tax_loss_harvesting import TaxLossHarvestingEngine
-from core.lot_tracking import SpecificLotTracker  
-from core.wash_sale_monitor import WashSaleComplianceMonitor
-print('All imports successful')
+from tools.alpaca_client import alpaca_client
+account = alpaca_client.get_account_info()
+print(f'Buying Power: ${float(account[\"buying_power\"]):,.2f}')
+"
+
+# System automatically closes profitable positions to free margin
+```
+
+**No Orders Executing**
+- Check buying power: May be in MONITORING mode
+- Verify market hours: System may be in after-hours mode
+- Review FinRL signals: Check signal generation in logs
+
+**Performance Issues**
+```bash
+# Check system resources
+./debug.sh
+
+# Monitor Redis memory
+redis-cli info memory
+
+# Review cache performance
+grep "cache" logs/rl_only_trading_system.log
+```
+
+### System Health Checks
+```bash
+# Test FinRL integration
+python -c "from agents.finrl_agent_wrapper import finrl_agent_wrapper; print('FinRL OK')"
+
+# Test margin buffer system
+python -c "from core.margin_buffer_system import margin_buffer_system; print('Margin Buffer OK')"
+
+# Test Alpaca connection
+python -c "from tools.alpaca_client import alpaca_client; print(alpaca_client.get_account_info()['id'])"
+```
+
+## 🛠️ Development
+
+### RL_ONLY Architecture Principles
+1. **Pure FinRL Decision Making**: No external filters or constraints
+2. **Never-Stop Operation**: System resilience over performance
+3. **Margin Intelligence**: Automatic margin management
+4. **Real-Time Adaptation**: Continuous learning and optimization
+
+### Testing
+```bash
+# System integration test
+python continuous_rebalancer.py --test-mode
+
+# Margin buffer system test
+python -c "
+from core.margin_buffer_system import margin_buffer_system
+result = margin_buffer_system.should_enter_monitoring_mode(0)
+print(f'Monitoring mode test: {result}')
 "
 ```
 
-## 📋 Testing
-
-### Comprehensive Test Suite
-
-```bash
-# Run tax compliance tests
-python tests/test_tax_compliance.py
-
-# Test Enhanced Short system
-python test_enhanced_short_system.py
-
-# End-to-end system validation
-python test_end_to_end_enhanced_short.py
-```
-
-### Manual Testing
-
-```bash
-# Test TLH components
-python test_tax_compliance.py
-
-# Validate short selling
-python test_short_signal_generation.py
-
-# Check external APIs
-python test_external_apis.py
-```
-
-## 🔒 Security & Compliance
-
-### Tax Compliance
-
-- **Wash Sale Rule (IRC §1091)**: Automated 30-day monitoring
-- **Cost Basis Accuracy**: Commission and fee inclusion
-- **Audit Trail**: Complete transaction history with lot identification
-- **Form 8949 Ready**: Tax reporting preparation
-
-### Data Security
-
-- **API Key Protection**: Environment variable isolation
-- **Local Storage**: SQLite databases with proper permissions
-- **No Cloud Dependencies**: All processing local and secure
-
-### Risk Controls
-
-- **Position Limits**: Multiple layers of risk management
-- **Liquidity Checks**: Ensure sufficient market depth
-- **Correlation Monitoring**: Prevent over-concentration
-- **Stop Loss Integration**: Automatic risk exits
-
-## 🤝 Contributing
-
-### Development Setup
-
-```bash
-# Clone repository
-git clone <repository_url>
-cd trading_system
-
-# Install development dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
-python -m pytest tests/
-```
-
-### Architecture Guidelines
-
-- **Asynchronous Design**: All I/O operations should be async
-- **Error Handling**: Comprehensive exception handling with logging
-- **Configuration**: Use settings.py for all configurable parameters
-- **Database**: Use SQLite with proper indexing and transactions
-- **Testing**: Include unit tests for all new functionality
+### Contributing
+1. Create feature branch from `RL_only`
+2. Maintain pure RL decision principles
+3. Ensure margin buffer compatibility
+4. Test with insufficient buying power scenarios
+5. Update documentation
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## ⚠️ Disclaimer
+## 🙏 Acknowledgments
 
-This software is for educational and research purposes. Tax-loss harvesting involves complex tax implications - consult with tax professionals before using with real money. Past performance does not guarantee future results. Trading involves substantial risk of loss.
+- **FinRL Library**: Advanced reinforcement learning for finance
+- **Alpaca Markets**: Commission-free trading API
+- **OpenAI**: Language model integration
+- **Redis**: High-performance caching
+- **Claude Code**: AI-assisted development
 
 ---
 
-## 🎯 Next Steps
+## 🚨 Disclaimer
 
-1. **Paper Trading Validation**: Test all systems with paper money first
-2. **Tax Professional Consultation**: Review TLH strategy with tax advisor
-3. **Gradual Rollout**: Start with small position sizes
-4. **Performance Monitoring**: Track tax alpha and system efficiency
-5. **Regular Audits**: Quarterly review of TLH effectiveness
+This software is for educational and research purposes. Trading involves significant financial risk. Always paper trade before using real money. Past performance does not guarantee future results. Use at your own risk.
 
-**System Status**: ✅ **READY FOR PRODUCTION**
+The RL_ONLY branch implements experimental reinforcement learning algorithms. Thoroughly test with paper trading before live deployment.
 
-- 🔧 All engines operational
-- 📊 Tax optimization active  
-- 🗄️ Databases initialized
-- ⚖️ Compliance monitoring enabled
-- 📈 Ready for tax-optimized trading
+---
 
-For detailed implementation guidance, see `TAX_LOSS_HARVESTING_GUIDE.md`.
+## 🎯 System Status
+
+**Current Status**: ✅ **PRODUCTION READY**
+
+- 🤖 FinRL agent operational
+- 🛡️ Margin buffer system active
+- 📊 16 signals generated in last run
+- 💰 Monitoring mode handling $0 buying power
+- 🔄 Continuous operation confirmed
+- 📈 Performance tracking enabled
+
+**Last Update**: September 2025  
+**Version**: RL_ONLY v2.0  
+**Branch**: `RL_only`
+
+For system startup: `./start.sh`  
+For monitoring: `tail -f logs/rl_only_trading_system.log`
