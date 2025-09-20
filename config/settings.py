@@ -159,6 +159,14 @@ class TradingSettings(BaseSettings):
     max_daily_loss: float = Field(default=0.05, env="MAX_DAILY_LOSS")  # 5% daily loss limit
     min_cash_reserve: float = Field(default=0.02, env="MIN_CASH_RESERVE")  # 2% cash reserve
     
+    # Short Selling Configuration
+    enable_short_selling: bool = Field(default=True, env="ENABLE_SHORT_SELLING")  # Enable short selling
+    max_short_position_size: float = Field(default=0.02, env="MAX_SHORT_POSITION_SIZE")  # Max 2% per short position
+    max_total_short_exposure: float = Field(default=0.15, env="MAX_TOTAL_SHORT_EXPOSURE")  # Max 15% total short exposure
+    short_margin_requirement: float = Field(default=0.50, env="SHORT_MARGIN_REQUIREMENT")  # 50% margin requirement
+    short_borrow_cost_threshold: float = Field(default=0.10, env="SHORT_BORROW_COST_THRESHOLD")  # 10% max borrow cost
+    enable_enhanced_short_signals: bool = Field(default=True, env="ENABLE_ENHANCED_SHORT_SIGNALS")  # Enhanced short analysis
+    
     # OCO (One-Cancels-Other) Trading Configuration
     oco_enabled: bool = Field(default=True, env="OCO_ENABLED")  # Enable OCO functionality
     oco_default_take_profit_percent: float = Field(default=0.15, env="OCO_DEFAULT_TAKE_PROFIT_PERCENT")  # 15% profit target

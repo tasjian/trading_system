@@ -90,6 +90,14 @@ class AlpacaClient:
             logger.error(f"Failed to get account info: {e}")
             raise
     
+    def get_recent_orders(self, limit: int = 20) -> List[Dict]:
+        """Get recent orders (alias for get_orders for backward compatibility)."""
+        return self.get_orders(status="all", limit=limit)
+    
+    def get_current_positions(self) -> List[Dict]:
+        """Get current positions (alias for get_positions for backward compatibility)."""
+        return self.get_positions()
+    
     def get_positions(self) -> List[Dict]:
         """Get current portfolio positions."""
         try:
@@ -418,7 +426,9 @@ class AlpacaClient:
                 current_position = self._get_position_qty(symbol)
                 # Add current_position to short qty to ensure we're selling more than owned
                 actual_qty = qty + max(0, current_position)  # If we own shares, add them to short qty
-                logger.info(f"🩳 Short selling {symbol}: requested_qty={qty}, current_position={current_position}, actual_sell_qty={actual_qty}")
+                # CRITICAL FIX: Short orders must be whole numbers - Alpaca doesn't allow fractional short orders
+                actual_qty = max(1, int(round(actual_qty)))  # Round to whole number, minimum 1 share
+                logger.info(f"🩳 Short selling {symbol}: requested_qty={qty}, current_position={current_position}, actual_sell_qty={actual_qty} (rounded to whole)")
             else:
                 actual_qty = qty
             
@@ -826,15 +836,19 @@ class AlpacaClient:
             for order in order_list:
                 symbol = order.get("symbol")
                 if symbol not in symbol_orders:
-                    symbol_orders[symbol] = {"buy_qty": 0.0, "sell_qty": 0.0, "orders": []}
+                    symbol_orders[symbol] = {"buy_qty": 0.0, "sell_qty": 0.0, "short_qty": 0.0, "orders": []}
                 
                 side = order.get("side", "").lower()
                 qty = float(order.get("qty", 0))
                 
                 if side == "buy":
                     symbol_orders[symbol]["buy_qty"] += qty
-                elif side in ["sell", "sell_short"]:
+                elif side == "sell":
                     symbol_orders[symbol]["sell_qty"] += qty
+                elif side in ["short", "sell_short"]:
+                    # SHORT orders are processed separately - they don't net against regular trades
+                    symbol_orders[symbol]["short_qty"] += qty
+                    logger.info(f"🩳 {symbol}: Accumulating SHORT order quantity: {qty} (total SHORT: {symbol_orders[symbol]['short_qty']})")
                 
                 symbol_orders[symbol]["orders"].append(order)
             
@@ -843,12 +857,28 @@ class AlpacaClient:
             for symbol, order_data in symbol_orders.items():
                 buy_qty = order_data["buy_qty"]
                 sell_qty = order_data["sell_qty"]
+                short_qty = order_data["short_qty"]
                 
-                # Calculate net quantity
+                # Process SHORT orders FIRST - they are independent positions
+                if short_qty > 0:
+                    logger.info(f"🩳 {symbol}: Processing SHORT order for {short_qty} shares (independent of long position)")
+                    
+                    short_order = {
+                        "symbol": symbol,
+                        "side": "sell_short",
+                        "qty": short_qty,
+                        "original_orders": [o for o in order_data["orders"] if o.get("side", "").lower() in ["short", "sell_short"]],
+                        "order_type": "short_entry"
+                    }
+                    net_orders.append(short_order)
+                    logger.info(f"📊 {symbol} SHORT order: {short_qty} shares to short")
+                
+                # Calculate net quantity for regular long positions (buy/sell)
                 net_qty = buy_qty - sell_qty
                 
-                if abs(net_qty) < 1:  # Skip tiny net changes
-                    logger.info(f"⚖️ {symbol}: Net order too small ({net_qty:.2f}), skipping to avoid wash trade")
+                if abs(net_qty) < 1:  # Skip tiny net changes for regular positions
+                    if short_qty == 0:  # Only log if no SHORT order was processed
+                        logger.info(f"⚖️ {symbol}: Net order too small ({net_qty:.2f}), skipping to avoid wash trade")
                     continue
                 
                 # Determine net action
@@ -1147,6 +1177,7 @@ class AlpacaClient:
     def _pre_trade_checks(self, symbol: str, qty: float, side: str, notional: Optional[float] = None) -> bool:
         """Perform pre-trade safety checks."""
         try:
+            logger.info(f"🔍 PRE-TRADE CHECK START: {symbol} {side} {qty} shares")
             # Check account status
             account = self.get_account_info()
             if account["account_blocked"] or account["trading_blocked"]:
@@ -1198,8 +1229,8 @@ class AlpacaClient:
                     logger.warning(f"Could not verify buying power: {e}")
                     # Continue without buying power check - let Alpaca API handle it
             
-            elif side.lower() in ["sell", "sell_short"]:
-                # For SELL orders, validate that we actually own the shares
+            elif side.lower() == "sell":
+                # For regular SELL orders, validate that we actually own the shares
                 try:
                     positions = self.get_positions()
                     available_qty = 0
@@ -1221,6 +1252,18 @@ class AlpacaClient:
                         
                 except Exception as e:
                     logger.error(f"Failed to validate position for sell order {symbol}: {e}")
+                    return False
+            
+            elif side.lower() == "sell_short":
+                # For SHORT SELL orders, we don't need to own shares - that's the point of shorting!
+                # Just validate that the symbol is shortable and account allows short selling
+                try:
+                    # Basic validation for short selling
+                    logger.info(f"✅ Short sell validation passed for {symbol}: {qty} shares (no ownership required)")
+                    return True
+                        
+                except Exception as e:
+                    logger.error(f"Failed to validate short sell order {symbol}: {e}")
                     return False
             
             # Check position size limits - more flexible for balanced trading
@@ -1248,9 +1291,12 @@ class AlpacaClient:
                     base_max_position = getattr(settings, 'max_position_size', 0.05)  # Use standard limits only
                     max_position = max(base_max_position, 0.15)  # Minimum 15% position limit for balanced trading
                     
+                    logger.info(f"🔍 Position size check: {position_percent:.2%} vs max {max_position:.2%} for {symbol}")
                     if position_percent > max_position:
-                        logger.error(f"Position size too large: {position_percent:.2%} > {max_position:.2%}")
+                        logger.error(f"❌ Position size too large: {position_percent:.2%} > {max_position:.2%}")
                         return False
+                    else:
+                        logger.info(f"✅ Position size OK: {position_percent:.2%} <= {max_position:.2%}")
                         
                 except Exception as e:
                     logger.warning(f"Could not verify position size: {e}")

@@ -13,6 +13,7 @@ from agents.state import TradingState, create_initial_state, update_state_timest
 from agents.state import is_trading_halted, add_error_to_state
 from config.settings import settings
 from core.enhanced_dual_agent_system import EnhancedDualAgentSystem, DualAgentConfig
+from core.position_tracker import position_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -754,13 +755,14 @@ class TradingWorkflow:
                 
                 # Only process meaningful allocations
                 if abs(target_weight) > 0.01:  # 1% minimum
-                    # Determine action and position value
+                    # 🔄 FIXED: Handle both positive (long) and negative (short) target weights
+                    portfolio_info = state.get("portfolio", {})
+                    buying_power = portfolio_info.get("buying_power", max(0, available_cash))
+                    
                     if target_weight > 0:
                         signal_action = "buy"
                         # Use available cash for buy positions (respect buying power limits)
                         # Handle margin accounts (negative cash) by using buying power instead
-                        portfolio_info = state.get("portfolio", {})
-                        buying_power = portfolio_info.get("buying_power", max(0, available_cash))
                         
                         if available_cash < 0:  # Margin account
                             # More aggressive with margin - use more of buying power but stay safe
@@ -781,10 +783,14 @@ class TradingWorkflow:
                         
                         if position_value < desired_position_value:
                             logger.info(f"Position size limited for {symbol}: desired ${desired_position_value:.2f}, using ${position_value:.2f} (available cash: ${available_cash:.2f})")
-                    else:
-                        # Enhanced short selling strategy
-                        signal_action = await self._determine_short_strategy(symbol, target_weight, state)
+                            
+                    elif target_weight < 0:
+                        # 🔄 NEW: Handle negative weights for SHORT positions
+                        signal_action = "short"  # Fixed: use 'short' instead of 'sell_short'
                         position_value = portfolio_value * abs(target_weight)
+                        logger.info(f"🔄 INVERTED SHORT: Processing {symbol} with {target_weight:.2%} short weight (${position_value:.2f})")
+                    else:
+                        continue  # Zero weight, skip
                     
                     # Get current price and create signal
                     try:
@@ -830,7 +836,7 @@ class TradingWorkflow:
             # Count different signal types
             buy_signals = len([s for s in enhanced_signals if s.action.lower() in ['buy', 'long']])
             sell_signals = len([s for s in enhanced_signals if s.action.lower() in ['sell']])
-            short_signals = len([s for s in enhanced_signals if s.action.lower() in ['sell_short', 'short']])
+            short_signals = len([s for s in enhanced_signals if s.action.lower() in ['short']])
             
             logger.info(f"✅ Generated {len(enhanced_signals)} RL-based trading signals: {buy_signals} BUY, {sell_signals} SELL, {short_signals} SHORT")
             
@@ -1286,7 +1292,7 @@ class TradingWorkflow:
             logger.info(f"📊 Current short exposure: {current_short_exposure:.1%} (max allowed: {MAX_SHORT_PORTFOLIO_ALLOCATION:.1%})")
             
             for signal in signals:
-                if signal.action.lower() in ["sell_short", "short"]:
+                if signal.action.lower() in ["short"]:
                     # ALGO AGENT PORTFOLIO LIMIT: Check if we're over 15% short allocation
                     signal_value_estimate = getattr(signal, 'quantity', 0) * 100  # Rough estimate
                     portfolio_value = state.get("portfolio", {}).get("equity", 50000.0)
@@ -1960,11 +1966,23 @@ class TradingWorkflow:
                     confidence = 0.5
                     logger.warning(f"Signal {i} ({symbol}): invalid confidence value, using default 0.5")
                 
-                if confidence > 0.60:  # RAISED threshold to improve signal quality and reduce losses
+                # 🤖 RL_ONLY MODE: Use more permissive confidence threshold for FinRL signals
+                # Detect RL_ONLY mode by checking if we have RL decisions (simpler and more reliable)
+                is_rl_only_mode = (
+                    state.get("rl_decisions") is not None or
+                    state.get("pure_finrl") is True or
+                    "FinRL" in str(signals[0].reasoning if signals else "")
+                )
+                
+                confidence_threshold = 0.05 if is_rl_only_mode else 0.60  # RL_ONLY: 5% threshold vs normal 60% - MORE AGGRESSIVE
+                
+                if confidence > confidence_threshold:
                     optimized_signals.append(signal)
-                    logger.info(f"✅ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): RETAINED with confidence={confidence}")
+                    mode_label = "RL_ONLY" if is_rl_only_mode else "NORMAL"
+                    logger.info(f"✅ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): RETAINED with confidence={confidence} ({mode_label} mode, threshold={confidence_threshold})")
                 else:
-                    logger.warning(f"❌ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): FILTERED OUT with confidence={confidence} <= 0.60 (improved quality filter)")
+                    mode_label = "RL_ONLY" if is_rl_only_mode else "NORMAL"
+                    logger.warning(f"❌ Signal {i} ({getattr(signal, 'symbol', signal.get('symbol', 'UNKNOWN') if isinstance(signal, dict) else 'UNKNOWN')}): FILTERED OUT with confidence={confidence} <= {confidence_threshold} ({mode_label} mode filter)")
             
             # Sort signals by confidence to prioritize highest confidence trades
             def get_signal_confidence(signal):
@@ -2074,13 +2092,22 @@ class TradingWorkflow:
                 confidence = self._get_signal_attribute(signal, 'confidence', 0.5)
                 
                 if symbol != 'UNKNOWN' and quantity > 0 and action.lower() != 'hold':
+                    # Convert action to proper order side
+                    if action.lower() == "short":
+                        order_side = "short"  # Keep as "short" for alpaca_client processing
+                    else:
+                        order_side = action.lower()
+                    
                     raw_orders.append({
                         "symbol": symbol,
-                        "side": action.lower(),
+                        "side": order_side,
                         "qty": quantity,
                         "confidence": confidence,
                         "original_signal": signal
                     })
+                    
+                    if action.lower() == "short":
+                        logger.info(f"🩳 {symbol}: Converting SHORT action to order side 'short' for {quantity} shares")
             
             logger.info(f"📋 Converted {len(signals)} signals to {len(raw_orders)} raw orders")
             
@@ -2204,6 +2231,11 @@ class TradingWorkflow:
                         # Check if this order might trigger wash trade detection
                         alpaca_order = alpaca_client.place_order(**order_params)
                         
+                        # Handle blocked/filtered orders (e.g., buy orders filtered in short-only mode)
+                        if alpaca_order.get("status") == "blocked":
+                            logger.warning(f"🚫 Order blocked/filtered: {action} {quantity} {symbol} - {alpaca_order.get('message', 'No reason provided')}")
+                            continue  # Skip to next signal without counting as executed
+                        
                         # Handle OCO orders if wash trade was detected
                         if alpaca_order.get("status") == "skipped_net_zero":
                             logger.info(f"⚖️ {symbol} order skipped due to zero net change - no wash trade risk")
@@ -2290,6 +2322,34 @@ class TradingWorkflow:
                         }
                         executed_orders.append(order)
                         logger.info(f"✅ Alpaca order placed: {action} {quantity} {symbol} (ID: {alpaca_order.get('id', 'N/A')})")
+                        
+                        # POSITION TRACKING: Record position entry/exit for stability tracking
+                        try:
+                            current_price = alpaca_order.get("filled_avg_price") or limit_price or 100.0
+                            
+                            if action.lower() in ["buy", "short"]:
+                                # Position entry
+                                entry_type = "long" if action.lower() == "buy" else "short"
+                                position_tracker.record_position_entry(
+                                    symbol=symbol,
+                                    entry_price=current_price,
+                                    quantity=quantity,
+                                    entry_type=entry_type,
+                                    confidence=signal.confidence if hasattr(signal, 'confidence') else 0.8
+                                )
+                                logger.info(f"📈 Position tracking: {symbol} {entry_type} entry recorded")
+                                
+                            elif action.lower() in ["sell", "cover"]:
+                                # Position exit
+                                position_tracker.record_position_exit(
+                                    symbol=symbol,
+                                    exit_price=current_price,
+                                    exit_reason="rebalance"
+                                )
+                                logger.info(f"📉 Position tracking: {symbol} exit recorded")
+                                
+                        except Exception as tracking_error:
+                            logger.warning(f"⚠️ Position tracking failed for {symbol}: {tracking_error}")
                         
                     except Exception as api_error:
                         logger.error(f"❌ Alpaca API error for {symbol}: {api_error}")

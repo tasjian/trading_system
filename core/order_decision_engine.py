@@ -127,6 +127,65 @@ class OrderDecisionEngine:
         
         # Order tracking for anti-overtrading
         self.recent_orders: Dict[str, datetime] = {}  # symbol -> last order time
+    
+    def generate_order_decisions(self, signals: List[Dict]) -> List[OrderDecision]:
+        """Generate order decisions from signals (synchronous wrapper)."""
+        try:
+            decisions = []
+            
+            for signal in signals:
+                symbol = signal.get('symbol', '')
+                signal_type = signal.get('signal_type', 'hold')
+                strength = signal.get('strength', 0.5)
+                confidence = signal.get('confidence', 0.5)
+                reasoning = signal.get('reasoning', 'Generated from signal')
+                
+                if not symbol:
+                    continue
+                
+                # Create basic order decision based on signal
+                if signal_type == 'short' and settings.enable_short_selling:
+                    decision = OrderDecision(
+                        decision_type=OrderDecisionType.SELL_SHORT,
+                        order_side="sell_short",
+                        order_type="limit",
+                        quantity=100,  # Base quantity, will be adjusted by position sizing
+                        confidence=confidence,
+                        reasoning=f"Short signal: {reasoning}",
+                        priority=8 if strength > 0.7 else 5
+                    )
+                    decisions.append(decision)
+                    
+                elif signal_type == 'buy':
+                    decision = OrderDecision(
+                        decision_type=OrderDecisionType.BUY_NEW,
+                        order_side="buy",
+                        order_type="limit", 
+                        quantity=100,  # Base quantity
+                        confidence=confidence,
+                        reasoning=f"Buy signal: {reasoning}",
+                        priority=7 if strength > 0.7 else 5
+                    )
+                    decisions.append(decision)
+                    
+                elif signal_type == 'sell':
+                    decision = OrderDecision(
+                        decision_type=OrderDecisionType.SELL_CLOSE,
+                        order_side="sell",
+                        order_type="limit",
+                        quantity=100,  # Will be adjusted based on position
+                        confidence=confidence,
+                        reasoning=f"Sell signal: {reasoning}",
+                        priority=6
+                    )
+                    decisions.append(decision)
+            
+            logger.info(f"Generated {len(decisions)} order decisions from {len(signals)} signals")
+            return decisions
+            
+        except Exception as e:
+            logger.error(f"Error generating order decisions: {e}")
+            return []
         
     async def analyze_and_decide(self, symbol: str, signal_data: Dict, 
                                current_portfolio: Dict) -> List[OrderDecision]:

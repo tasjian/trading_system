@@ -26,7 +26,7 @@ class PositionAction(Enum):
     HOLD = "hold"
     BUY = "buy"
     SELL = "sell"
-    SHORT = "sell_short"
+    SHORT = "short"
     COVER = "buy_to_cover"
     REDUCE = "reduce"
     CLOSE = "close"
@@ -100,16 +100,16 @@ class IntelligentPortfolioBalancer:
             'stop_loss_percent': settings.stop_loss_percent
         }
         
-        # Rebalancing thresholds - BALANCED to prevent churning while capturing opportunities  
-        self.rebalance_threshold = 0.005  # 0.5% threshold (more sensitive for better rebalancing)
-        self.significant_deviation_threshold = 0.05  # 5% for high urgency (more aggressive)
-        self.critical_deviation_threshold = 0.12     # 12% for critical urgency (balanced approach)
+        # Rebalancing thresholds - AGGRESSIVE for more short selling opportunities  
+        self.rebalance_threshold = 0.001  # 0.1% threshold (VERY sensitive for capturing small moves)
+        self.significant_deviation_threshold = 0.02  # 2% for high urgency (AGGRESSIVE)
+        self.critical_deviation_threshold = 0.05     # 5% for critical urgency (AGGRESSIVE)
         
-        # Anti-churning controls
+        # Anti-churning controls - RELAXED for more aggressive short selling
         self.last_trade_time = {}  # symbol -> datetime of last trade
-        self.min_trade_interval_minutes = 30  # Minimum 30 minutes between trades per symbol
+        self.min_trade_interval_minutes = 5   # Minimum 5 minutes between trades per symbol (AGGRESSIVE)
         self.trade_count_today = {}  # symbol -> count of trades today
-        self.max_trades_per_symbol_per_day = 4  # Maximum 4 trades per symbol per day
+        self.max_trades_per_symbol_per_day = 20  # Maximum 20 trades per symbol per day (AGGRESSIVE)
         
         # Order execution preferences
         self.prefer_limit_orders = True
@@ -230,7 +230,18 @@ class IntelligentPortfolioBalancer:
             logger.warning(f"Could not get valid price for {symbol}")
             current_price = current_value / max(abs(current_quantity), 1)
         
-        target_quantity = target_value / float(current_price) if current_price > 0 else 0
+        # For short positions (negative target_weight), we want positive quantity but negative target_weight semantics
+        if current_price > 0:
+            if target_weight < 0:
+                # Short position: use absolute value for quantity calculation
+                target_quantity = abs(target_value) / float(current_price)
+                # Mark as negative to indicate short position
+                target_quantity = -target_quantity
+            else:
+                # Long position: normal calculation
+                target_quantity = target_value / float(current_price)
+        else:
+            target_quantity = 0
         
         # Calculate deviation
         weight_deviation = target_weight - current_weight
@@ -312,7 +323,9 @@ class IntelligentPortfolioBalancer:
             if target_quantity > current_quantity:
                 return PositionAction.BUY, urgency  # Add to position
             elif target_quantity < current_quantity:
-                if target_quantity <= 0:
+                if target_quantity < 0:
+                    return PositionAction.SHORT, urgency  # Need to go short (close long + establish short)
+                elif target_quantity == 0:
                     return PositionAction.CLOSE, urgency  # Close long position
                 else:
                     return PositionAction.REDUCE, urgency  # Reduce position

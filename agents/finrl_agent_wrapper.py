@@ -859,28 +859,29 @@ class FinRLAgentWrapper:
                 
             action_value = float(actions[i])
             
-            # Skip small actions
-            if abs(action_value) < 0.05:
+            # Skip small actions - LOWERED threshold for more aggressive short selling
+            if abs(action_value) < 0.01:  # Reduced from 0.05 to 0.01
                 continue
             
-            # Determine action type and quantity
+            # ✅ NORMAL LOGIC: Follow FinRL recommendations directly
             if action_value > 0:
+                # FinRL says BUY -> We do BUY
                 action_type = 'buy'
                 quantity = min(100, abs(action_value) * 200)  # Scale to reasonable quantity
+                logger.debug(f"✅ NORMAL: FinRL BUY({action_value:.3f}) -> BUY {symbol}")
             else:
-                # CRITICAL FIX: Enable actual short selling, not just position closing
+                # FinRL says SELL -> We do SELL/SHORT
+                action_type = 'short'
+                quantity = min(100, abs(action_value) * 200)
+                logger.debug(f"✅ NORMAL: FinRL SELL({action_value:.3f}) -> SHORT {symbol}")
+                
+                # Check if we have existing long positions to sell first
                 positions = portfolio_data.get('positions', {})
                 current_position = positions.get(symbol, {}).get('quantity', 0)
-                desired_short_quantity = abs(action_value) * 200
-                
                 if current_position > 0:
-                    # If we have a long position, first sell it completely
+                    # We have long position, sell it first
                     action_type = 'sell'
-                    quantity = current_position
-                else:
-                    # If no position or already short, place a short sell order
-                    action_type = 'short'
-                    quantity = min(100, desired_short_quantity)  # Limit short size for risk management
+                    quantity = min(quantity, abs(current_position))  # Don't over-buy
             
             if quantity >= 0.01:
                 signal = FinRLTradingSignal(
@@ -1038,7 +1039,8 @@ class FinRLAgentWrapper:
             total_weight = 0
             
             for signal in signals[:max_positions]:
-                if signal.action == 'buy' and signal.confidence > 0.6:
+                # ✅ NORMAL LOGIC: Handle both BUY and SHORT signals from FinRL naturally
+                if (signal.action in ['buy', 'short', 'sell']) and signal.confidence > 0.2:  # Lowered from 0.6 to 0.2
                     # Calculate position size based on FinRL confidence and risk
                     base_weight = 1.0 / max_positions  # Equal weight baseline
                     confidence_multiplier = signal.confidence
@@ -1047,27 +1049,39 @@ class FinRLAgentWrapper:
                     weight = base_weight * confidence_multiplier * risk_adjustment
                     weight = max(0.02, min(0.15, weight))  # 2% to 15% position limits
                     
+                    # ✅ NORMAL LOGIC: Make short positions have negative weights naturally
+                    if signal.action in ['short', 'sell']:
+                        weight = -weight  # Negative weight for short positions
+                        action_desc = "SHORT"
+                    else:
+                        action_desc = "LONG"
+                    
                     allocation = {
                         "symbol": signal.symbol,
                         "weight": weight,
                         "confidence": signal.confidence,
-                        "reasoning": f"FinRL DRL Agent ({signal.agent_type}): {signal.reasoning}",
+                        "reasoning": f"FinRL DRL Agent ({signal.agent_type}) - {action_desc}: {signal.reasoning}",
                         "drl_score": signal.drl_score,
                         "sharpe_ratio": signal.sharpe_ratio,
                         "regime": signal.regime,
-                        "finrl_pure": True
+                        "finrl_pure": True,
+                        "action_type": signal.action  # Track whether this is buy or short
                     }
                     allocations.append(allocation)
-                    total_weight += weight
+                    total_weight += abs(weight)  # Use absolute value for total exposure calculation
                     
-            # Normalize weights if needed
+            # Normalize weights if needed (using absolute values for exposure)
             if total_weight > 0.95:  # Leave some cash
+                scale_factor = 0.90 / total_weight
                 for allocation in allocations:
-                    allocation["weight"] = allocation["weight"] * 0.90 / total_weight
+                    allocation["weight"] = allocation["weight"] * scale_factor
                     
-            logger.info(f"✅ FinRL selected {len(allocations)} stocks for portfolio")
+            logger.info(f"✅ FinRL INVERTED selected {len(allocations)} stocks for portfolio")
             for allocation in allocations:
-                logger.info(f"   {allocation['symbol']}: {allocation['weight']:.2%} (confidence: {allocation['confidence']:.2f})")
+                action_type = allocation.get('action_type', 'unknown')
+                weight_abs = abs(allocation['weight'])
+                direction = "SHORT" if allocation['weight'] < 0 else "LONG"
+                logger.info(f"   {allocation['symbol']}: {direction} {weight_abs:.2%} (confidence: {allocation['confidence']:.2f}, action: {action_type})")
                 
             return {
                 "allocations": allocations,
