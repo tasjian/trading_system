@@ -106,7 +106,7 @@ from core.position_tracker import position_tracker
 from core.signal_stabilizer import signal_stabilizer
 from core.cost_aware_rebalancer import cost_aware_rebalancer
 from core.wash_sale_monitor import wash_sale_monitor
-from core.loss_inversion_monitor import loss_inversion_monitor
+# from core.loss_inversion_monitor import loss_inversion_monitor  # DISABLED - Removed inversion logic
 
 # Import performance optimization modules
 from core.optimized_market_data_cache import optimized_cache
@@ -528,15 +528,11 @@ class ContinuousRebalancer:
             await self._monitor_active_oco_orders(state)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # LOSS INVERSION MONITORING: Check for positions with $5+ losses and trigger inversions
+            # LOSS INVERSION MONITORING: DISABLED - Removed inversion logic
             pipeline_stage = "loss_inversion_monitoring"
             stage_start = time.time()
-            logger.info("🔄 Loss Inversion Monitoring...")
-            inversions_executed = await self._monitor_loss_inversions(state)
-            if inversions_executed > 0:
-                # Update orders_executed counter for inversions
-                orders_executed += inversions_executed * 2  # Each inversion is 2 orders (close + open)
-                logger.info(f"📊 Executed {inversions_executed} position inversions")
+            logger.info("🚫 Loss Inversion Monitoring: DISABLED")
+            inversions_executed = 0  # Disabled
             stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Step 2: RL_ONLY MODE - Skip Universe Filter Completely
@@ -2433,45 +2429,10 @@ class ContinuousRebalancer:
         except Exception as e:
             logger.debug(f"OCO order processing error (non-critical): {e}")
     
-    async def _monitor_loss_inversions(self, state: Dict[str, Any]) -> int:
-        """Monitor positions for losses exceeding $5 threshold and execute inversions.
-        
-        Returns:
-            Number of inversions executed
-        """
-        try:
-            # Run loss inversion monitoring
-            inversions_executed = await loss_inversion_monitor.monitor_and_execute_inversions()
-            
-            if inversions_executed > 0:
-                logger.info(f"🔄 Loss Inversion Monitor executed {inversions_executed} position inversions")
-                
-                # Add inversion metrics to state for downstream analysis
-                inversion_stats = loss_inversion_monitor.get_inversion_stats()
-                state["loss_inversion_metrics"] = {
-                    "inversions_executed": inversions_executed,
-                    "daily_count": inversion_stats["daily_count"],
-                    "daily_limit": inversion_stats["daily_limit"],
-                    "enabled": inversion_stats["enabled"],
-                    "loss_threshold": inversion_stats["loss_threshold"],
-                    "symbols_in_cooldown": inversion_stats["symbols_in_cooldown"]
-                }
-                
-                # Log detailed statistics
-                logger.info(f"📊 Loss Inversion Stats: {inversion_stats['daily_count']}/{inversion_stats['daily_limit']} daily inversions, "
-                          f"${inversion_stats['loss_threshold']} threshold, "
-                          f"{inversion_stats['symbols_in_cooldown']} symbols in cooldown")
-            else:
-                logger.debug("💎 No positions requiring loss-based inversion detected")
-            
-            return inversions_executed
-            
-        except Exception as e:
-            logger.error(f"❌ Loss inversion monitoring error: {e}")
-            # Don't let loss inversion errors stop the trading pipeline
-            import traceback
-            logger.debug(traceback.format_exc())
-            return 0
+    # DISABLED: Loss inversion monitoring method removed
+    # async def _monitor_loss_inversions(self, state: Dict[str, Any]) -> int:
+    #     """DISABLED - Loss inversion logic removed"""
+    #     return 0
     
     def get_status_report(self) -> Dict[str, Any]:
         """Get current system status report."""

@@ -412,30 +412,29 @@ class FinRLAgentWrapper:
                     rolling_mean = df['close'].rolling(20).mean()
                     df['turbulence'] = rolling_std / rolling_mean
                     
-                    # Update the main dataframe
+                    # Update the main dataframe - ensure proper pandas Series format
                     mask = self.market_data_df['tic'] == symbol
                     for col in ['macd', 'rsi_30', 'cci_30', 'dx_30', 'bb_bbm', 'bb_bbh', 'bb_bbl', 'turbulence']:
                         if col in df.columns:
-                            # Ensure proper pandas Series format
                             col_data = df[col]
                             
-                            # Convert to numpy array first, then assign
-                            if hasattr(col_data, 'values'):
-                                # It's a pandas Series
-                                values_to_assign = col_data.values
-                            elif hasattr(col_data, '__iter__') and not isinstance(col_data, str):
-                                # It's array-like
-                                values_to_assign = np.array(col_data)
-                            else:
-                                # It's a scalar - broadcast to match mask size
-                                mask_size = mask.sum()
-                                values_to_assign = np.full(mask_size, col_data)
+                            # Ensure we're working with the actual dataframe indices
+                            symbol_rows = self.market_data_df[mask]
                             
-                            # Ensure the size matches
-                            if len(values_to_assign) == mask.sum():
-                                self.market_data_df.loc[mask, col] = values_to_assign
+                            # Reset index to ensure proper alignment
+                            if len(col_data) == len(symbol_rows):
+                                # Direct assignment using .loc with proper index alignment
+                                symbol_indices = symbol_rows.index
+                                col_data_reset = col_data.reset_index(drop=True)
+                                
+                                # Assign values directly to the specific indices
+                                for i, idx in enumerate(symbol_indices):
+                                    if i < len(col_data_reset):
+                                        self.market_data_df.at[idx, col] = float(col_data_reset.iloc[i])
+                                    else:
+                                        self.market_data_df.at[idx, col] = 0.0
                             else:
-                                # Fallback: fill with scalar
+                                # Fallback: fill with default values
                                 self.market_data_df.loc[mask, col] = 0.0
                             
                 except Exception as indicator_error:
@@ -555,28 +554,33 @@ class FinRLAgentWrapper:
                 # Validate environment was created
                 if self.trading_env is None:
                     raise ValueError("Trading environment creation returned None")
+                
+                # Test environment functionality
+                try:
+                    test_state = self.trading_env.reset()
+                    if test_state is None or len(test_state) == 0:
+                        raise RuntimeError("Environment reset failed - invalid state")
+                    logger.info(f"✅ Environment validation passed: state length {len(test_state)}")
+                except Exception as test_error:
+                    raise RuntimeError(f"Environment validation failed: {test_error}")
                     
                 logger.info(f"✅ Trading environment initialized: {stock_dim} stocks, {state_space} state space")
                 
             except Exception as env_error:
                 logger.error(f"StockTradingEnv creation failed: {env_error}")
-                # Create a minimal mock environment to prevent KeyError
-                class MockTradingEnv:
-                    def __init__(self):
-                        self.state_space = state_space
-                        self.action_space = action_space
-                    def reset(self):
-                        return [0.0] * self.state_space
-                    def step(self, action):
-                        return [0.0] * self.state_space, 0.0, False, {}
-                
-                self.trading_env = MockTradingEnv()
-                logger.warning("✅ Using mock trading environment as fallback")
+                logger.critical("🚫 SYSTEM HALT: FinRL environment initialization failed")
+                logger.critical("❌ Trading system cannot proceed without proper FinRL environment")
+                logger.critical("📊 Training data shape: %s", train_data.shape)
+                logger.critical("📊 Stock dimension: %d", stock_dim)
+                logger.critical("📊 State space: %d", state_space)
+                logger.critical("📊 Action space: %d", action_space)
+                logger.critical("📊 Required columns: %s", required_cols)
+                raise RuntimeError(f"FinRL environment initialization failed: {env_error}")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize trading environment: {e}")
-            # Don't raise - continue with initialization
-            self.trading_env = None
+            logger.critical("🚫 SYSTEM HALT: Trading environment initialization completely failed")
+            raise RuntimeError(f"Trading environment initialization failed: {e}")
     
     def _initialize_drl_agents(self):
         """Initialize FinRL DRL agents."""
@@ -1076,7 +1080,7 @@ class FinRLAgentWrapper:
                 for allocation in allocations:
                     allocation["weight"] = allocation["weight"] * scale_factor
                     
-            logger.info(f"✅ FinRL INVERTED selected {len(allocations)} stocks for portfolio")
+            logger.info(f"✅ FinRL selected {len(allocations)} stocks for portfolio")
             for allocation in allocations:
                 action_type = allocation.get('action_type', 'unknown')
                 weight_abs = abs(allocation['weight'])
