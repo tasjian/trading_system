@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  # Redis service for caching and data persistence
+  redis:
+    image: redis:7-alpine
+    container_name: trading-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - trading-network
+
+  # Main trading system
+  trading-system:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        APP_ENV: production
+        APP_VERSION: latest
+    container_name: ml4t-trading-system
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./.env:/app/.env
+    environment:
+      - PYTHONPATH=/app
+      - TRADING_MODE=paper
+      - LOG_LEVEL=INFO
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - TZ=America/New_York
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r = redis.Redis(host='redis', port=6379); r.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - trading-network
+
+  # Development service with Jupyter notebook
+  trading-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: ml4t-trading-dev
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8888:8888"  # Jupyter
+      - "8081:8080"  # Dev server
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - TRADING_MODE=paper
+      - LOG_LEVEL=DEBUG
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JUPYTER_ENABLE_LAB=yes
+    env_file:
+      - .env
+    command: >
+      bash -c "
+        pip install jupyter &&
+        jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+      "
+    networks:
+      - trading-network
+    profiles:
+      - dev
+
+  # Monitoring dashboard (optional)
+  trading-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: ml4t-dashboard
+    restart: unless-stopped
+    depends_on:
+      - trading-system
+      - redis
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs:ro
+    environment:
+      - PYTHONPATH=/app
+      - DASHBOARD_MODE=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    command: python tools/performance_dashboard.py
+    networks:
+      - trading-network
+    profiles:
+      - monitoring
+
+networks:
+  trading-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local

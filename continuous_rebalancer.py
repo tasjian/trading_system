@@ -62,31 +62,10 @@ except Exception as e:
 # Re-enable all data sources for full signal generation
 print("\n✅ All data sources ENABLED for comprehensive signal generation")
 print("   - Social media sentiment: ENABLED")
-print("   - News analysis: ENABLED") 
+print("   - News analysis: ENABLED")
 print("   - Earnings signals: ENABLED")
 print("   - Price movement signals: ENABLED")
-
-# Apply complete workflow bypass to eliminate session leaks
-try:
-    from fix_complete_workflow import patch_complete_workflow
-    patch_complete_workflow()
-    print("✅ Applied COMPLETE WORKFLOW optimization patches")
-    print("   - Sentiment analysis: OPTIMIZED (not bypassed)")
-    print("   - HTTP sessions: Managed efficiently")
-    print("   - Performance: Optimized for continuous rebalancing")
-except ImportError:
-    print("⚠️ Complete workflow patches not found - running with default optimization")
-
-# Apply optimized social media collector to prevent session leaks
-try:
-    from patch_optimized_social_collector import patch_optimized_social_collector
-    patch_optimized_social_collector()
-    print("✅ Applied OPTIMIZED SOCIAL COLLECTOR patches")
-    print("   - Fast 15s timeouts prevent hanging")
-    print("   - Proper session cleanup eliminates leaks")
-    print("   - Fallback posts when APIs unavailable")
-except ImportError:
-    print("⚠️ Optimized social collector patch not found - running without fixes")
+print("✅ API caching: Enabled via cached_alpaca_client (30s account, 15s positions)")
 
 from agents.workflow import TradingWorkflow
 from agents.state import create_initial_state
@@ -94,19 +73,13 @@ from tools.alpaca_client import alpaca_client
 from config.settings import settings  # , get_crypto_pairs
 from utils.market_open_scheduler import market_open_scheduler
 from utils.cache_manager import cache_manager
+# Import API caching system to reduce retry warnings
+from tools.cached_alpaca_client import start_cache_maintenance
 
 # Tax-Loss Harvesting Integration (DISABLED FOR RL_ONLY)
-# from core.tax_loss_harvesting import tax_loss_harvesting_engine, TaxLossOpportunity
-# Tax-Aware Portfolio Balancer (DISABLED FOR RL_ONLY)
-# from core.tax_aware_portfolio_balancer import (
-#     tax_aware_portfolio_balancer, TaxAwareRebalanceStrategy
-# )
-from core.lot_tracking import lot_tracker
 from core.position_tracker import position_tracker
 from core.signal_stabilizer import signal_stabilizer
 from core.cost_aware_rebalancer import cost_aware_rebalancer
-from core.wash_sale_monitor import wash_sale_monitor
-# from core.loss_inversion_monitor import loss_inversion_monitor  # DISABLED - Removed inversion logic
 
 # Import performance optimization modules
 from core.optimized_market_data_cache import optimized_cache
@@ -598,45 +571,29 @@ class ContinuousRebalancer:
                 active_breakers = [name for name, active in circuit_breakers.items() if active]
                 logger.warning(f"Circuit breakers active: {active_breakers}")
                 # Continue but with reduced position sizing
-            
-            # Step 4.5: Pure FinRL Decision Layer (RL_ONLY MODE)
-            pipeline_stage = "pure_finrl_decision"
+
+            # Step 4.5: FinRL Decision Layer (RL_ONLY MODE)
+            pipeline_stage = "finrl_decision_layer"
             stage_start = time.time()
-            logger.info("🤖 Pure FinRL Decision Layer (RL_ONLY MODE - No LLM/Universe Filter)...")
+            logger.info("🤖 RL_ONLY MODE: Running FinRL decision layer with trained models")
+
             state = await self._run_pure_finrl_decision_layer(state, config)
             stage_timings[pipeline_stage] = time.time() - stage_start
-            
-            # Step 4.6: Tax-Loss Harvesting Analysis (DISABLED FOR RL_ONLY)
-            # if self.tlh_enabled:
-            #     pipeline_stage = "tax_loss_harvesting"
-            #     stage_start = time.time()
-            #     logger.info("💰 Scanning for Tax-Loss Harvesting Opportunities...")
-            #     await self._run_tax_loss_harvesting_analysis(state, config)
-            #     stage_timings[pipeline_stage] = time.time() - stage_start
-            
-            # RL_ONLY: Skip tax-loss harvesting for pure FinRL focus
-            logger.info("🤖 RL_ONLY MODE: Tax-Loss Harvesting disabled - pure FinRL optimization")
-            
-            # Step 5: Signal Generation (Convert Hybrid Portfolio Decisions to Trading Signals)
-            pipeline_stage = "signal_generation"
-            stage_start = time.time()
-            logger.info("🎯 Converting Hybrid Portfolio Decisions to Trading Signals...")
-            
-            # Enhanced Short-Selling Intelligence Integration (DISABLED FOR RL_ONLY)
-            # await self._integrate_enhanced_short_analysis(state, config)
-            logger.info("🤖 RL_ONLY MODE: Skipped enhanced short analysis - FinRL handles all signal generation")
-            
-            pre_signals = len(state.get("signals", []))
-            
-            # Check if hybrid system generated allocations
-            rl_decisions = state.get("rl_decisions") or {}
+
+            # Extract RL decisions from state (FIXED: use correct key)
+            rl_decisions = state.get("rl_decisions", {})
             rl_allocations = rl_decisions.get("allocations", [])
-            rebalance_analysis = rl_decisions.get("rebalance_analysis", {})
-            
-            # Check if rebalancing is needed based on intelligent analysis
-            needs_rebalancing = rebalance_analysis.get("needs_rebalancing", True)
-            
-            if not needs_rebalancing:
+            logger.info(f"📊 FinRL generated {len(rl_allocations)} portfolio allocations")
+
+            # Step 5: Simplified signal tracking
+            pipeline_stage = "signal_prep"
+            stage_start = time.time()
+            pre_signals = len(state.get("signals", []))
+            signals_generated = pre_signals
+
+            # Workflow agents will generate signals in Step 6
+            # This section just ensures state consistency
+            if not state.get("rl_decisions"):
                 logger.info("🔒 No rebalancing needed according to analysis - but generating minimum maintenance signals")
                 
                 # CRITICAL FIX: Always generate some signals for system validation
@@ -1039,11 +996,14 @@ class ContinuousRebalancer:
                 target_allocation = {}
                 
                 # Option 1: Sell everything (conservative approach)
+                # CRITICAL FIX: Only sell positions that actually exist (qty > 0)
                 for position in current_positions:
                     symbol = position.get("symbol", "")
-                    if symbol:
+                    qty = position.get("qty", 0)
+                    # Only create sell orders for positions we actually hold
+                    if symbol and abs(float(qty)) > 0:
                         target_allocation[symbol] = 0.0
-                        logger.info(f"🔴 FORCED SELL TARGET: {symbol} = 0% (no RL recommendations)")
+                        logger.info(f"🔴 FORCED SELL TARGET: {symbol} = 0% (qty={qty}, no RL recommendations)")
                 
                 # Option 2: Alternatively, buy top universe filter symbols (aggressive approach)
                 # Uncomment to enable buying new symbols when RL fails:
@@ -2454,6 +2414,10 @@ continuous_rebalancer = ContinuousRebalancer()
 
 async def start_continuous_rebalancing():
     """Start the continuous rebalancing system."""
+    # Start API caching system to reduce retry warnings
+    await start_cache_maintenance()
+    logger.info("✅ Started API cache maintenance to reduce retry warnings")
+    
     await continuous_rebalancer.start_continuous_operation()
 
 def get_rebalancer_status():

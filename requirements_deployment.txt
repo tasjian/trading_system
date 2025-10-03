@@ -1,0 +1,84 @@
+# Requirements for Cloud Run Deployment
+# Copy this to requirements.txt and customize for your trading application
+#
+# PRODUCTION DEPENDENCIES ONLY
+# Keep this file minimal for faster Docker builds and smaller images
+
+# ==============================================================================
+# WEB FRAMEWORK (Choose one)
+# ==============================================================================
+flask==2.3.3              # Lightweight web framework
+# fastapi==0.104.1         # Modern, fast API framework (alternative)
+# uvicorn==0.24.0          # ASGI server for FastAPI (if using FastAPI)
+
+# ==============================================================================
+# WSGI SERVER FOR PRODUCTION
+# ==============================================================================
+gunicorn==21.2.0           # Production WSGI server for Flask
+
+# ==============================================================================
+# CORE DEPENDENCIES
+# ==============================================================================
+requests==2.31.0           # HTTP client
+python-dotenv==1.0.0       # Environment variable management
+
+# ==============================================================================
+# TRADING AND FINANCIAL LIBRARIES
+# ==============================================================================
+# Uncomment and customize based on your trading application needs:
+
+# Market Data and Trading APIs
+# alpaca-trade-api==3.0.0   # Alpaca trading API
+# yfinance==0.2.24          # Yahoo Finance data
+# polygon-api-client==1.12.3 # Polygon.io market data
+
+# Data Analysis
+# pandas==2.0.3             # Data manipulation
+# numpy==1.24.3             # Numerical computing
+
+# Machine Learning (if using RL/ML models)
+# scikit-learn==1.3.2       # Traditional ML
+# tensorflow==2.15.0        # Deep learning (large dependency)
+# torch==2.1.2              # PyTorch (alternative to TensorFlow)
+# finrl==0.3.6              # Financial RL library
+
+# Technical Analysis
+# ta-lib==0.4.27            # Technical analysis (requires system libraries)
+# pandas-ta==0.3.14b0       # Technical analysis for pandas
+
+# ==============================================================================
+# CLOUD AND INFRASTRUCTURE
+# ==============================================================================
+# google-cloud-logging==3.8.0    # GCP logging integration
+# google-cloud-secret-manager==2.17.0  # Secret Manager
+# redis==5.0.1                    # Redis client for caching
+
+# ==============================================================================
+# DEVELOPMENT DEPENDENCIES (DO NOT INCLUDE IN PRODUCTION)
+# ==============================================================================
+# Add these to requirements-dev.txt instead:
+# pytest==7.4.3
+# flake8==6.1.0
+# black==23.11.0
+# pytest-cov==4.1.0
+
+# ==============================================================================
+# EXAMPLE MINIMAL CONFIGURATION FOR BASIC TRADING APP:
+# ==============================================================================
+# flask==2.3.3
+# gunicorn==21.2.0
+# requests==2.31.0
+# python-dotenv==1.0.0
+# alpaca-trade-api==3.0.0
+# pandas==2.0.3
+# numpy==1.24.3
+
+# ==============================================================================
+# NOTES:
+# - Keep this file as minimal as possible for faster builds
+# - Pin exact versions for reproducible builds
+# - Use requirements-dev.txt for development-only dependencies
+# - Test your dependencies in a clean virtual environment
+# - Consider using pip-tools for dependency management:
+#   pip-compile requirements.in > requirements.txt
+# ==============================================================================

@@ -1,570 +1,853 @@
 #!/usr/bin/env python3
 """
-Portfolio-level Performance Tracking for RL Curriculum Training
-Comprehensive metrics collection and evaluation for staged learning
+FinRL Performance Tracking System
+
+Production-ready performance tracking for FinRL agents with comprehensive metrics,
+persistent storage, historical tracking, and visualization capabilities.
+
+Key Features:
+- Sharpe ratio, Win rate, Max drawdown, Sortino ratio, Calmar ratio
+- SQLite database for persistent storage
+- Historical tracking across training cycles
+- Model comparison and ranking
+- Automated visualization generation
+- Integration with FinRL environments
+
+Usage:
+    from utils.performance_tracker import PerformanceTracker
+
+    # Create tracker
+    tracker = PerformanceTracker(db_path="data/metrics.db")
+
+    # Evaluate agent
+    metrics = tracker.evaluate_agent(
+        model=model,
+        test_env=env,
+        model_name="ppo_20251003",
+        agent_type="ppo"
+    )
+
+    # Compare models
+    comparison = tracker.compare_models(
+        model1_name="ppo_base",
+        model2_name="ppo_20251003_finetuned"
+    )
+
+    # Generate report
+    tracker.generate_performance_report(agent_type="ppo")
 """
 
+import os
+import sqlite3
+import logging
 import numpy as np
 import pandas as pd
-import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, asdict
-from enum import Enum
-import json
 from pathlib import Path
+from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
-class PerformanceMetric(Enum):
-    """Types of performance metrics to track."""
-    TOTAL_RETURN = "total_return"
-    SHARPE_RATIO = "sharpe_ratio"
-    MAX_DRAWDOWN = "max_drawdown"
-    VOLATILITY = "volatility"
-    WIN_RATE = "win_rate"
-    PROFIT_FACTOR = "profit_factor"
-    CALMAR_RATIO = "calmar_ratio"
-    SORTINO_RATIO = "sortino_ratio"
-    VAR_95 = "var_95"
-    CVAR_95 = "cvar_95"
 
 @dataclass
-class TradeRecord:
-    """Individual trade record for performance analysis."""
-    timestamp: datetime
-    symbol: str
-    action: str  # "BUY", "SELL", "SHORT", "COVER"
-    quantity: float
-    price: float
-    value: float
-    
-    # Reward components
-    realized_return: float = 0.0
-    unrealized_return: float = 0.0
-    reward_total: float = 0.0
-    reward_profit: float = 0.0
-    reward_loss_cutting: float = 0.0
-    reward_signal_alignment: float = 0.0
-    reward_transaction_cost: float = 0.0
-    
-    # Market context
-    signal_confidence: float = 0.0
-    signal_direction: float = 0.0
-    volatility: float = 0.0
-    sentiment_score: float = 0.0
-    
-    # Portfolio context
-    portfolio_value_before: float = 0.0
-    portfolio_value_after: float = 0.0
-    cash_before: float = 0.0
-    cash_after: float = 0.0
-    
-    # Performance attribution
-    is_profitable: bool = False
-    holding_period_days: Optional[int] = None
-    
-@dataclass
-class PerformanceSnapshot:
-    """Portfolio performance snapshot at a point in time."""
-    timestamp: datetime
-    portfolio_value: float
-    cash: float
-    positions_value: float
+class PerformanceMetrics:
+    """Comprehensive performance metrics for a trading agent."""
+    # Identification
+    model_name: str
+    agent_type: str
+    timestamp: str
+
+    # Core Performance Metrics
+    sharpe_ratio: float
+    sortino_ratio: float
+    calmar_ratio: float
+    win_rate: float
+    loss_rate: float
+    profit_factor: float
+
+    # Risk Metrics
+    max_drawdown: float
+    max_drawdown_duration: int
+    volatility: float
+    downside_deviation: float
+    var_95: float  # Value at Risk (95%)
+    cvar_95: float  # Conditional VaR (95%)
+
+    # Return Metrics
     total_return: float
-    unrealized_pnl: float
-    realized_pnl: float
-    
-    # Risk metrics
-    volatility: float = 0.0
-    max_drawdown: float = 0.0
-    current_drawdown: float = 0.0
-    
-    # Performance metrics
-    sharpe_ratio: float = 0.0
-    sortino_ratio: float = 0.0
-    win_rate: float = 0.0
-    profit_factor: float = 0.0
-    
-    # RL-specific metrics
-    avg_episode_reward: float = 0.0
-    learning_progress: float = 0.0
-    exploration_rate: float = 0.0
-    
-    # Trade statistics
-    total_trades: int = 0
-    profitable_trades: int = 0
-    loss_making_trades: int = 0
+    annualized_return: float
+    cumulative_return: float
+    final_portfolio_value: float
+    initial_portfolio_value: float
+
+    # Trade Statistics
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    avg_win: float
+    avg_loss: float
+    largest_win: float
+    largest_loss: float
+    avg_trade_duration: float
+
+    # Additional Info
+    evaluation_days: int
+    test_data_start: str
+    test_data_end: str
+    notes: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return asdict(self)
+
+    def to_series(self) -> pd.Series:
+        """Convert to pandas Series."""
+        return pd.Series(self.to_dict())
+
 
 class PerformanceTracker:
     """
-    Comprehensive performance tracking for RL curriculum training.
-    
-    Tracks portfolio performance, trade execution, reward components,
-    and learning progress across curriculum phases.
+    Production-ready performance tracking system for FinRL agents.
+
+    Features:
+    - Comprehensive metrics calculation (Sharpe, Sortino, Calmar, etc.)
+    - SQLite database for persistent storage
+    - Historical tracking across training cycles
+    - Model comparison and ranking
+    - Automated visualization generation
     """
-    
-    def __init__(self, initial_portfolio_value: float = 100000.0,
-                 risk_free_rate: float = 0.02,
-                 benchmark_return: float = 0.08,
-                 tracking_window_days: int = 252):
+
+    def __init__(self, db_path: str = "data/performance_metrics.db"):
         """
         Initialize performance tracker.
-        
+
         Args:
-            initial_portfolio_value: Starting portfolio value
-            risk_free_rate: Annual risk-free rate for Sharpe calculation
-            benchmark_return: Benchmark return for comparison
-            tracking_window_days: Rolling window for performance calculations
+            db_path: Path to SQLite database for storing metrics
         """
-        self.initial_portfolio_value = initial_portfolio_value
-        self.risk_free_rate = risk_free_rate
-        self.benchmark_return = benchmark_return
-        self.tracking_window_days = tracking_window_days
-        
-        # Trade and performance history
-        self.trade_records: List[TradeRecord] = []
-        self.performance_snapshots: List[PerformanceSnapshot] = []
-        self.daily_returns: List[float] = []
-        self.portfolio_values: List[float] = [initial_portfolio_value]
-        
-        # Real-time tracking
-        self.current_portfolio_value = initial_portfolio_value
-        self.current_cash = initial_portfolio_value
-        self.current_positions_value = 0.0
-        self.total_realized_pnl = 0.0
-        self.total_unrealized_pnl = 0.0
-        
-        # Episode tracking for RL
-        self.episode_rewards: List[float] = []
-        self.episode_returns: List[float] = []
-        self.episode_trades: List[int] = []
-        self.current_episode_trades = 0
-        
-        # Performance metrics cache
-        self.cached_metrics: Dict[str, float] = {}
-        self.last_metrics_update = datetime.min
-        
-        logger.info(f"Initialized PerformanceTracker with ${initial_portfolio_value:,.2f}")
-    
-    def record_trade(self, trade: TradeRecord):
-        """Record a trade execution."""
-        
-        # Add trade to history
-        self.trade_records.append(trade)
-        self.current_episode_trades += 1
-        
-        # Update portfolio values
-        self.current_portfolio_value = trade.portfolio_value_after
-        self.current_cash = trade.cash_after
-        self.current_positions_value = self.current_portfolio_value - self.current_cash
-        
-        # Update P&L
-        if trade.realized_return != 0:
-            self.total_realized_pnl += trade.realized_return * trade.value
-        
-        # Add to portfolio value history
-        self.portfolio_values.append(self.current_portfolio_value)
-        
-        # Calculate daily return
-        if len(self.portfolio_values) > 1:
-            daily_return = (self.current_portfolio_value - self.portfolio_values[-2]) / self.portfolio_values[-2]
-            self.daily_returns.append(daily_return)
-        
-        # Log significant trades
-        if abs(trade.value) > self.initial_portfolio_value * 0.01:  # > 1% of initial value
-            logger.info(f"Recorded {trade.action} trade: {trade.symbol} ${trade.value:,.2f}, "
-                       f"Portfolio: ${self.current_portfolio_value:,.2f}")
-    
-    def record_episode_end(self, episode_reward: float, episode_return: float):
-        """Record end of RL training episode."""
-        
-        self.episode_rewards.append(episode_reward)
-        self.episode_returns.append(episode_return)
-        self.episode_trades.append(self.current_episode_trades)
-        
-        # Reset episode counters
-        self.current_episode_trades = 0
-        
-        # Create performance snapshot
-        snapshot = self.create_performance_snapshot()
-        self.performance_snapshots.append(snapshot)
-        
-        logger.debug(f"Episode ended: Reward={episode_reward:.4f}, Return={episode_return:.4f}, "
-                    f"Trades={self.episode_trades[-1]}")
-    
-    def create_performance_snapshot(self) -> PerformanceSnapshot:
-        """Create current performance snapshot."""
-        
-        current_time = datetime.now()
-        
-        # Calculate total return
-        total_return = (self.current_portfolio_value - self.initial_portfolio_value) / self.initial_portfolio_value
-        
-        # Calculate performance metrics
-        metrics = self.calculate_performance_metrics()
-        
-        # RL-specific metrics
-        avg_episode_reward = np.mean(self.episode_rewards[-100:]) if self.episode_rewards else 0.0
-        
-        # Trade statistics
-        recent_trades = [t for t in self.trade_records if t.timestamp > current_time - timedelta(days=30)]
-        total_recent_trades = len(recent_trades)
-        profitable_recent_trades = sum(1 for t in recent_trades if t.is_profitable)
-        
-        snapshot = PerformanceSnapshot(
-            timestamp=current_time,
-            portfolio_value=self.current_portfolio_value,
-            cash=self.current_cash,
-            positions_value=self.current_positions_value,
-            total_return=total_return,
-            unrealized_pnl=self.total_unrealized_pnl,
-            realized_pnl=self.total_realized_pnl,
-            
-            # Risk metrics
-            volatility=metrics.get('volatility', 0.0),
-            max_drawdown=metrics.get('max_drawdown', 0.0),
-            current_drawdown=metrics.get('current_drawdown', 0.0),
-            
-            # Performance metrics
-            sharpe_ratio=metrics.get('sharpe_ratio', 0.0),
-            sortino_ratio=metrics.get('sortino_ratio', 0.0),
-            win_rate=metrics.get('win_rate', 0.0),
-            profit_factor=metrics.get('profit_factor', 0.0),
-            
-            # RL metrics
-            avg_episode_reward=avg_episode_reward,
-            learning_progress=len(self.episode_rewards) / 1000.0,  # Normalized progress
-            
-            # Trade statistics
-            total_trades=total_recent_trades,
-            profitable_trades=profitable_recent_trades,
-            loss_making_trades=total_recent_trades - profitable_recent_trades
-        )
-        
-        return snapshot
-    
-    def calculate_performance_metrics(self, window_days: Optional[int] = None) -> Dict[str, float]:
+        self.db_path = db_path
+        self._init_database()
+        logger.info(f"PerformanceTracker initialized with database: {db_path}")
+
+    def _init_database(self):
+        """Initialize SQLite database with metrics table."""
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS performance_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_name TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+
+                -- Core Performance Metrics
+                sharpe_ratio REAL,
+                sortino_ratio REAL,
+                calmar_ratio REAL,
+                win_rate REAL,
+                loss_rate REAL,
+                profit_factor REAL,
+
+                -- Risk Metrics
+                max_drawdown REAL,
+                max_drawdown_duration INTEGER,
+                volatility REAL,
+                downside_deviation REAL,
+                var_95 REAL,
+                cvar_95 REAL,
+
+                -- Return Metrics
+                total_return REAL,
+                annualized_return REAL,
+                cumulative_return REAL,
+                final_portfolio_value REAL,
+                initial_portfolio_value REAL,
+
+                -- Trade Statistics
+                total_trades INTEGER,
+                winning_trades INTEGER,
+                losing_trades INTEGER,
+                avg_win REAL,
+                avg_loss REAL,
+                largest_win REAL,
+                largest_loss REAL,
+                avg_trade_duration REAL,
+
+                -- Additional Info
+                evaluation_days INTEGER,
+                test_data_start TEXT,
+                test_data_end TEXT,
+                notes TEXT,
+
+                UNIQUE(model_name, timestamp)
+            )
+        """)
+
+        # Create index for faster queries
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_agent_type
+            ON performance_metrics(agent_type)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_timestamp
+            ON performance_metrics(timestamp)
+        """)
+
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully")
+
+    def evaluate_agent(
+        self,
+        model: Any,
+        test_env: Any,
+        model_name: str,
+        agent_type: str,
+        notes: str = ""
+    ) -> PerformanceMetrics:
         """
-        Calculate comprehensive performance metrics.
-        
+        Evaluate a FinRL agent on test environment and compute all metrics.
+
         Args:
-            window_days: Rolling window for calculations (default: use class setting)
-            
+            model: Trained Stable-Baselines3 model
+            test_env: FinRL StockTradingEnv for testing
+            model_name: Unique identifier for the model
+            agent_type: Type of agent (a2c, ppo, ddpg, sac, td3)
+            notes: Additional notes about this evaluation
+
         Returns:
-            Dictionary of performance metrics
+            PerformanceMetrics object with all computed metrics
         """
-        
-        if window_days is None:
-            window_days = self.tracking_window_days
-        
-        # Use cached metrics if recent
-        if (datetime.now() - self.last_metrics_update).seconds < 60:  # Cache for 1 minute
-            return self.cached_metrics
-        
-        metrics = {}
-        
-        # Get recent returns
-        recent_returns = np.array(self.daily_returns[-window_days:]) if self.daily_returns else np.array([0.0])
-        portfolio_values = np.array(self.portfolio_values[-window_days:]) if len(self.portfolio_values) > window_days else np.array(self.portfolio_values)
-        
-        if len(recent_returns) == 0:
-            return {}
-        
-        # Total Return
-        if len(portfolio_values) > 0:
-            metrics['total_return'] = (portfolio_values[-1] - portfolio_values[0]) / portfolio_values[0]
+        logger.info(f"Evaluating {model_name} ({agent_type}) on test environment")
+
+        # Run episode on test environment
+        obs = test_env.reset()
+        done = False
+
+        portfolio_values = []
+        actions_log = []
+        rewards_log = []
+
+        while not done:
+            action, _states = model.predict(obs, deterministic=True)
+            obs, reward, done, info = test_env.step(action)
+
+            # Log data
+            if hasattr(test_env, 'asset_memory'):
+                portfolio_values.append(test_env.asset_memory[-1])
+            actions_log.append(action)
+            rewards_log.append(reward)
+
+        # Extract final data from environment
+        if hasattr(test_env, 'asset_memory'):
+            portfolio_values = test_env.asset_memory
         else:
-            metrics['total_return'] = 0.0
-        
-        # Volatility (annualized)
-        if len(recent_returns) > 1:
-            metrics['volatility'] = np.std(recent_returns) * np.sqrt(252)
-        else:
-            metrics['volatility'] = 0.0
-        
-        # Sharpe Ratio
-        mean_return = np.mean(recent_returns)
-        if metrics['volatility'] > 0:
-            excess_return = mean_return - (self.risk_free_rate / 252)
-            metrics['sharpe_ratio'] = (excess_return * 252) / metrics['volatility']
-        else:
-            metrics['sharpe_ratio'] = 0.0
-        
-        # Sortino Ratio (downside deviation)
-        negative_returns = recent_returns[recent_returns < 0]
-        if len(negative_returns) > 0:
-            downside_deviation = np.std(negative_returns) * np.sqrt(252)
-            if downside_deviation > 0:
-                metrics['sortino_ratio'] = (mean_return * 252 - self.risk_free_rate) / downside_deviation
-            else:
-                metrics['sortino_ratio'] = 0.0
-        else:
-            metrics['sortino_ratio'] = metrics['sharpe_ratio']
-        
-        # Maximum Drawdown
-        if len(portfolio_values) > 1:
-            running_max = np.maximum.accumulate(portfolio_values)
-            drawdowns = (portfolio_values - running_max) / running_max
-            metrics['max_drawdown'] = abs(np.min(drawdowns))
-            metrics['current_drawdown'] = abs(drawdowns[-1])
-        else:
-            metrics['max_drawdown'] = 0.0
-            metrics['current_drawdown'] = 0.0
-        
-        # Calmar Ratio
-        if metrics['max_drawdown'] > 0:
-            metrics['calmar_ratio'] = (metrics['total_return'] * 252) / metrics['max_drawdown']
-        else:
-            metrics['calmar_ratio'] = 0.0
-        
-        # Win Rate and Profit Factor
-        if len(recent_returns) > 0:
-            winning_trades = recent_returns[recent_returns > 0]
-            losing_trades = recent_returns[recent_returns < 0]
-            
-            metrics['win_rate'] = len(winning_trades) / len(recent_returns)
-            
-            gross_profits = np.sum(winning_trades) if len(winning_trades) > 0 else 0
-            gross_losses = abs(np.sum(losing_trades)) if len(losing_trades) > 0 else 1e-8
-            metrics['profit_factor'] = gross_profits / gross_losses
-        else:
-            metrics['win_rate'] = 0.0
-            metrics['profit_factor'] = 0.0
-        
-        # Value at Risk (95%)
-        if len(recent_returns) >= 20:
-            metrics['var_95'] = np.percentile(recent_returns, 5)
-            # Conditional VaR (Expected Shortfall)
-            var_threshold = metrics['var_95']
-            tail_losses = recent_returns[recent_returns <= var_threshold]
-            metrics['cvar_95'] = np.mean(tail_losses) if len(tail_losses) > 0 else var_threshold
-        else:
-            metrics['var_95'] = 0.0
-            metrics['cvar_95'] = 0.0
-        
-        # Cache results
-        self.cached_metrics = metrics
-        self.last_metrics_update = datetime.now()
-        
+            portfolio_values = [test_env.initial_amount]  # Fallback
+
+        # Compute all metrics
+        metrics = self._compute_all_metrics(
+            portfolio_values=portfolio_values,
+            actions_log=actions_log,
+            model_name=model_name,
+            agent_type=agent_type,
+            test_env=test_env,
+            notes=notes
+        )
+
+        logger.info(f"Evaluation complete. Sharpe: {metrics.sharpe_ratio:.3f}, "
+                   f"Win Rate: {metrics.win_rate:.2%}, "
+                   f"Max DD: {metrics.max_drawdown:.2%}")
+
         return metrics
-    
-    def get_curriculum_phase_metrics(self, phase_start_episode: int) -> Dict[str, Any]:
+
+    def _compute_all_metrics(
+        self,
+        portfolio_values: List[float],
+        actions_log: List,
+        model_name: str,
+        agent_type: str,
+        test_env: Any,
+        notes: str = ""
+    ) -> PerformanceMetrics:
         """
-        Get performance metrics for specific curriculum phase.
-        
+        Compute comprehensive performance metrics from episode data.
+
         Args:
-            phase_start_episode: Episode number when phase started
-            
+            portfolio_values: List of portfolio values over time
+            actions_log: List of actions taken
+            model_name: Model identifier
+            agent_type: Agent type
+            test_env: Test environment (for metadata)
+            notes: Additional notes
+
         Returns:
-            Phase-specific performance metrics
+            PerformanceMetrics object
         """
-        
-        if phase_start_episode >= len(self.episode_rewards):
-            return {}
-        
-        phase_rewards = self.episode_rewards[phase_start_episode:]
-        phase_returns = self.episode_returns[phase_start_episode:]
-        phase_trades = self.episode_trades[phase_start_episode:]
-        
-        if len(phase_rewards) == 0:
-            return {}
-        
-        # Calculate phase metrics
-        phase_metrics = {
-            'episodes_completed': len(phase_rewards),
-            'avg_episode_reward': np.mean(phase_rewards),
-            'avg_episode_return': np.mean(phase_returns),
-            'avg_trades_per_episode': np.mean(phase_trades),
-            'reward_volatility': np.std(phase_rewards),
-            'return_volatility': np.std(phase_returns),
-            'best_episode_reward': np.max(phase_rewards),
-            'worst_episode_reward': np.min(phase_rewards),
-            'reward_trend': self._calculate_trend(phase_rewards),
-            'return_trend': self._calculate_trend(phase_returns)
-        }
-        
-        # Calculate phase-specific Sharpe ratio
-        if phase_metrics['return_volatility'] > 0:
-            phase_metrics['phase_sharpe'] = phase_metrics['avg_episode_return'] / phase_metrics['return_volatility']
-        else:
-            phase_metrics['phase_sharpe'] = 0.0
-        
-        return phase_metrics
-    
-    def _calculate_trend(self, values: List[float]) -> float:
-        """Calculate linear trend in values (positive = improving)."""
-        
-        if len(values) < 2:
-            return 0.0
-        
-        x = np.arange(len(values))
-        y = np.array(values)
-        
-        # Linear regression slope
-        slope, _ = np.polyfit(x, y, 1)
-        return slope
-    
-    def export_performance_report(self, filepath: str):
-        """Export comprehensive performance report to JSON."""
-        
-        current_metrics = self.calculate_performance_metrics()
-        
-        report = {
-            'summary': {
-                'initial_portfolio_value': self.initial_portfolio_value,
-                'current_portfolio_value': self.current_portfolio_value,
-                'total_return': current_metrics.get('total_return', 0.0),
-                'total_trades': len(self.trade_records),
-                'total_episodes': len(self.episode_rewards),
-                'tracking_period_days': len(self.daily_returns),
-                'report_timestamp': datetime.now().isoformat()
-            },
-            'performance_metrics': current_metrics,
-            'rl_training_metrics': {
-                'total_episodes': len(self.episode_rewards),
-                'avg_episode_reward': np.mean(self.episode_rewards) if self.episode_rewards else 0.0,
-                'avg_episode_return': np.mean(self.episode_returns) if self.episode_returns else 0.0,
-                'reward_improvement_trend': self._calculate_trend(self.episode_rewards[-100:]) if len(self.episode_rewards) >= 100 else 0.0,
-                'return_improvement_trend': self._calculate_trend(self.episode_returns[-100:]) if len(self.episode_returns) >= 100 else 0.0
-            },
-            'recent_performance': [asdict(s) for s in self.performance_snapshots[-10:]],  # Last 10 snapshots
-            'trade_summary': {
-                'total_trades': len(self.trade_records),
-                'profitable_trades': sum(1 for t in self.trade_records if t.is_profitable),
-                'avg_trade_value': np.mean([abs(t.value) for t in self.trade_records]) if self.trade_records else 0.0,
-                'largest_win': max([t.realized_return * t.value for t in self.trade_records if t.is_profitable], default=0.0),
-                'largest_loss': min([t.realized_return * t.value for t in self.trade_records if not t.is_profitable], default=0.0)
-            }
-        }
-        
-        # Convert numpy types to Python types for JSON serialization
-        def convert_numpy(obj):
-            if isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return obj
-        
-        # Apply conversion recursively
-        def clean_for_json(data):
-            if isinstance(data, dict):
-                return {k: clean_for_json(v) for k, v in data.items()}
-            elif isinstance(data, list):
-                return [clean_for_json(v) for v in data]
+        # Convert to numpy arrays
+        pv = np.array(portfolio_values)
+
+        # Calculate returns
+        daily_returns = np.diff(pv) / pv[:-1]
+
+        # Initial and final values
+        initial_value = pv[0]
+        final_value = pv[-1]
+        total_return = (final_value - initial_value) / initial_value
+        cumulative_return = final_value / initial_value - 1
+
+        # Annualized return (assuming 252 trading days per year)
+        days = len(pv)
+        years = days / 252
+        annualized_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
+
+        # Volatility (annualized)
+        volatility = np.std(daily_returns) * np.sqrt(252) if len(daily_returns) > 0 else 0
+
+        # Sharpe Ratio (assuming 0% risk-free rate)
+        sharpe_ratio = annualized_return / volatility if volatility > 0 else 0
+
+        # Downside deviation (for Sortino ratio)
+        negative_returns = daily_returns[daily_returns < 0]
+        downside_deviation = np.std(negative_returns) * np.sqrt(252) if len(negative_returns) > 0 else 0
+
+        # Sortino Ratio
+        sortino_ratio = annualized_return / downside_deviation if downside_deviation > 0 else 0
+
+        # Maximum Drawdown
+        cumulative = np.maximum.accumulate(pv)
+        drawdowns = (pv - cumulative) / cumulative
+        max_drawdown = np.min(drawdowns)
+
+        # Max Drawdown Duration
+        in_drawdown = drawdowns < 0
+        drawdown_durations = []
+        current_duration = 0
+        for is_dd in in_drawdown:
+            if is_dd:
+                current_duration += 1
             else:
-                return convert_numpy(data)
-        
-        clean_report = clean_for_json(report)
-        
-        # Save report
-        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-        with open(filepath, 'w') as f:
-            json.dump(clean_report, f, indent=2, default=str)
-        
-        logger.info(f"Performance report exported to: {filepath}")
-    
-    def get_phase_advancement_metrics(self) -> Dict[str, float]:
-        """Get key metrics for curriculum phase advancement evaluation."""
-        
-        if len(self.episode_returns) < 50:  # Need sufficient data
-            return {
-                'sharpe_ratio': 0.0,
-                'win_rate': 0.0,
-                'max_drawdown': 1.0,  # Worst possible
-                'avg_return': 0.0,
-                'return_stability': 0.0,
-                'meets_advancement': False
-            }
-        
-        recent_returns = np.array(self.episode_returns[-50:])  # Last 50 episodes
-        current_metrics = self.calculate_performance_metrics()
-        
-        # Calculate return stability (inverse of volatility)
-        return_volatility = np.std(recent_returns)
-        return_stability = 1.0 / (1.0 + return_volatility) if return_volatility > 0 else 1.0
-        
-        advancement_metrics = {
-            'sharpe_ratio': current_metrics.get('sharpe_ratio', 0.0),
-            'win_rate': sum(1 for r in recent_returns if r > 0) / len(recent_returns),
-            'max_drawdown': current_metrics.get('max_drawdown', 0.0),
-            'avg_return': np.mean(recent_returns),
-            'return_stability': return_stability
+                if current_duration > 0:
+                    drawdown_durations.append(current_duration)
+                current_duration = 0
+        if current_duration > 0:
+            drawdown_durations.append(current_duration)
+        max_drawdown_duration = max(drawdown_durations) if drawdown_durations else 0
+
+        # Calmar Ratio
+        calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown != 0 else 0
+
+        # Value at Risk (95%)
+        var_95 = np.percentile(daily_returns, 5) if len(daily_returns) > 0 else 0
+
+        # Conditional VaR (CVaR/Expected Shortfall at 95%)
+        cvar_95 = np.mean(daily_returns[daily_returns <= var_95]) if len(daily_returns) > 0 else 0
+
+        # Trade statistics
+        # Assuming actions represent buy/sell signals
+        # This is a simplified approach - adjust based on your action space
+        trades = self._extract_trade_statistics(actions_log, daily_returns)
+
+        # Create metrics object
+        metrics = PerformanceMetrics(
+            model_name=model_name,
+            agent_type=agent_type,
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+            # Core Performance
+            sharpe_ratio=float(sharpe_ratio),
+            sortino_ratio=float(sortino_ratio),
+            calmar_ratio=float(calmar_ratio),
+            win_rate=trades['win_rate'],
+            loss_rate=trades['loss_rate'],
+            profit_factor=trades['profit_factor'],
+
+            # Risk Metrics
+            max_drawdown=float(max_drawdown),
+            max_drawdown_duration=int(max_drawdown_duration),
+            volatility=float(volatility),
+            downside_deviation=float(downside_deviation),
+            var_95=float(var_95),
+            cvar_95=float(cvar_95),
+
+            # Return Metrics
+            total_return=float(total_return),
+            annualized_return=float(annualized_return),
+            cumulative_return=float(cumulative_return),
+            final_portfolio_value=float(final_value),
+            initial_portfolio_value=float(initial_value),
+
+            # Trade Statistics
+            total_trades=trades['total_trades'],
+            winning_trades=trades['winning_trades'],
+            losing_trades=trades['losing_trades'],
+            avg_win=trades['avg_win'],
+            avg_loss=trades['avg_loss'],
+            largest_win=trades['largest_win'],
+            largest_loss=trades['largest_loss'],
+            avg_trade_duration=trades['avg_trade_duration'],
+
+            # Additional Info
+            evaluation_days=days,
+            test_data_start=getattr(test_env, 'start_date', 'N/A'),
+            test_data_end=getattr(test_env, 'end_date', 'N/A'),
+            notes=notes
+        )
+
+        return metrics
+
+    def _extract_trade_statistics(
+        self,
+        actions_log: List,
+        daily_returns: np.ndarray
+    ) -> Dict[str, Any]:
+        """
+        Extract trade statistics from actions and returns.
+
+        This is a simplified approach. Adjust based on your action space.
+        """
+        # Simplified: count positive/negative returns as wins/losses
+        positive_returns = daily_returns[daily_returns > 0]
+        negative_returns = daily_returns[daily_returns < 0]
+
+        total_trades = len(daily_returns)
+        winning_trades = len(positive_returns)
+        losing_trades = len(negative_returns)
+
+        win_rate = winning_trades / total_trades if total_trades > 0 else 0
+        loss_rate = losing_trades / total_trades if total_trades > 0 else 0
+
+        avg_win = np.mean(positive_returns) if len(positive_returns) > 0 else 0
+        avg_loss = np.mean(negative_returns) if len(negative_returns) > 0 else 0
+
+        largest_win = np.max(positive_returns) if len(positive_returns) > 0 else 0
+        largest_loss = np.min(negative_returns) if len(negative_returns) > 0 else 0
+
+        # Profit factor (gross profit / gross loss)
+        gross_profit = np.sum(positive_returns)
+        gross_loss = abs(np.sum(negative_returns))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+
+        # Average trade duration (simplified)
+        avg_trade_duration = 1.0  # Assuming daily data
+
+        return {
+            'total_trades': int(total_trades),
+            'winning_trades': int(winning_trades),
+            'losing_trades': int(losing_trades),
+            'win_rate': float(win_rate),
+            'loss_rate': float(loss_rate),
+            'avg_win': float(avg_win),
+            'avg_loss': float(avg_loss),
+            'largest_win': float(largest_win),
+            'largest_loss': float(largest_loss),
+            'profit_factor': float(profit_factor),
+            'avg_trade_duration': float(avg_trade_duration)
         }
-        
-        # Check if meets basic advancement criteria
-        advancement_metrics['meets_advancement'] = (
-            advancement_metrics['sharpe_ratio'] >= 0.8 and
-            advancement_metrics['win_rate'] >= 0.6 and
-            advancement_metrics['max_drawdown'] <= 0.15 and
-            advancement_metrics['avg_return'] > 0.0
-        )
-        
-        return advancement_metrics
-    
-    def reset_for_new_phase(self):
-        """Reset episode-specific tracking for new curriculum phase."""
-        
-        logger.info(f"Resetting tracker for new curriculum phase. "
-                   f"Completed {len(self.episode_rewards)} episodes in previous phase.")
-        
-        # Keep performance snapshots and trade records for continuity
-        # Reset only episode-specific counters
-        self.current_episode_trades = 0
-        
-        # Clear cached metrics to force recalculation
-        self.cached_metrics = {}
-        self.last_metrics_update = datetime.min
 
-# Factory function for easy tracker creation
-def create_performance_tracker(initial_value: float = 100000.0, **kwargs) -> PerformanceTracker:
-    """Create performance tracker with custom configuration."""
-    
-    return PerformanceTracker(
-        initial_portfolio_value=initial_value,
-        **kwargs
-    )
+    def save_metrics(self, metrics: PerformanceMetrics):
+        """
+        Save metrics to SQLite database.
 
-# Example usage
-if __name__ == "__main__":
-    # Example performance tracking
-    tracker = create_performance_tracker(initial_value=100000.0)
-    
-    # Simulate some trades and episodes
-    for i in range(10):
-        # Simulate trade
-        trade = TradeRecord(
-            timestamp=datetime.now(),
-            symbol="AAPL",
-            action="BUY",
-            quantity=100,
-            price=150.0,
-            value=15000.0,
-            realized_return=0.02,
-            reward_total=0.15,
-            portfolio_value_before=100000 + i * 1000,
-            portfolio_value_after=100000 + (i + 1) * 1000,
-            cash_before=50000 - i * 1000,
-            cash_after=35000 - i * 1000,
-            is_profitable=True
-        )
-        
-        tracker.record_trade(trade)
-        tracker.record_episode_end(episode_reward=0.15, episode_return=0.01)
-    
-    # Get metrics
-    metrics = tracker.calculate_performance_metrics()
-    advancement_metrics = tracker.get_phase_advancement_metrics()
-    
-    print("Performance Metrics:")
-    for key, value in metrics.items():
-        print(f"  {key}: {value:.4f}")
-    
-    print("\nPhase Advancement Metrics:")
-    for key, value in advancement_metrics.items():
-        print(f"  {key}: {value}")
-    
-    # Export report
-    tracker.export_performance_report("./test_performance_report.json")
+        Args:
+            metrics: PerformanceMetrics object to save
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT INTO performance_metrics (
+                    model_name, agent_type, timestamp,
+                    sharpe_ratio, sortino_ratio, calmar_ratio, win_rate, loss_rate, profit_factor,
+                    max_drawdown, max_drawdown_duration, volatility, downside_deviation, var_95, cvar_95,
+                    total_return, annualized_return, cumulative_return, final_portfolio_value, initial_portfolio_value,
+                    total_trades, winning_trades, losing_trades, avg_win, avg_loss, largest_win, largest_loss, avg_trade_duration,
+                    evaluation_days, test_data_start, test_data_end, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                metrics.model_name, metrics.agent_type, metrics.timestamp,
+                metrics.sharpe_ratio, metrics.sortino_ratio, metrics.calmar_ratio,
+                metrics.win_rate, metrics.loss_rate, metrics.profit_factor,
+                metrics.max_drawdown, metrics.max_drawdown_duration, metrics.volatility,
+                metrics.downside_deviation, metrics.var_95, metrics.cvar_95,
+                metrics.total_return, metrics.annualized_return, metrics.cumulative_return,
+                metrics.final_portfolio_value, metrics.initial_portfolio_value,
+                metrics.total_trades, metrics.winning_trades, metrics.losing_trades,
+                metrics.avg_win, metrics.avg_loss, metrics.largest_win, metrics.largest_loss,
+                metrics.avg_trade_duration,
+                metrics.evaluation_days, metrics.test_data_start, metrics.test_data_end, metrics.notes
+            ))
+
+            conn.commit()
+            logger.info(f"Metrics saved: {metrics.model_name} at {metrics.timestamp}")
+
+        except sqlite3.IntegrityError:
+            logger.warning(f"Metrics already exist for {metrics.model_name} at {metrics.timestamp}")
+
+        finally:
+            conn.close()
+
+    def get_metrics(
+        self,
+        model_name: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        limit: Optional[int] = None
+    ) -> pd.DataFrame:
+        """
+        Retrieve metrics from database.
+
+        Args:
+            model_name: Filter by model name
+            agent_type: Filter by agent type
+            limit: Limit number of results
+
+        Returns:
+            DataFrame with metrics
+        """
+        conn = sqlite3.connect(self.db_path)
+
+        query = "SELECT * FROM performance_metrics WHERE 1=1"
+        params = []
+
+        if model_name:
+            query += " AND model_name = ?"
+            params.append(model_name)
+
+        if agent_type:
+            query += " AND agent_type = ?"
+            params.append(agent_type)
+
+        query += " ORDER BY timestamp DESC"
+
+        if limit:
+            query += f" LIMIT {limit}"
+
+        df = pd.read_sql_query(query, conn, params=params if params else None)
+        conn.close()
+
+        return df
+
+    def compare_models(
+        self,
+        model1_name: str,
+        model2_name: str
+    ) -> pd.DataFrame:
+        """
+        Compare two models side-by-side.
+
+        Args:
+            model1_name: Name of first model
+            model2_name: Name of second model
+
+        Returns:
+            DataFrame with comparison
+        """
+        conn = sqlite3.connect(self.db_path)
+
+        # Get latest metrics for each model
+        query = """
+            SELECT * FROM performance_metrics
+            WHERE model_name IN (?, ?)
+            ORDER BY model_name, timestamp DESC
+        """
+
+        df = pd.read_sql_query(query, conn, params=(model1_name, model2_name))
+        conn.close()
+
+        if df.empty:
+            logger.warning(f"No metrics found for {model1_name} or {model2_name}")
+            return pd.DataFrame()
+
+        # Get latest for each model
+        df_latest = df.groupby('model_name').first().reset_index()
+
+        # Select key metrics for comparison
+        comparison_cols = [
+            'model_name', 'agent_type', 'timestamp',
+            'sharpe_ratio', 'sortino_ratio', 'calmar_ratio',
+            'win_rate', 'max_drawdown', 'annualized_return',
+            'total_return', 'volatility', 'total_trades'
+        ]
+
+        comparison = df_latest[comparison_cols]
+
+        return comparison
+
+    def get_best_model(
+        self,
+        agent_type: Optional[str] = None,
+        metric: str = 'sharpe_ratio',
+        top_n: int = 1
+    ) -> pd.DataFrame:
+        """
+        Get best model(s) ranked by specified metric.
+
+        Args:
+            agent_type: Filter by agent type
+            metric: Metric to rank by (sharpe_ratio, sortino_ratio, etc.)
+            top_n: Number of top models to return
+
+        Returns:
+            DataFrame with top models
+        """
+        df = self.get_metrics(agent_type=agent_type)
+
+        if df.empty:
+            logger.warning(f"No metrics found for agent_type={agent_type}")
+            return pd.DataFrame()
+
+        # Sort by metric (descending for most metrics, ascending for max_drawdown)
+        ascending = metric in ['max_drawdown', 'volatility', 'downside_deviation']
+        df_sorted = df.sort_values(metric, ascending=ascending)
+
+        return df_sorted.head(top_n)
+
+    def plot_performance_comparison(
+        self,
+        agent_type: Optional[str] = None,
+        models: Optional[List[str]] = None,
+        metrics_to_plot: Optional[List[str]] = None,
+        save_path: Optional[str] = None
+    ):
+        """
+        Create bar chart comparing model performance.
+
+        Args:
+            agent_type: Filter by agent type
+            models: List of model names to compare
+            metrics_to_plot: List of metrics to plot
+            save_path: Path to save figure (optional)
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.error("matplotlib not installed. Install with: pip install matplotlib")
+            return
+
+        # Default metrics to plot
+        if metrics_to_plot is None:
+            metrics_to_plot = ['sharpe_ratio', 'sortino_ratio', 'win_rate', 'max_drawdown']
+
+        # Get data
+        if models:
+            df_list = [self.get_metrics(model_name=m, limit=1) for m in models]
+            df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+        else:
+            df = self.get_metrics(agent_type=agent_type)
+            # Get latest for each model
+            df = df.groupby('model_name').first().reset_index()
+
+        if df.empty:
+            logger.warning("No data to plot")
+            return
+
+        # Create subplots
+        n_metrics = len(metrics_to_plot)
+        fig, axes = plt.subplots(1, n_metrics, figsize=(5 * n_metrics, 5))
+
+        if n_metrics == 1:
+            axes = [axes]
+
+        for ax, metric in zip(axes, metrics_to_plot):
+            df_sorted = df.sort_values(metric, ascending=False)
+            ax.bar(range(len(df_sorted)), df_sorted[metric])
+            ax.set_xticks(range(len(df_sorted)))
+            ax.set_xticklabels(df_sorted['model_name'], rotation=45, ha='right')
+            ax.set_ylabel(metric.replace('_', ' ').title())
+            ax.set_title(f'{metric.replace("_", " ").title()} Comparison')
+            ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            logger.info(f"Plot saved to {save_path}")
+        else:
+            plt.show()
+
+    def plot_historical_performance(
+        self,
+        agent_type: str,
+        metric: str = 'sharpe_ratio',
+        save_path: Optional[str] = None
+    ):
+        """
+        Plot historical performance trend for an agent type.
+
+        Args:
+            agent_type: Agent type to plot
+            metric: Metric to track over time
+            save_path: Path to save figure (optional)
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.error("matplotlib not installed. Install with: pip install matplotlib")
+            return
+
+        df = self.get_metrics(agent_type=agent_type)
+
+        if df.empty:
+            logger.warning(f"No data for agent_type={agent_type}")
+            return
+
+        # Convert timestamp to datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp')
+
+        # Plot
+        plt.figure(figsize=(12, 6))
+
+        for model in df['model_name'].unique():
+            df_model = df[df['model_name'] == model]
+            plt.plot(df_model['timestamp'], df_model[metric],
+                    marker='o', label=model, linewidth=2)
+
+        plt.xlabel('Timestamp')
+        plt.ylabel(metric.replace('_', ' ').title())
+        plt.title(f'{agent_type.upper()} - {metric.replace("_", " ").title()} Over Time')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            logger.info(f"Plot saved to {save_path}")
+        else:
+            plt.show()
+
+    def generate_performance_report(
+        self,
+        agent_type: Optional[str] = None,
+        model_name: Optional[str] = None,
+        save_path: Optional[str] = None
+    ) -> str:
+        """
+        Generate comprehensive text report of performance metrics.
+
+        Args:
+            agent_type: Filter by agent type
+            model_name: Filter by model name
+            save_path: Path to save report (optional)
+
+        Returns:
+            Report as string
+        """
+        df = self.get_metrics(agent_type=agent_type, model_name=model_name)
+
+        if df.empty:
+            return "No metrics found"
+
+        # Get latest metrics for each model
+        df_latest = df.groupby('model_name').first().reset_index()
+
+        # Build report
+        report_lines = []
+        report_lines.append("=" * 80)
+        report_lines.append("FINRL PERFORMANCE REPORT")
+        report_lines.append("=" * 80)
+        report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report_lines.append(f"Total Models: {len(df_latest)}")
+
+        if agent_type:
+            report_lines.append(f"Agent Type: {agent_type.upper()}")
+
+        report_lines.append("")
+
+        for idx, row in df_latest.iterrows():
+            report_lines.append("-" * 80)
+            report_lines.append(f"Model: {row['model_name']}")
+            report_lines.append(f"Agent Type: {row['agent_type']}")
+            report_lines.append(f"Evaluated: {row['timestamp']}")
+            report_lines.append("")
+
+            report_lines.append("PERFORMANCE METRICS:")
+            report_lines.append(f"  Sharpe Ratio:       {row['sharpe_ratio']:>10.3f}")
+            report_lines.append(f"  Sortino Ratio:      {row['sortino_ratio']:>10.3f}")
+            report_lines.append(f"  Calmar Ratio:       {row['calmar_ratio']:>10.3f}")
+            report_lines.append("")
+
+            report_lines.append("RISK METRICS:")
+            report_lines.append(f"  Max Drawdown:       {row['max_drawdown']:>10.2%}")
+            report_lines.append(f"  Volatility:         {row['volatility']:>10.2%}")
+            report_lines.append(f"  Downside Dev:       {row['downside_deviation']:>10.2%}")
+            report_lines.append(f"  VaR (95%):          {row['var_95']:>10.2%}")
+            report_lines.append(f"  CVaR (95%):         {row['cvar_95']:>10.2%}")
+            report_lines.append("")
+
+            report_lines.append("RETURN METRICS:")
+            report_lines.append(f"  Total Return:       {row['total_return']:>10.2%}")
+            report_lines.append(f"  Annual Return:      {row['annualized_return']:>10.2%}")
+            report_lines.append(f"  Cumulative Return:  {row['cumulative_return']:>10.2%}")
+            report_lines.append("")
+
+            report_lines.append("TRADE STATISTICS:")
+            report_lines.append(f"  Win Rate:           {row['win_rate']:>10.2%}")
+            report_lines.append(f"  Loss Rate:          {row['loss_rate']:>10.2%}")
+            report_lines.append(f"  Profit Factor:      {row['profit_factor']:>10.3f}")
+            report_lines.append(f"  Total Trades:       {row['total_trades']:>10d}")
+            report_lines.append(f"  Winning Trades:     {row['winning_trades']:>10d}")
+            report_lines.append(f"  Losing Trades:      {row['losing_trades']:>10d}")
+            report_lines.append("")
+
+        report_lines.append("=" * 80)
+
+        report = "\n".join(report_lines)
+
+        if save_path:
+            with open(save_path, 'w') as f:
+                f.write(report)
+            logger.info(f"Report saved to {save_path}")
+
+        return report
+
+
+# Convenience functions
+def evaluate_and_save(
+    model: Any,
+    test_env: Any,
+    model_name: str,
+    agent_type: str,
+    db_path: str = "data/performance_metrics.db",
+    notes: str = ""
+) -> PerformanceMetrics:
+    """
+    Convenience function to evaluate agent and save metrics in one call.
+
+    Args:
+        model: Trained model
+        test_env: Test environment
+        model_name: Model identifier
+        agent_type: Agent type
+        db_path: Database path
+        notes: Additional notes
+
+    Returns:
+        PerformanceMetrics object
+    """
+    tracker = PerformanceTracker(db_path=db_path)
+    metrics = tracker.evaluate_agent(model, test_env, model_name, agent_type, notes)
+    tracker.save_metrics(metrics)
+    return metrics
+
+
+def compare_and_plot(
+    model_names: List[str],
+    db_path: str = "data/performance_metrics.db",
+    save_path: Optional[str] = None
+):
+    """
+    Convenience function to compare models and generate plot.
+
+    Args:
+        model_names: List of model names to compare
+        db_path: Database path
+        save_path: Path to save plot
+    """
+    tracker = PerformanceTracker(db_path=db_path)
+    tracker.plot_performance_comparison(models=model_names, save_path=save_path)
