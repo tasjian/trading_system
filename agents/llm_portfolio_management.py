@@ -279,10 +279,10 @@ class LLMPortfolioManager:
         try:
             from core.batch_sentiment_processor import batch_sentiment_processor
             
-            # Use the optimized batch processor
+            # Use the optimized batch processor with longer timeout for FinRL
             sentiment_results = await batch_sentiment_processor.analyze_stocks_batch(
                 symbols,
-                timeout_seconds=min(180.0, len(symbols) * 2.0)  # 2 seconds per symbol or 3 minutes max
+                timeout_seconds=min(300.0, len(symbols) * 5.0)  # 5 seconds per symbol or 5 minutes max
             )
             
             logger.info(f"✅ Batch sentiment analysis: {len(sentiment_results)}/{len(symbols)} successful")
@@ -412,11 +412,18 @@ class LLMPortfolioManager:
             sentiment = sentiment_data.get(symbol)
             market_info = market_data.get(symbol)
             
-            if not sentiment or not market_info:
+            # Skip only if we have no market info (sentiment is optional)
+            if not market_info:
                 continue
             
             # Calculate composite score - handle both object and dictionary formats
-            if isinstance(sentiment, dict):
+            if sentiment is None:
+                # Fallback when no sentiment data available
+                sentiment_score = 0.0
+                has_recent_earnings = False
+                sentiment_confidence = 0.3  # Low confidence without sentiment
+                logger.debug(f"Using fallback sentiment for {symbol} - no sentiment data available")
+            elif isinstance(sentiment, dict):
                 sentiment_score = sentiment.get('overall_score', 0.0)
                 has_recent_earnings = sentiment.get('has_recent_earnings', False)
                 sentiment_confidence = sentiment.get('confidence', 0.5)
@@ -523,8 +530,11 @@ class LLMPortfolioManager:
         
         base_adjustment = 1.0
         
-        # Handle both object and dictionary formats
-        if isinstance(sentiment, dict):
+        # Handle both object and dictionary formats, including None
+        if sentiment is None:
+            sentiment_score = 0.0
+            confidence = 0.3
+        elif isinstance(sentiment, dict):
             sentiment_score = sentiment.get('overall_score', 0.0)
             confidence = sentiment.get('confidence', 0.5)
         else:
@@ -613,7 +623,11 @@ class LLMPortfolioManager:
         else:
             target_positions = min(30, len(scored_candidates))  # Increased from 20
         
-        # Calculate base weight per position
+        # Calculate base weight per position - handle edge case of no candidates
+        if target_positions == 0:
+            logger.warning("No candidates available for portfolio allocation - returning empty portfolio")
+            return {}
+            
         available_weight = 1.0 - self.min_cash_reserve
         base_weight = available_weight / target_positions
         

@@ -122,3 +122,37 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# =============================================================================
+# DEPLOYMENT AND INFRASTRUCTURE FILES
+# =============================================================================
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+terraform/crash.log
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+terraform/.terraformrc
+terraform/terraform.rc
+
+# Google Cloud credentials (IMPORTANT!)
+github-actions-key.json
+service-account-key.json
+gcp-key.json
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Kubernetes
+*.kubeconfig
+k8s-secrets.yaml
+
+# Deployment secrets
+terraform.tfvars

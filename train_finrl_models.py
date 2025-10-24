@@ -38,6 +38,7 @@ from stable_baselines3.common.logger import configure
 # Import our Alpaca client for real data
 sys.path.insert(0, '/Users/zac/Desktop/02_PROJECTS/01_ML4T/trading_system')
 from tools.alpaca_client import alpaca_client
+from utils.performance_tracker import PerformanceTracker
 
 class FinRLModelTrainer:
     """FinRL Model Trainer using real Alpaca market data."""
@@ -59,7 +60,10 @@ class FinRLModelTrainer:
         # Create directories
         os.makedirs('data/finrl_models', exist_ok=True)
         os.makedirs('results', exist_ok=True)
-        
+
+        # Performance tracking
+        self.performance_tracker = PerformanceTracker(db_path="data/performance_metrics.db")
+
         logger.info(f"🎯 Initialized FinRL Trainer for {len(self.symbols)} symbols")
         logger.info(f"📊 State Space: {self.state_space}, Stock Dimension: {self.stock_dimension}")
         logger.info(f"📅 Training Period: {start_date} to {end_date} (includes 2008-2010 financial crisis)")
@@ -327,15 +331,105 @@ class FinRLModelTrainer:
         
         # Training summary
         logger.info(f"\n🎯 Training Summary: {successful_agents}/{total_agents} agents trained successfully")
-        
+
         if successful_agents > 0:
             logger.info("✅ FinRL DRL model training completed successfully!")
             logger.info(f"📁 Models saved in: data/finrl_models/")
             logger.info(f"📊 Training logs in: results/")
+
+            # Evaluate trained models
+            logger.info("\n📊 Evaluating trained models on test data...")
+            self.evaluate_all_models(train_data, training_configs)
+
             return True
         else:
             logger.error("❌ No agents were successfully trained")
             return False
+
+    def evaluate_all_models(self, train_data, training_configs):
+        """
+        Evaluate all trained models on test data and save metrics.
+
+        Args:
+            train_data: Training data for reference
+            training_configs: Training configurations used
+        """
+        try:
+            from stable_baselines3 import A2C, PPO, DDPG, SAC, TD3
+
+            # Split data for testing (use 2024 data as test)
+            test_data = data_split(
+                self.training_data,
+                start='2024-01-01',
+                end=self.end_date
+            )
+
+            if len(test_data) < 100:
+                logger.warning(f"⚠️ Insufficient test data: {len(test_data)} records. Skipping evaluation.")
+                return
+
+            logger.info(f"📊 Test data: {len(test_data)} records (2024 data)")
+
+            # Create test environment
+            test_env = self.create_environment(test_data)
+            if test_env is None:
+                logger.warning("⚠️ Failed to create test environment. Skipping evaluation.")
+                return
+
+            # Store metadata for test environment
+            test_env.start_date = '2024-01-01'
+            test_env.end_date = self.end_date
+
+            # Model class mapping
+            model_classes = {
+                'a2c': A2C,
+                'ppo': PPO,
+                'ddpg': DDPG,
+                'sac': SAC,
+                'td3': TD3
+            }
+
+            # Evaluate each trained model
+            for agent_type in training_configs.keys():
+                model_path = f"data/finrl_models/agent_{agent_type}.zip"
+
+                if not os.path.exists(model_path):
+                    logger.warning(f"⚠️ Model not found: {model_path}")
+                    continue
+
+                try:
+                    logger.info(f"📊 Evaluating {agent_type.upper()}...")
+
+                    # Load model
+                    model_class = model_classes[agent_type]
+                    model = model_class.load(model_path)
+
+                    # Evaluate and save metrics
+                    perf_metrics = self.performance_tracker.evaluate_agent(
+                        model=model,
+                        test_env=test_env,
+                        model_name=f"{agent_type}_base",
+                        agent_type=agent_type,
+                        notes="Full training from 2008-2024, tested on 2024 data"
+                    )
+
+                    # Save to database
+                    self.performance_tracker.save_metrics(perf_metrics)
+
+                    logger.info(f"✅ {agent_type.upper()}: Sharpe={perf_metrics.sharpe_ratio:.3f}, "
+                               f"Win Rate={perf_metrics.win_rate:.2%}, "
+                               f"Max DD={perf_metrics.max_drawdown:.2%}")
+
+                except Exception as e:
+                    logger.error(f"❌ Failed to evaluate {agent_type}: {e}")
+                    continue
+
+            logger.info("\n✅ Model evaluation complete!")
+            logger.info("📊 Metrics saved to data/performance_metrics.db")
+
+        except Exception as e:
+            logger.error(f"❌ Model evaluation failed: {e}")
+            # Don't raise - evaluation failure shouldn't stop the training script
 
 def main():
     """Main training function."""

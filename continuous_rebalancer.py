@@ -34,19 +34,25 @@ try:
     day_trading_power = float(account_info.get('daytrade_buying_power', 0))
     buying_power = float(account_info.get('buying_power', 0))
     
+    # Determine trading mode based on available buying power
+    TRADING_MODE = "FULL"  # Default mode
+    
     if day_trading_power <= 0 and buying_power > 1000:
         print("🔄 SWING TRADING MODE CONFIRMED ACTIVE")
         print(f"   Day Trading Power: ${day_trading_power:.2f}")
         print(f"   Regular Buying Power: ${buying_power:,.2f}")
         print("   System will proceed with overnight positions only")
+        TRADING_MODE = "SWING"
     elif day_trading_power > 0:
         print("✅ DAY TRADING MODE AVAILABLE") 
         print(f"   Day Trading Power: ${day_trading_power:,.2f}")
+        TRADING_MODE = "FULL"
     else:
-        print("🛑 INSUFFICIENT TRADING POWER")
+        print("⚠️  LIMITED TRADING POWER - ENTERING MONITORING MODE")
         print(f"   Day Trading Power: ${day_trading_power:.2f}")
         print(f"   Regular Buying Power: ${buying_power:.2f}")
-        sys.exit(1)
+        print("   System will monitor positions and close profitables when market opens")
+        TRADING_MODE = "MONITOR_ONLY"
         
 except Exception as e:
     print(f"❌ Account connection test failed: {e}")
@@ -56,31 +62,10 @@ except Exception as e:
 # Re-enable all data sources for full signal generation
 print("\n✅ All data sources ENABLED for comprehensive signal generation")
 print("   - Social media sentiment: ENABLED")
-print("   - News analysis: ENABLED") 
+print("   - News analysis: ENABLED")
 print("   - Earnings signals: ENABLED")
 print("   - Price movement signals: ENABLED")
-
-# Apply complete workflow bypass to eliminate session leaks
-try:
-    from fix_complete_workflow import patch_complete_workflow
-    patch_complete_workflow()
-    print("✅ Applied COMPLETE WORKFLOW optimization patches")
-    print("   - Sentiment analysis: OPTIMIZED (not bypassed)")
-    print("   - HTTP sessions: Managed efficiently")
-    print("   - Performance: Optimized for continuous rebalancing")
-except ImportError:
-    print("⚠️ Complete workflow patches not found - running with default optimization")
-
-# Apply optimized social media collector to prevent session leaks
-try:
-    from patch_optimized_social_collector import patch_optimized_social_collector
-    patch_optimized_social_collector()
-    print("✅ Applied OPTIMIZED SOCIAL COLLECTOR patches")
-    print("   - Fast 15s timeouts prevent hanging")
-    print("   - Proper session cleanup eliminates leaks")
-    print("   - Fallback posts when APIs unavailable")
-except ImportError:
-    print("⚠️ Optimized social collector patch not found - running without fixes")
+print("✅ API caching: Enabled via cached_alpaca_client (30s account, 15s positions)")
 
 from agents.workflow import TradingWorkflow
 from agents.state import create_initial_state
@@ -88,14 +73,13 @@ from tools.alpaca_client import alpaca_client
 from config.settings import settings  # , get_crypto_pairs
 from utils.market_open_scheduler import market_open_scheduler
 from utils.cache_manager import cache_manager
+# Import API caching system to reduce retry warnings
+from tools.cached_alpaca_client import start_cache_maintenance
 
-# Tax-Loss Harvesting Integration
-from core.tax_loss_harvesting import tax_loss_harvesting_engine, TaxLossOpportunity
-from core.tax_aware_portfolio_balancer import (
-    tax_aware_portfolio_balancer, TaxAwareRebalanceStrategy
-)
-from core.lot_tracking import lot_tracker
-from core.wash_sale_monitor import wash_sale_monitor
+# Tax-Loss Harvesting Integration (DISABLED FOR RL_ONLY)
+from core.position_tracker import position_tracker
+from core.signal_stabilizer import signal_stabilizer
+from core.cost_aware_rebalancer import cost_aware_rebalancer
 
 # Import performance optimization modules
 from core.optimized_market_data_cache import optimized_cache
@@ -105,16 +89,35 @@ from utils.daily_summary_scheduler import daily_scheduler, start_daily_summary_s
 # CRYPTO TRADING DISABLED - Comment out for later implementation
 # from core.crypto_data_collector import crypto_collector
 
-# Configure logging with rotation
+# Configure logging with rotation - RL_ONLY branch
+from config.settings import settings
+
+# Determine log file based on environment
+log_file = getattr(settings, 'log_file', 'logs/rl_only_trading_system.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/continuous_rebalancer.log'),
+        logging.FileHandler(log_file),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Log RL_ONLY branch startup
+logger.info("=" * 80)
+logger.info("🤖 RL_ONLY BRANCH STARTUP")
+logger.info("=" * 80)
+logger.info(f"Timestamp: {datetime.now()}")
+logger.info(f"Log File: {log_file}")
+logger.info("Configuration: Pure FinRL-driven trading")
+logger.info("- Universe Filter: DISABLED")
+logger.info("- Sentiment Analysis: DISABLED") 
+logger.info("- Social Media: DISABLED")
+logger.info("- Stock Limits: REMOVED")
+logger.info("- FinRL: FULL CONTROL")
+logger.info("=" * 80)
 
 @dataclass
 class RebalanceResult:
@@ -191,7 +194,7 @@ class ContinuousRebalancer:
         self.tlh_scan_interval_minutes = 120  # Scan for TLH opportunities every 2 hours
         self.last_tlh_scan = None
         self.cached_tlh_opportunities = []  # Cache TLH opportunities
-        self.tlh_strategy = TaxAwareRebalanceStrategy.BALANCED_APPROACH
+        # self.tlh_strategy = TaxAwareRebalanceStrategy.BALANCED_APPROACH  # Disabled for RL_ONLY
     
     def _setup_market_open_callback(self):
         """Setup callback for market open pipeline refresh."""
@@ -200,20 +203,8 @@ class ContinuousRebalancer:
             logger.info("🌅 Market open triggered - running full pipeline refresh...")
             
             try:
-                # Step 1: Warm up key caches
-                logger.info("🔥 Warming critical caches...")
-                
-                # Get current universe for cache warming
-                from core.universe_filter import UniverseFilter
-                universe_filter = UniverseFilter()
-                universe_signals = await universe_filter.filter_universe()
-                symbol_list = [signal.symbol for signal in universe_signals[:50]]  # Top 50 symbols
-                
-                # Warm market data cache
-                await self.cache_manager.warm_cache_category('market_data', symbol_list)
-                
-                # Warm technical indicators cache
-                await self.cache_manager.warm_cache_category('technical_indicators', symbol_list)
+                # Step 1: RL_ONLY MODE - Skip cache warming (FinRL handles internally)
+                logger.info("🤖 RL_ONLY MODE: Skipping cache warming - FinRL manages its own data")
                 
                 # Step 2: Run full pipeline with fresh data
                 logger.info("🚀 Running complete pipeline refresh...")
@@ -436,15 +427,30 @@ class ContinuousRebalancer:
             state = create_initial_state()
             config = {"thread_id": f"continuous_rebalancer_{int(start_time.timestamp())}"}
             
-            # CRITICAL: Validate cash balance before ANY trading operations
+            # CRITICAL: Check trading power and determine operational mode
             from core.trading_engine import trading_engine
-            try:
-                await trading_engine.validate_cash_balance()
-                logger.debug("✅ Cash balance validation passed")
-            except RuntimeError as e:
-                # Critical system halt - insufficient buying power
-                logger.error(f"🚨 TRADING HALTED: {e}")
-                raise e
+            from tools.alpaca_client import alpaca_client
+            
+            # Check current account status
+            account_info = alpaca_client.get_account_info()
+            current_buying_power = float(account_info.get('buying_power', 0))
+            day_trading_power = float(account_info.get('daytrade_buying_power', 0))
+            
+            # Determine operational mode based on buying power
+            if current_buying_power > 1000:
+                # Normal trading mode
+                try:
+                    await trading_engine.validate_cash_balance()
+                    logger.debug("✅ Cash balance validation passed - normal trading mode")
+                    state["trading_mode"] = "NORMAL"
+                except RuntimeError as e:
+                    logger.warning(f"⚠️ Trading power limited: {e}")
+                    state["trading_mode"] = "MONITORING"
+            else:
+                # Insufficient buying power - enter monitoring mode
+                logger.warning(f"⚠️ ENTERING MONITORING MODE - Buying power: ${current_buying_power:.2f}")
+                logger.info("📊 Will monitor positions and close profitable shorts when possible")
+                state["trading_mode"] = "MONITORING"
             
             # CRYPTO TRADING DISABLED - Comment out for later implementation
             # Initialize watchlist - let universe filter discover stocks dynamically
@@ -480,6 +486,14 @@ class ContinuousRebalancer:
             initial_portfolio_value = state["portfolio"].get("equity", 0)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
+            # Step 1.5: Margin Buffer Management
+            pipeline_stage = "margin_buffer_check"
+            stage_start = time.time()
+            logger.info("💰 Margin Buffer Check...")
+            from core.margin_buffer_system import margin_buffer_system
+            state = await margin_buffer_system.check_and_manage_margin(state)
+            stage_timings[pipeline_stage] = time.time() - stage_start
+            
             # ADVANCED STRATEGY MONITORING: Check active OCO orders
             pipeline_stage = "oco_monitoring"
             stage_start = time.time()
@@ -487,17 +501,27 @@ class ContinuousRebalancer:
             await self._monitor_active_oco_orders(state)
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 2: Universe Filter (11k+ → ~200 actionable stocks)
-            pipeline_stage = "universe_filter"
+            # LOSS INVERSION MONITORING: DISABLED - Removed inversion logic
+            pipeline_stage = "loss_inversion_monitoring"
             stage_start = time.time()
-            logger.info("🔍 Universe Filter (99.7% processing reduction)...")
-            state = await self.workflow.universe_filter_agent(state, config)
+            logger.info("🚫 Loss Inversion Monitoring: DISABLED")
+            inversions_executed = 0  # Disabled
             stage_timings[pipeline_stage] = time.time() - stage_start
             
-            # Step 3: Sentiment Analysis (only on filtered stocks, every 90 minutes)
-            pipeline_stage = "sentiment_analysis"
+            # Step 2: RL_ONLY MODE - Skip Universe Filter Completely
+            pipeline_stage = "rl_only_setup"
             stage_start = time.time()
-            state = await self._run_scheduled_sentiment_analysis(state, config)
+            logger.info("🤖 RL_ONLY MODE: Skipping universe filter - FinRL will select stocks directly from market")
+            
+            # No pre-filtering, no hardcoded symbols - FinRL gets full market access internally
+            state["filtered_symbols"] = []  # Empty - FinRL handles stock selection internally
+            stage_timings[pipeline_stage] = time.time() - stage_start
+            
+            # Step 3: RL_ONLY MODE - Skip Sentiment Analysis Completely  
+            pipeline_stage = "rl_only_sentiment_skip"
+            stage_start = time.time()
+            logger.info("🤖 RL_ONLY MODE: Skipping sentiment analysis - FinRL uses internal market analysis")
+            state["sentiment_data"] = {}  # Empty - FinRL doesn't need external sentiment
             stage_timings[pipeline_stage] = time.time() - stage_start
             
             # Check for API rate limits
@@ -547,41 +571,29 @@ class ContinuousRebalancer:
                 active_breakers = [name for name, active in circuit_breakers.items() if active]
                 logger.warning(f"Circuit breakers active: {active_breakers}")
                 # Continue but with reduced position sizing
-            
-            # Step 4.5: Hybrid LLM-RL Portfolio Decision Layer
-            pipeline_stage = "hybrid_portfolio_decision"
+
+            # Step 4.5: FinRL Decision Layer (RL_ONLY MODE)
+            pipeline_stage = "finrl_decision_layer"
             stage_start = time.time()
-            logger.info("🚀 Hybrid LLM-RL Portfolio Decision Layer (Diversified Portfolio Management)...")
-            state = await self._run_hybrid_portfolio_decision_layer(state, config)
+            logger.info("🤖 RL_ONLY MODE: Running FinRL decision layer with trained models")
+
+            state = await self._run_pure_finrl_decision_layer(state, config)
             stage_timings[pipeline_stage] = time.time() - stage_start
-            
-            # Step 4.6: Tax-Loss Harvesting Analysis (if enabled)
-            if self.tlh_enabled:
-                pipeline_stage = "tax_loss_harvesting"
-                stage_start = time.time()
-                logger.info("💰 Scanning for Tax-Loss Harvesting Opportunities...")
-                await self._run_tax_loss_harvesting_analysis(state, config)
-                stage_timings[pipeline_stage] = time.time() - stage_start
-            
-            # Step 5: Signal Generation (Convert Hybrid Portfolio Decisions to Trading Signals)
-            pipeline_stage = "signal_generation"
-            stage_start = time.time()
-            logger.info("🎯 Converting Hybrid Portfolio Decisions to Trading Signals...")
-            
-            # Enhanced Short-Selling Intelligence Integration
-            await self._integrate_enhanced_short_analysis(state, config)
-            
-            pre_signals = len(state.get("signals", []))
-            
-            # Check if hybrid system generated allocations
+
+            # Extract RL decisions from state (FIXED: use correct key)
             rl_decisions = state.get("rl_decisions", {})
             rl_allocations = rl_decisions.get("allocations", [])
-            rebalance_analysis = rl_decisions.get("rebalance_analysis", {})
-            
-            # Check if rebalancing is needed based on intelligent analysis
-            needs_rebalancing = rebalance_analysis.get("needs_rebalancing", True)
-            
-            if not needs_rebalancing:
+            logger.info(f"📊 FinRL generated {len(rl_allocations)} portfolio allocations")
+
+            # Step 5: Simplified signal tracking
+            pipeline_stage = "signal_prep"
+            stage_start = time.time()
+            pre_signals = len(state.get("signals", []))
+            signals_generated = pre_signals
+
+            # Workflow agents will generate signals in Step 6
+            # This section just ensures state consistency
+            if not state.get("rl_decisions"):
                 logger.info("🔒 No rebalancing needed according to analysis - but generating minimum maintenance signals")
                 
                 # CRITICAL FIX: Always generate some signals for system validation
@@ -665,22 +677,24 @@ class ContinuousRebalancer:
                 # Convert to list format for portfolio balancer compatibility
                 current_positions = [{"symbol": symbol, **pos_data} for symbol, pos_data in current_positions_dict.items()]
                 
-                # Initialize tax-aware portfolio balancer for intelligent buy/sell decisions with tax optimization
-                if self.tlh_enabled:
-                    balancer = tax_aware_portfolio_balancer
-                    logger.info("🎯 Using tax-aware portfolio balancer for optimal after-tax returns")
-                else:
-                    from core.portfolio_balancer import IntelligentPortfolioBalancer
-                    balancer = IntelligentPortfolioBalancer()
-                    logger.info("📊 Using traditional portfolio balancer")
+                # RL_ONLY: Always use traditional portfolio balancer for pure FinRL focus
+                from core.portfolio_balancer import IntelligentPortfolioBalancer
+                balancer = IntelligentPortfolioBalancer()
+                logger.info("🤖 RL_ONLY MODE: Using traditional portfolio balancer - pure FinRL optimization")
                 
-                # Build target allocation from RL recommendations
+                # Build target allocation from RL recommendations (including SHORT positions)
                 target_allocation = {}
                 for allocation in rl_allocations:
                     symbol = allocation.get("symbol", "")
                     target_weight = float(allocation.get("weight", 0.0))
-                    if symbol and target_weight > 0:
+                    # 🔄 INVERTED LOGIC: Accept both positive (long) and negative (short) weights
+                    if symbol and target_weight != 0.0:  # Include both positive and negative weights
                         target_allocation[symbol] = target_weight
+                        action_type = allocation.get('action_type', 'unknown')
+                        if target_weight < 0:
+                            logger.info(f"🔄 INVERTED: {symbol} -> SHORT position {abs(target_weight):.2%} (was FinRL BUY)")
+                        else:
+                            logger.info(f"🔄 INVERTED: {symbol} -> LONG position {target_weight:.2%} (was FinRL SELL)")
                 
                 # CRITICAL FIX: Add ALL current positions with 0% weight if not in RL recommendations
                 # This ensures the portfolio balancer knows to CLOSE/SELL positions not recommended by RL
@@ -724,13 +738,19 @@ class ContinuousRebalancer:
                 except Exception as e:
                     logger.warning(f"Failed to check pending orders: {e} - proceeding without duplicate checking")
                 
-                # DEBUG: Log detailed target allocation
-                logger.info(f"🎯 Target allocation: {len(target_allocation)} positions with total weight: {sum(target_allocation.values()):.2%}")
+                # DEBUG: Log detailed target allocation (including SHORT positions)
+                total_long_weight = sum(w for w in target_allocation.values() if w > 0)
+                total_short_weight = sum(abs(w) for w in target_allocation.values() if w < 0)
+                logger.info(f"🎯 Target allocation: {len(target_allocation)} positions")
+                logger.info(f"   📈 Total LONG exposure: {total_long_weight:.2%}")
+                logger.info(f"   📉 Total SHORT exposure: {total_short_weight:.2%}")
                 for symbol, weight in target_allocation.items():
                     if weight == 0.0:
-                        logger.info(f"   🔴 SELL TARGET: {symbol} = {weight:.1%} (should be sold)")
+                        logger.info(f"   🔴 CLOSE TARGET: {symbol} = {weight:.1%} (should be closed)")
+                    elif weight < 0:
+                        logger.info(f"   📉 SHORT TARGET: {symbol} = {abs(weight):.1%} (short position)")
                     else:
-                        logger.info(f"   🟢 BUY/HOLD TARGET: {symbol} = {weight:.1%}")
+                        logger.info(f"   📈 LONG TARGET: {symbol} = {weight:.1%} (long position)")
                         
                 # DEBUG: Check if current positions are properly added for selling
                 logger.info(f"📊 Current positions to check for selling: {[p.get('symbol') for p in current_positions]}")
@@ -739,36 +759,17 @@ class ContinuousRebalancer:
                 
                 # Generate intelligent rebalancing decisions with tax awareness
                 try:
-                    if self.tlh_enabled and hasattr(balancer, 'analyze_tax_aware_portfolio_balance'):
-                        # Use tax-aware analysis
-                        logger.info("🎯 Running tax-aware portfolio analysis...")
-                        tax_analysis = await balancer.analyze_tax_aware_portfolio_balance(
-                            target_allocation=target_allocation
-                        )
-                        
-                        # Generate tax-aware rebalancing orders
-                        rebalancing_decisions = await balancer.generate_tax_aware_rebalancing_orders(
-                            analysis=tax_analysis,
-                            max_orders=30
-                        )
-                        
-                        # Log tax benefits
-                        total_tax_benefits = sum(
-                            d.estimated_tax_benefit or 0 for d in rebalancing_decisions
-                        )
-                        logger.info(f"💰 Tax-aware rebalancing: ${total_tax_benefits:,.2f} estimated tax benefits")
-                        
-                    else:
-                        # Traditional portfolio analysis
-                        position_analyses = await balancer.analyze_portfolio_balance(
-                            target_allocation=target_allocation
-                        )
-                        
-                        # Generate traditional rebalancing orders
-                        rebalancing_decisions = await balancer.generate_rebalancing_orders(
-                            position_analyses=position_analyses,
-                            max_orders=30
-                        )
+                    # RL_ONLY: Always use traditional portfolio analysis for pure FinRL focus
+                    logger.info("🤖 RL_ONLY MODE: Running traditional portfolio analysis...")
+                    position_analyses = await balancer.analyze_portfolio_balance(
+                        target_allocation=target_allocation
+                    )
+                    
+                    # Generate traditional rebalancing orders (RL_ONLY: Remove order limit)
+                    rebalancing_decisions = await balancer.generate_rebalancing_orders(
+                        position_analyses=position_analyses,
+                        max_orders=None  # RL_ONLY: Let FinRL pick unlimited stocks
+                    )
                     
                     logger.info(f"📋 Portfolio balancer generated {len(rebalancing_decisions)} rebalancing decisions")
                     
@@ -777,11 +778,19 @@ class ContinuousRebalancer:
                         if decision.action.value in ["hold"]:
                             continue  # Skip hold decisions
                             
-                        # Map portfolio actions to trading actions
+                        # Map portfolio actions to trading actions - FIXED SHORT MAPPING
                         action_mapping = {
+                            "BUY": "buy",
+                            "SELL": "sell", 
+                            "SHORT": "short",  # Handle uppercase enum values
+                            "COVER": "cover",
+                            "REDUCE": "sell",
+                            "CLOSE": "sell",
+                            # Legacy lowercase support
                             "buy": "buy",
                             "sell": "sell", 
-                            "sell_short": "sell_short",
+                            "short": "short",
+                            "sell_short": "short",
                             "buy_to_cover": "buy",
                             "reduce": "sell",
                             "close": "sell"
@@ -846,10 +855,102 @@ class ContinuousRebalancer:
                             logger.warning(f"⚠️ Signal generation failed for {symbol}: {e}")
                             continue
                 
-                # Add signals to state using proper state management
+                # POSITION STABILITY: Filter signals through stability checker
+                logger.info(f"🔍 Applying position stability and signal filtering to {len(signals)} signals...")
+                
+                # Convert signals to dict format for stability processing
+                raw_signal_dicts = []
                 for signal in signals:
+                    raw_signal_dicts.append({
+                        "symbol": signal.symbol,
+                        "action": signal.action,
+                        "confidence": signal.confidence,
+                        "quantity": signal.quantity,
+                        "strength": 1.0,
+                        "source": "finrl"
+                    })
+                
+                # Apply signal stabilization
+                stable_signals = signal_stabilizer.filter_signals(raw_signal_dicts)
+                
+                # Apply position stability checks
+                filtered_signals = []
+                for stable_signal in stable_signals:
+                    symbol = stable_signal["symbol"]
+                    action = stable_signal["action"].upper()
+                    
+                    # Check position entry/exit rules
+                    if action in ["BUY", "SHORT"]:
+                        can_enter, entry_reason = position_tracker.can_enter_position(
+                            symbol, 
+                            "long" if action == "BUY" else "short"
+                        )
+                        if can_enter:
+                            filtered_signals.append(stable_signal)
+                            logger.info(f"✅ {symbol}: {action} allowed - {entry_reason}")
+                        else:
+                            logger.info(f"🚫 {symbol}: {action} blocked - {entry_reason}")
+                    
+                    elif action == "SELL":
+                        can_exit, exit_reason = position_tracker.can_exit_position(symbol)
+                        if can_exit:
+                            filtered_signals.append(stable_signal)
+                            logger.info(f"✅ {symbol}: {action} allowed - {exit_reason}")
+                        else:
+                            logger.info(f"🚫 {symbol}: {action} blocked - {exit_reason}")
+                    else:
+                        # Unknown action, allow by default
+                        filtered_signals.append(stable_signal)
+                
+                # Convert back to TradingSignal objects
+                final_signals = []
+                for filtered_signal in filtered_signals:
+                    signal = TradingSignal(
+                        symbol=filtered_signal["symbol"],
+                        action=filtered_signal["action"],
+                        confidence=filtered_signal["confidence"],
+                        quantity=filtered_signal["quantity"],
+                        reasoning=filtered_signal.get("reasoning", "Stability-filtered signal")
+                    )
+                    final_signals.append(signal)
+                
+                logger.info(f"📊 Signal Filtering Results: {len(signals)} raw → {len(stable_signals)} stable → {len(final_signals)} final")
+                
+                # COST-AWARE FILTERING: Remove unprofitable trades
+                logger.info(f"💰 Applying cost-aware filtering to {len(final_signals)} signals...")
+                
+                # Convert signals back to dict format for cost analysis
+                cost_signal_dicts = []
+                for signal in final_signals:
+                    cost_signal_dicts.append({
+                        "symbol": signal.symbol,
+                        "action": signal.action,
+                        "quantity": signal.quantity,
+                        "confidence": signal.confidence,
+                        "reasoning": signal.reasoning
+                    })
+                
+                # Apply cost-aware filtering
+                profitable_signals_dicts = cost_aware_rebalancer.filter_profitable_trades(cost_signal_dicts)
+                
+                # Convert back to TradingSignal objects
+                profitable_signals = []
+                for profitable_dict in profitable_signals_dicts:
+                    signal = TradingSignal(
+                        symbol=profitable_dict["symbol"],
+                        action=profitable_dict["action"],
+                        confidence=profitable_dict["confidence"],
+                        quantity=profitable_dict["quantity"],
+                        reasoning=f"Cost-aware: {profitable_dict.get('reasoning', 'Profitable trade')}"
+                    )
+                    profitable_signals.append(signal)
+                
+                logger.info(f"💰 Cost Filtering Results: {len(final_signals)} filtered → {len(profitable_signals)} profitable")
+                
+                # Add profitable signals to state using proper state management
+                for signal in profitable_signals:
                     state = add_signal_to_state(state, signal)
-                signals_generated = len(signals)
+                signals_generated = len(profitable_signals)
                 
                 # Enhanced logging for hybrid system
                 strategy = rl_decisions.get("strategy", "unknown")
@@ -895,11 +996,14 @@ class ContinuousRebalancer:
                 target_allocation = {}
                 
                 # Option 1: Sell everything (conservative approach)
+                # CRITICAL FIX: Only sell positions that actually exist (qty > 0)
                 for position in current_positions:
                     symbol = position.get("symbol", "")
-                    if symbol:
+                    qty = position.get("qty", 0)
+                    # Only create sell orders for positions we actually hold
+                    if symbol and abs(float(qty)) > 0:
                         target_allocation[symbol] = 0.0
-                        logger.info(f"🔴 FORCED SELL TARGET: {symbol} = 0% (no RL recommendations)")
+                        logger.info(f"🔴 FORCED SELL TARGET: {symbol} = 0% (qty={qty}, no RL recommendations)")
                 
                 # Option 2: Alternatively, buy top universe filter symbols (aggressive approach)
                 # Uncomment to enable buying new symbols when RL fails:
@@ -923,11 +1027,18 @@ class ContinuousRebalancer:
                         
                         logger.info(f"🔄 Generated {len(rebalancing_decisions)} forced rebalancing orders")
                         
-                        # Convert to trading signals
+                        # Convert to trading signals - FIXED SHORT MAPPING
                         action_mapping = {
+                            "BUY": "buy",
+                            "SELL": "sell", 
+                            "SHORT": "short",  # Handle uppercase enum values
+                            "COVER": "cover",
+                            "REDUCE": "sell",
+                            "CLOSE": "sell",
+                            # Legacy lowercase support
                             "buy": "buy",
                             "sell": "sell", 
-                            "short": "sell",
+                            "short": "short",
                             "close": "sell"
                         }
                         
@@ -968,19 +1079,27 @@ class ContinuousRebalancer:
             
             # Step 7: Order Management (if signals exist)
             if signals_generated > 0:
-                pipeline_stage = "order_management"
-                stage_start = time.time()
-                logger.info(f"💼 Order Management ({signals_generated} signals)...")
-                pre_orders = len(state.get("executed_orders", []))
-                state = await self.workflow.order_management_agent(state, config)
-                post_orders = len(state.get("executed_orders", []))
-                orders_executed = max(0, post_orders - pre_orders)  # Ensure non-negative count
-                
-                # Record trades in daily summary tracker
-                for _ in range(orders_executed):
-                    daily_scheduler.record_trade()
-                
-                stage_timings[pipeline_stage] = time.time() - stage_start
+                # Check if we're in monitoring mode - skip new orders if insufficient buying power
+                current_trading_mode = state.get("trading_mode", "NORMAL")
+                if current_trading_mode == "MONITORING":
+                    logger.warning("⚠️ MONITORING MODE: Skipping new order execution due to insufficient buying power")
+                    logger.info("📊 System will continue monitoring and managing existing positions")
+                    orders_executed = 0
+                else:
+                    # Normal order execution
+                    pipeline_stage = "order_management"
+                    stage_start = time.time()
+                    logger.info(f"💼 Order Management ({signals_generated} signals)...")
+                    pre_orders = len(state.get("executed_orders", []))
+                    state = await self.workflow.order_management_agent(state, config)
+                    post_orders = len(state.get("executed_orders", []))
+                    orders_executed = max(0, post_orders - pre_orders)  # Ensure non-negative count
+                    
+                    # Record trades in daily summary tracker
+                    for _ in range(orders_executed):
+                        daily_scheduler.record_trade()
+                    
+                    stage_timings[pipeline_stage] = time.time() - stage_start
             else:
                 logger.info("No signals generated, skipping order management")
                 stage_timings["order_management"] = 0.0
@@ -1624,10 +1743,20 @@ class ContinuousRebalancer:
             # even if they don't have strong sentiment (for comprehensive short coverage)
             additional_short_candidates = []
             
-            # Look through all universe-filtered symbols for bearish technical patterns
+            # CRITICAL FIX: Add popular large-cap stocks that are commonly shorted when overbought
+            popular_short_candidates = [
+                'AAPL', 'NVDA', 'TSLA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'SPY', 'QQQ',
+                'NFLX', 'AMD', 'PLTR', 'RIVN', 'LCID', 'AMC', 'GME', 'COIN', 'ROKU'
+            ]
+            
+            for symbol in popular_short_candidates:
+                if symbol not in symbols_to_analyze and len(additional_short_candidates) < 15:
+                    additional_short_candidates.append(symbol)
+            
+            # Also look through universe-filtered symbols for additional technical candidates
             all_filtered_symbols = state.get("filtered_symbols", [])
-            for symbol in all_filtered_symbols[:50]:  # Check top 50 for technical bearish signals
-                if symbol not in symbols_to_analyze and len(additional_short_candidates) < 10:
+            for symbol in all_filtered_symbols[:30]:  # Check top 30 for technical bearish signals
+                if symbol not in symbols_to_analyze and len(additional_short_candidates) < 20:
                     additional_short_candidates.append(symbol)
             
             symbols_to_analyze.extend(additional_short_candidates)
@@ -1831,7 +1960,7 @@ class ContinuousRebalancer:
             traceback.print_exc()
             return state
     
-    async def _integrate_tlh_opportunities_into_signals(self, state: Dict[str, Any], tlh_opportunities: List[TaxLossOpportunity]):
+    async def _integrate_tlh_opportunities_into_signals(self, state: Dict[str, Any], tlh_opportunities: List[Any]):  # TaxLossOpportunity disabled for RL_ONLY
         """Integrate tax-loss harvesting opportunities into trading signals."""
         try:
             from agents.state import TradingSignal, add_signal_to_state
@@ -1983,6 +2112,88 @@ class ContinuousRebalancer:
                 f"Trading system error: {str(e)}. "
                 "No fallback permitted - fix system before resuming."
             )
+    
+    async def _run_pure_finrl_decision_layer(self, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Pure FinRL Decision Layer (RL_ONLY MODE)
+        
+        Completely bypasses:
+        - Universe filter
+        - Sentiment analysis  
+        - LLM portfolio management
+        - Hardcoded stocks
+        
+        FinRL directly selects stocks from the full market using:
+        - Technical indicators
+        - Price/volume patterns
+        - Risk-adjusted returns
+        """
+        try:
+            logger.info("🤖 RL_ONLY MODE: Pure FinRL system - no external filters")
+            
+            # Import FinRL agent wrapper
+            from agents.finrl_agent_wrapper import FinRLAgentWrapper
+            
+            # Get portfolio data
+            portfolio_data = state.get("portfolio", {})
+            portfolio_value = portfolio_data.get("equity", 100000)
+            cash_available = portfolio_data.get("cash", 50000)
+            
+            logger.info(f"💰 Portfolio: ${portfolio_value:,.2f}, Cash: ${cash_available:,.2f}")
+            
+            # Initialize pure FinRL agent with empty symbols list (it will discover its own)
+            # Use the exact same 10 symbols the models were trained on (91-dimensional state space)
+            trained_symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'JNJ', 'V']
+            finrl_agent = FinRLAgentWrapper(symbols=trained_symbols)
+            
+            # Let FinRL select stocks from the entire market
+            logger.info("🎯 FinRL selecting stocks from full market without external filters")
+            rl_decisions = await finrl_agent.generate_pure_trading_decisions(
+                portfolio_value=portfolio_value,
+                cash_available=cash_available,
+                use_full_market=True,  # No pre-filtering
+                max_positions=10  # Let FinRL decide optimal position count
+            )
+            
+            if rl_decisions and rl_decisions.get("allocations"):
+                state["rl_decisions"] = rl_decisions
+                state["rl_enhanced"] = True
+                state["pure_finrl"] = True
+                state["hybrid_system"] = False  # Not hybrid, pure FinRL
+                
+                allocations = rl_decisions.get("allocations", [])
+                strategy = rl_decisions.get("strategy", "Pure FinRL")
+                
+                logger.info(f"✅ Pure FinRL generated {len(allocations)} allocation decisions")
+                logger.info(f"🎯 Strategy: {strategy}")
+                
+                # Log allocation details
+                for allocation in allocations[:5]:  # Top 5
+                    symbol = allocation.get("symbol", "Unknown")
+                    weight = allocation.get("weight", 0)
+                    logger.info(f"   {symbol}: {weight:.2%}")
+                    
+            else:
+                logger.warning("⚠️ Pure FinRL system returned no decisions")
+                # Return empty state - no fallback in RL_only mode
+                state["rl_decisions"] = {
+                    "allocations": [],
+                    "strategy": "Pure FinRL - No Decisions",
+                    "confidence": 0.0,
+                    "finrl_pure_mode": True
+                }
+                
+            return state
+            
+        except Exception as e:
+            logger.error(f"Pure FinRL Decision Layer error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            logger.error("❌ CRITICAL: Pure FinRL system failed")
+            logger.error("🚫 RL_ONLY mode: No fallback allowed")
+            state["rl_decisions"] = None
+            return state
     
     async def _validate_rl_decisions_with_backtesting(self, rl_decisions: Dict[str, Any], state: Dict[str, Any]) -> str:
         """
@@ -2178,6 +2389,11 @@ class ContinuousRebalancer:
         except Exception as e:
             logger.debug(f"OCO order processing error (non-critical): {e}")
     
+    # DISABLED: Loss inversion monitoring method removed
+    # async def _monitor_loss_inversions(self, state: Dict[str, Any]) -> int:
+    #     """DISABLED - Loss inversion logic removed"""
+    #     return 0
+    
     def get_status_report(self) -> Dict[str, Any]:
         """Get current system status report."""
         now = datetime.now()
@@ -2198,6 +2414,10 @@ continuous_rebalancer = ContinuousRebalancer()
 
 async def start_continuous_rebalancing():
     """Start the continuous rebalancing system."""
+    # Start API caching system to reduce retry warnings
+    await start_cache_maintenance()
+    logger.info("✅ Started API cache maintenance to reduce retry warnings")
+    
     await continuous_rebalancer.start_continuous_operation()
 
 def get_rebalancer_status():

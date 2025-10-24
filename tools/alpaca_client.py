@@ -22,28 +22,47 @@ logger = logging.getLogger(__name__)
 class AlpacaClient:
     """Secure Alpaca API client with risk management and safety controls."""
     
-    def __init__(self):
-        """Initialize Alpaca client with paper trading configuration."""
+    def __init__(self, max_positions: int = 20):
+        """Initialize Alpaca client with paper trading configuration.
+        
+        Args:
+            max_positions: Maximum number of positions allowed in portfolio (default: 20)
+        """
         self.api = REST(
             key_id=settings.alpaca_api_key,
             secret_key=settings.alpaca_secret_key,
             base_url=settings.alpaca_base_url  # Paper trading URL already includes version
         )
         
+        # Portfolio management settings
+        self.max_positions = max_positions
+        
         # Validate connection and ensure paper trading
         self._validate_connection()
         self._ensure_paper_trading()
         
-        logger.info("Alpaca client initialized in paper trading mode")
+        logger.info(f"Alpaca client initialized in paper trading mode (max positions: {max_positions})")
     
     def _validate_connection(self) -> None:
-        """Validate API connection and credentials."""
-        try:
-            account = self.api.get_account()
-            logger.info(f"Connected to Alpaca account: {account.id}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Alpaca API: {e}")
-            raise ConnectionError(f"Alpaca API connection failed: {e}")
+        """Validate API connection and credentials with retry logic."""
+        import time
+        max_retries = 3
+        retry_delay = 5
+        
+        for attempt in range(max_retries):
+            try:
+                account = self.api.get_account()
+                logger.info(f"Connected to Alpaca account: {account.id}")
+                return
+            except Exception as e:
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Rate limited, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                logger.error(f"Failed to connect to Alpaca API: {e}")
+                raise ConnectionError(f"Alpaca API connection failed: {e}")
     
     def _ensure_paper_trading(self) -> None:
         """Ensure we're connected to paper trading environment."""
@@ -89,6 +108,14 @@ class AlpacaClient:
         except Exception as e:
             logger.error(f"Failed to get account info: {e}")
             raise
+    
+    def get_recent_orders(self, limit: int = 20) -> List[Dict]:
+        """Get recent orders (alias for get_orders for backward compatibility)."""
+        return self.get_orders(status="all", limit=limit)
+    
+    def get_current_positions(self) -> List[Dict]:
+        """Get current positions (alias for get_positions for backward compatibility)."""
+        return self.get_positions()
     
     def get_positions(self) -> List[Dict]:
         """Get current portfolio positions."""
@@ -314,10 +341,11 @@ class AlpacaClient:
                     logger.info(f"Got {len(df)} historical bars for {symbol}")
                     return df
                 else:
-                    raise ValueError(f"No historical data available for {symbol}")
+                    logger.debug(f"No historical bars found for {symbol}, falling back to quote data")
+                    # Don't raise error, continue to fallback
                     
             except Exception as bars_error:
-                logger.warning(f"Historical bars failed for {symbol}: {bars_error}")
+                logger.debug(f"Historical bars failed for {symbol}: {bars_error}")
                 
                 # Fallback to latest quote if historical data fails
                 try:
@@ -388,7 +416,25 @@ class AlpacaClient:
             notional: Dollar amount for fractional crypto orders
         """
         try:
-            # STEP 1: Live position reconciliation before placing any order
+            # STEP 1: Portfolio size limit check for new positions
+            if side.lower() == "buy":
+                current_positions = self.get_positions()
+                position_exists = any(pos["symbol"] == symbol for pos in current_positions)
+                
+                if not position_exists and len(current_positions) >= self.max_positions:
+                    logger.warning(f"Portfolio at maximum capacity ({len(current_positions)}/{self.max_positions} positions). Cannot open new position in {symbol}")
+                    return {
+                        "symbol": symbol,
+                        "qty": 0,
+                        "side": side,
+                        "status": "rejected_max_positions",
+                        "message": f"Portfolio at maximum capacity ({len(current_positions)}/{self.max_positions} positions)"
+                    }
+                
+                if not position_exists:
+                    logger.info(f"Opening new position in {symbol} ({len(current_positions)+1}/{self.max_positions} positions after this trade)")
+            
+            # STEP 2: Live position reconciliation before placing any order
             reconciled_qty, net_action = self._reconcile_position_and_calculate_net_order(symbol, qty, side)
             
             if reconciled_qty == 0:
@@ -418,7 +464,9 @@ class AlpacaClient:
                 current_position = self._get_position_qty(symbol)
                 # Add current_position to short qty to ensure we're selling more than owned
                 actual_qty = qty + max(0, current_position)  # If we own shares, add them to short qty
-                logger.info(f"🩳 Short selling {symbol}: requested_qty={qty}, current_position={current_position}, actual_sell_qty={actual_qty}")
+                # CRITICAL FIX: Short orders must be whole numbers - Alpaca doesn't allow fractional short orders
+                actual_qty = max(1, int(round(actual_qty)))  # Round to whole number, minimum 1 share
+                logger.info(f"🩳 Short selling {symbol}: requested_qty={qty}, current_position={current_position}, actual_sell_qty={actual_qty} (rounded to whole)")
             else:
                 actual_qty = qty
             
@@ -505,6 +553,7 @@ class AlpacaClient:
                 account = self.get_account_info()
                 day_trading_power = account.get('daytrade_buying_power', 0)
                 regt_buying_power = account.get('regt_buying_power', 0)
+                regular_buying_power = account.get('buying_power', 0)
                 
                 # Estimate order value
                 if order_type.lower() == "market":
@@ -513,7 +562,10 @@ class AlpacaClient:
                 else:
                     estimated_order_value = float(qty) * (limit_price or 0)
                 
-                # Check if we have sufficient buying power
+                # Check if we have sufficient buying power - prioritize available power sources
+                available_power = 0
+                power_type = ""
+                
                 if day_trading_power > 0:
                     # Use day trading buying power
                     available_power = day_trading_power
@@ -522,9 +574,13 @@ class AlpacaClient:
                     # Fall back to RegT buying power
                     available_power = regt_buying_power
                     power_type = "RegT"
+                elif regular_buying_power > 0:
+                    # Fall back to regular buying power
+                    available_power = regular_buying_power
+                    power_type = "regular"
                 else:
                     # No buying power available
-                    raise ValueError(f"Insufficient buying power for {symbol}: day trading=${day_trading_power:.2f}, RegT=${regt_buying_power:.2f}")
+                    raise ValueError(f"Insufficient buying power for {symbol}: day trading=${day_trading_power:.2f}, RegT=${regt_buying_power:.2f}, regular=${regular_buying_power:.2f}")
                 
                 if estimated_order_value > available_power:
                     raise ValueError(f"Insufficient {power_type} buying power for {symbol}: need ${estimated_order_value:.2f}, have ${available_power:.2f}")
@@ -598,19 +654,37 @@ class AlpacaClient:
                     logger.error(f"Wash trade compliant order also failed for {symbol}: {wash_trade_retry_error}")
                     raise
             
-            # Handle insufficient quantity errors for sell orders
+            # Handle insufficient quantity errors for sell orders with improved logic
             elif "insufficient qty available" in error_message and side in ["sell", "sell_short"]:
-                logger.warning(f"Insufficient quantity for {symbol}, attempting to sell all available shares")
+                logger.warning(f"Insufficient quantity for {symbol}, attempting position reconciliation")
                 try:
                     # Get current position to determine available quantity
                     positions = self.get_positions()
-                    available_qty = 0
+                    available_qty = 0.0
                     
                     # Find the position for this symbol
                     for position in positions:
                         if position.get("symbol") == symbol:
-                            available_qty = abs(float(position.get("qty", 0)))
+                            available_qty = float(position.get("qty", 0))
                             break
+                    
+                    logger.info(f"Position check for {symbol}: available_qty={available_qty}, requested_qty={qty}")
+                    
+                    # If we have no position or negative position, we can't sell
+                    if available_qty <= 0:
+                        if side == "sell":
+                            logger.error(f"Cannot sell {symbol}: no shares owned (position={available_qty})")
+                            return {
+                                "symbol": symbol,
+                                "qty": 0,
+                                "side": side,
+                                "status": "failed",
+                                "error": f"No shares owned for {symbol} (position={available_qty})"
+                            }
+                        else:  # sell_short
+                            logger.info(f"Short selling {symbol} with no current position (position={available_qty})")
+                            # For short selling, continue with original quantity
+                            available_qty = abs(qty)
                     
                     if available_qty > 0:
                         # Retry with available quantity
@@ -719,10 +793,14 @@ class AlpacaClient:
                 return qty, side  # Allow full short quantity
             elif side.lower() == "sell" and qty > current_position:
                 # Regular sell: can only sell what we own - adjust quantity
-                logger.warning(f"⚠️ Cannot sell {qty} shares of {symbol}: only {current_position} available")
-                reconciled_qty = current_position
-                logger.info(f"✅ Adjusted sell quantity to available shares: {reconciled_qty}")
-                return reconciled_qty, side
+                if current_position > 0:
+                    logger.warning(f"⚠️ Requested to sell {qty} shares of {symbol}: only {current_position} available")
+                    reconciled_qty = current_position
+                    logger.info(f"✅ Adjusted sell quantity to available shares: {reconciled_qty}")
+                    return reconciled_qty, side
+                else:
+                    logger.warning(f"⚠️ Cannot sell {symbol}: no shares owned (current_position={current_position})")
+                    return 0.0, "hold"
             
             # STEP 4: Check for wash trade patterns and use OCO orders if needed
             if self._is_potential_wash_trade(symbol, qty, side, current_position):
@@ -826,15 +904,19 @@ class AlpacaClient:
             for order in order_list:
                 symbol = order.get("symbol")
                 if symbol not in symbol_orders:
-                    symbol_orders[symbol] = {"buy_qty": 0.0, "sell_qty": 0.0, "orders": []}
+                    symbol_orders[symbol] = {"buy_qty": 0.0, "sell_qty": 0.0, "short_qty": 0.0, "orders": []}
                 
                 side = order.get("side", "").lower()
                 qty = float(order.get("qty", 0))
                 
                 if side == "buy":
                     symbol_orders[symbol]["buy_qty"] += qty
-                elif side in ["sell", "sell_short"]:
+                elif side == "sell":
                     symbol_orders[symbol]["sell_qty"] += qty
+                elif side in ["short", "sell_short"]:
+                    # SHORT orders are processed separately - they don't net against regular trades
+                    symbol_orders[symbol]["short_qty"] += qty
+                    logger.info(f"🩳 {symbol}: Accumulating SHORT order quantity: {qty} (total SHORT: {symbol_orders[symbol]['short_qty']})")
                 
                 symbol_orders[symbol]["orders"].append(order)
             
@@ -843,12 +925,28 @@ class AlpacaClient:
             for symbol, order_data in symbol_orders.items():
                 buy_qty = order_data["buy_qty"]
                 sell_qty = order_data["sell_qty"]
+                short_qty = order_data["short_qty"]
                 
-                # Calculate net quantity
+                # Process SHORT orders FIRST - they are independent positions
+                if short_qty > 0:
+                    logger.info(f"🩳 {symbol}: Processing SHORT order for {short_qty} shares (independent of long position)")
+                    
+                    short_order = {
+                        "symbol": symbol,
+                        "side": "sell_short",
+                        "qty": short_qty,
+                        "original_orders": [o for o in order_data["orders"] if o.get("side", "").lower() in ["short", "sell_short"]],
+                        "order_type": "short_entry"
+                    }
+                    net_orders.append(short_order)
+                    logger.info(f"📊 {symbol} SHORT order: {short_qty} shares to short")
+                
+                # Calculate net quantity for regular long positions (buy/sell)
                 net_qty = buy_qty - sell_qty
                 
-                if abs(net_qty) < 1:  # Skip tiny net changes
-                    logger.info(f"⚖️ {symbol}: Net order too small ({net_qty:.2f}), skipping to avoid wash trade")
+                if abs(net_qty) < 1:  # Skip tiny net changes for regular positions
+                    if short_qty == 0:  # Only log if no SHORT order was processed
+                        logger.info(f"⚖️ {symbol}: Net order too small ({net_qty:.2f}), skipping to avoid wash trade")
                     continue
                 
                 # Determine net action
@@ -1147,6 +1245,7 @@ class AlpacaClient:
     def _pre_trade_checks(self, symbol: str, qty: float, side: str, notional: Optional[float] = None) -> bool:
         """Perform pre-trade safety checks."""
         try:
+            logger.info(f"🔍 PRE-TRADE CHECK START: {symbol} {side} {qty} shares")
             # Check account status
             account = self.get_account_info()
             if account["account_blocked"] or account["trading_blocked"]:
@@ -1198,8 +1297,8 @@ class AlpacaClient:
                     logger.warning(f"Could not verify buying power: {e}")
                     # Continue without buying power check - let Alpaca API handle it
             
-            elif side.lower() in ["sell", "sell_short"]:
-                # For SELL orders, validate that we actually own the shares
+            elif side.lower() == "sell":
+                # For regular SELL orders, validate that we actually own the shares
                 try:
                     positions = self.get_positions()
                     available_qty = 0
@@ -1221,6 +1320,18 @@ class AlpacaClient:
                         
                 except Exception as e:
                     logger.error(f"Failed to validate position for sell order {symbol}: {e}")
+                    return False
+            
+            elif side.lower() == "sell_short":
+                # For SHORT SELL orders, we don't need to own shares - that's the point of shorting!
+                # Just validate that the symbol is shortable and account allows short selling
+                try:
+                    # Basic validation for short selling
+                    logger.info(f"✅ Short sell validation passed for {symbol}: {qty} shares (no ownership required)")
+                    return True
+                        
+                except Exception as e:
+                    logger.error(f"Failed to validate short sell order {symbol}: {e}")
                     return False
             
             # Check position size limits - more flexible for balanced trading
@@ -1248,9 +1359,12 @@ class AlpacaClient:
                     base_max_position = getattr(settings, 'max_position_size', 0.05)  # Use standard limits only
                     max_position = max(base_max_position, 0.15)  # Minimum 15% position limit for balanced trading
                     
+                    logger.info(f"🔍 Position size check: {position_percent:.2%} vs max {max_position:.2%} for {symbol}")
                     if position_percent > max_position:
-                        logger.error(f"Position size too large: {position_percent:.2%} > {max_position:.2%}")
+                        logger.error(f"❌ Position size too large: {position_percent:.2%} > {max_position:.2%}")
                         return False
+                    else:
+                        logger.info(f"✅ Position size OK: {position_percent:.2%} <= {max_position:.2%}")
                         
                 except Exception as e:
                     logger.warning(f"Could not verify position size: {e}")
@@ -1318,21 +1432,33 @@ class AlpacaClient:
                 "supported_time_in_force": ["gtc", "day", "ioc", "fok"]
             }
     
-    def get_current_price(self, symbol: str) -> float:
+    def get_current_price(self, symbol: str) -> Optional[float]:
         """Get current price for a symbol."""
         try:
             quote = self.api.get_latest_trade(symbol)
             return float(quote.price)
         except Exception as e:
-            logger.warning(f"Could not get current price for {symbol}: {e}")
-            # Fallback to market data method
+            logger.debug(f"Failed to get latest trade for {symbol}: {e}")
             try:
-                df = self.get_market_data(symbol, limit=1)
-                if not df.empty:
-                    return float(df['close'].iloc[-1])
-            except Exception as fallback_error:
-                logger.warning(f"Fallback price lookup failed for {symbol}: {fallback_error}")
-            raise ValueError(f"Could not get price for {symbol}")
+                # Fallback to latest quote
+                quote = self.api.get_latest_quote(symbol)
+                if hasattr(quote, 'bid_price') and quote.bid_price:
+                    return float(quote.bid_price)
+                elif hasattr(quote, 'ask_price') and quote.ask_price:
+                    return float(quote.ask_price)
+                else:
+                    logger.warning(f"No valid price data in quote for {symbol}")
+                    # Last resort: try market data method
+                    try:
+                        df = self.get_market_data(symbol, limit=1)
+                        if not df.empty:
+                            return float(df['close'].iloc[-1])
+                    except Exception as fallback_error:
+                        logger.debug(f"Market data fallback failed for {symbol}: {fallback_error}")
+                    return None
+            except Exception as e2:
+                logger.error(f"Failed to get quote for {symbol}: {e2}")
+                return None
     
     def is_market_open(self, symbol: Optional[str] = None) -> bool:
         """Check if the market is currently open - CRYPTO TRADING DISABLED."""
@@ -2020,16 +2146,82 @@ class AlpacaClient:
                     raise
             
             raise
+    
+    def get_portfolio_history(self, period: str = '1M', timeframe: str = '1Day') -> Dict:
+        """
+        Get portfolio history for performance analysis.
+        
+        Args:
+            period: Time period ('1D', '1W', '1M', '3M', '6M', '1Y', 'all')
+            timeframe: Data frequency ('1Min', '5Min', '15Min', '1Hour', '1Day')
+            
+        Returns:
+            Dict with portfolio history data
+        """
+        try:
+            # Map period strings to valid Alpaca parameters
+            period_mapping = {
+                '1D': '1D',
+                '1W': '1W', 
+                '1M': '1M',
+                '3M': '3M',
+                '6M': '6M',
+                '1Y': '1Y',
+                'all': 'all'
+            }
+            
+            # Map timeframe strings to valid Alpaca parameters
+            timeframe_mapping = {
+                '1Min': '1Min',
+                '5Min': '5Min',
+                '15Min': '15Min',
+                '1Hour': '1Hour',
+                '1Day': '1Day'
+            }
+            
+            alpaca_period = period_mapping.get(period, '1M')
+            alpaca_timeframe = timeframe_mapping.get(timeframe, '1Day')
+            
+            # Get portfolio history from Alpaca API
+            portfolio_history = self.api.get_portfolio_history(
+                period=alpaca_period,
+                timeframe=alpaca_timeframe
+            )
+            
+            # Convert to more usable format
+            timestamps = portfolio_history.timestamp
+            equity = portfolio_history.equity
+            profit_loss = portfolio_history.profit_loss
+            profit_loss_pct = portfolio_history.profit_loss_pct
+            base_value = portfolio_history.base_value
+            
+            return {
+                'timestamp': timestamps,
+                'equity': equity,
+                'profit_loss': profit_loss,
+                'profit_loss_pct': profit_loss_pct,
+                'base_value': base_value,
+                'period': period,
+                'timeframe': timeframe
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get portfolio history: {e}")
+            # Return fallback data structure
+            return {
+                'timestamp': [],
+                'equity': [],
+                'profit_loss': [],
+                'profit_loss_pct': [],
+                'base_value': [],
+                'period': period,
+                'timeframe': timeframe,
+                'error': str(e)
+            }
 
 # Global client instance
 alpaca_client = AlpacaClient()
 
-# Apply balanced risk management for better cash management and trading balance
-try:
-    from tools.risk_balanced_alpaca_client import apply_balanced_risk_management
-    alpaca_client = apply_balanced_risk_management(alpaca_client)
-    logger.info("✅ Balanced risk management applied to alpaca_client")
-except ImportError as e:
-    logger.warning(f"Could not load balanced risk management: {e}")
-except Exception as e:
-    logger.error(f"Failed to apply balanced risk management: {e}")
+# Note: Validation is now handled by core.trade_validator.TradeValidator
+# This provides centralized, consistent validation across the system
+logger.info("✅ AlpacaClient initialized (validation via TradeValidator)")

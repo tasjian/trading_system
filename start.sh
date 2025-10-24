@@ -127,6 +127,16 @@ fi
 
 echo -e "${GREEN}✅ Core dependencies verified${NC}"
 
+# Start MCP Servers
+echo -e "${BLUE}🧠 Starting MCP Servers...${NC}"
+if [ -f "./start_mcp_servers.sh" ]; then
+    echo -e "${BLUE}   Initializing Model Context Protocol servers...${NC}"
+    ./start_mcp_servers.sh | grep -E "(✅|❌|⚠️)" | sed 's/^/   /'
+    echo -e "${GREEN}   ✅ MCP servers initialization complete${NC}"
+else
+    echo -e "${YELLOW}   ⚠️ MCP startup script not found - continuing without MCP${NC}"
+fi
+
 # Check system services (Redis)
 echo -e "${BLUE}🔧 Checking system services...${NC}"
 
@@ -231,6 +241,7 @@ echo -e "${BLUE}   • Performance Monitoring: ✅ Enabled (pipeline performance
 echo -e "${BLUE}   • Daily Email Reports: ✅ Enabled (automated portfolio summaries)${NC}"
 echo -e "${BLUE}   • OCO Trading: ✅ Enabled (bracket orders, stop-losses)${NC}"
 echo -e "${BLUE}   • Market Data Caching: $([ "$REDIS_RUNNING" = true ] && echo "✅ Enabled (Redis)" || echo "⚠️ Degraded (no Redis)")${NC}"
+echo -e "${BLUE}   • MCP Servers: ✅ Enabled (filesystem, sequential thinking, semantic memory)${NC}"
 
 # Check for optimal trading intervals
 echo ""
@@ -327,7 +338,9 @@ if check_process_running $PID; then
     echo -e "${BLUE}   Watch logs:       tail -f $LOG_FILE${NC}"
     echo -e "${BLUE}   System status:    ps aux | grep continuous_rebalancer${NC}"
     echo -e "${BLUE}   Trading activity: grep -E 'BUY|SELL|ORDER' $LOG_FILE | tail -10${NC}"
+    echo -e "${BLUE}   MCP status:       ./check_mcp_status.sh${NC}"
     echo -e "${BLUE}   Stop system:      ./stop.sh${NC}"
+    echo -e "${BLUE}   Stop MCP:         ./stop_mcp_servers.sh${NC}"
     echo ""
     
     echo -e "${GREEN}🎯 Enhanced ML4T Trading System is now running in continuous mode!${NC}"

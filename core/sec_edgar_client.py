@@ -8,6 +8,7 @@ with proper rate limiting and comprehensive data parsing.
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta
@@ -87,19 +88,22 @@ class SECEdgarClient:
     
     def __init__(self, user_agent: str = None):
         self.base_url = "https://www.sec.gov"
-        
+
         # SEC requires specific User-Agent format as of 2024: "Company Name email@domain.com"
         # Based on successful patterns from working libraries
         if user_agent is None:
-            self.user_agent = "Tasjian ztaschdjian@gmail.com"
+            # Use environment variable for contact email
+            contact_email = os.getenv("SEC_CONTACT_EMAIL", "contact@example.com")
+            company_name = os.getenv("SEC_COMPANY_NAME", "TradingSystem")
+            self.user_agent = f"{company_name} {contact_email}"
         else:
             self.user_agent = user_agent
-            
+
         self.rate_limiter = SECRateLimiter()
         self._session: Optional[aiohttp.ClientSession] = None
         self._company_tickers: Optional[Dict[str, CompanyInfo]] = None
         self._cik_to_ticker: Optional[Dict[str, str]] = None
-        
+
         # Headers required by SEC (2024 enforcement) - simplified for compatibility
         self.headers = {
             'User-Agent': self.user_agent

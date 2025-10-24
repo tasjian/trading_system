@@ -552,6 +552,22 @@ class EnhancedShortSignalEngine:
         
         logger.info("Enhanced Short Signal Engine initialized")
     
+    def analyze_symbol(self, symbol: str) -> List['EnhancedShortSignal']:
+        """Analyze a single symbol for short signals (synchronous wrapper)."""
+        try:
+            # Run the async method synchronously
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self.generate_enhanced_short_signals([symbol], max_signals=5))
+                return result
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"Error analyzing symbol {symbol}: {e}")
+            return []
+    
     async def generate_enhanced_short_signals(self, symbols: List[str], 
                                             max_signals: int = 10) -> List[EnhancedShortSignal]:
         """Generate enhanced short signals for given symbols."""

@@ -1,0 +1,396 @@
+# GitHub Actions CI/CD Pipeline for Quantitative Trading Application
+# 
+# WORKFLOW OVERVIEW:
+# 1. Test Stage: Run pytest and flake8 linting
+# 2. Build Stage: Create Docker image with git SHA and latest tags
+# 3. Deploy Staging: Deploy to staging Cloud Run service
+# 4. Smoke Test: Validate staging deployment
+# 5. Deploy Production: Promote successful staging image to production
+#
+# REQUIRED SECRETS:
+# - GCP_PROJECT: Your Google Cloud Project ID
+# - GCP_SA_KEY: Base64 encoded service account key JSON
+# - SLACK_WEBHOOK_URL: (Optional) For deployment notifications
+#
+# CUSTOMIZATION GUIDE:
+# - Change service names: Update STAGING_SERVICE and PROD_SERVICE
+# - Modify regions: Update GCP_REGION
+# - Add environment variables: Update deploy steps
+# - Change test commands: Update test job
+# - Add notifications: Uncomment Slack notification steps
+
+name: CI/CD Pipeline
+
+# Trigger configuration
+# CUSTOMIZE: Add or remove trigger conditions as needed
+on:
+  push:
+    branches: [ main, develop ]  # Add your main branches
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+
+# Environment variables
+# CUSTOMIZE: Update these values for your project
+env:
+  GCP_REGION: us-central1
+  STAGING_SERVICE: quant-service-staging
+  PROD_SERVICE: quant-service
+  ARTIFACT_REGISTRY: quant-trading-registry
+  IMAGE_NAME: trading-app
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # =============================================================================
+  # TEST JOB: Run tests and linting
+  # =============================================================================
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'  # Cache pip dependencies
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest flake8 pytest-cov
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        # CUSTOMIZE: Add additional test dependencies
+        # pip install -r requirements-test.txt
+
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings. Customize the line length limit
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+        # CUSTOMIZE: Adjust flake8 rules in setup.cfg or .flake8 file
+
+    - name: Test with pytest
+      run: |
+        # Run tests with coverage
+        pytest --cov=. --cov-report=xml --cov-report=term-missing
+        # CUSTOMIZE: Add additional test parameters
+        # pytest tests/ --junitxml=pytest.xml --cov-report=html
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      if: always()
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+
+  # =============================================================================
+  # BUILD JOB: Build and push Docker image
+  # =============================================================================
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    outputs:
+      image-tag: ${{ steps.image.outputs.tag }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Configure Docker for Artifact Registry
+      run: |
+        gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+    - name: Generate image tags
+      id: image
+      run: |
+        # Create tags with git SHA and latest
+        GIT_SHA=$(echo $GITHUB_SHA | cut -c1-8)
+        IMAGE_TAG="${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }}"
+        
+        echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "sha-tag=${IMAGE_TAG}:${GIT_SHA}" >> $GITHUB_OUTPUT
+        echo "latest-tag=${IMAGE_TAG}:latest" >> $GITHUB_OUTPUT
+        
+        # For pull requests, use PR-specific tag
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "pr-tag=${IMAGE_TAG}:pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64  # Cloud Run supports amd64
+        push: true
+        tags: |
+          ${{ steps.image.outputs.sha-tag }}
+          ${{ steps.image.outputs.latest-tag }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          APP_VERSION=${{ github.sha }}
+          BUILD_ENV=production
+        # CUSTOMIZE: Add additional build arguments
+        # BUILD_ARG_NAME=value
+
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ steps.image.outputs.sha-tag }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v3
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+  # =============================================================================
+  # DEPLOY STAGING: Deploy to staging environment
+  # =============================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    
+    steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Deploy to Cloud Run (Staging)
+      id: deploy
+      uses: google-github-actions/deploy-cloudrun@v1
+      with:
+        service: ${{ env.STAGING_SERVICE }}
+        region: ${{ env.GCP_REGION }}
+        image: ${{ needs.build.outputs.image-tag }}:${{ github.sha | slice(0, 8) }}
+        flags: |
+          --allow-unauthenticated
+          --memory=1Gi
+          --cpu=1
+          --max-instances=10
+          --min-instances=0
+          --concurrency=100
+          --timeout=300
+          --port=8080
+        env_vars: |
+          APP_ENV=staging
+          TRADING_MODE=paper
+          LOG_LEVEL=DEBUG
+          GCP_PROJECT=${{ secrets.GCP_PROJECT }}
+        # CUSTOMIZE: Add your environment variables
+        # secrets: |
+        #   ALPACA_API_KEY=projects/${{ secrets.GCP_PROJECT }}/secrets/alpaca-api-key:latest
+
+    - name: Wait for deployment
+      run: |
+        echo "Waiting for deployment to stabilize..."
+        sleep 30
+
+  # =============================================================================
+  # SMOKE TEST: Test staging deployment
+  # =============================================================================
+  smoke-test:
+    name: Smoke Test Staging
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run smoke tests
+      run: |
+        # CUSTOMIZE: Replace with your actual smoke test endpoints
+        STAGING_URL="${{ needs.deploy-staging.outputs.url }}"
+        
+        echo "Testing staging deployment at: $STAGING_URL"
+        
+        # Health check
+        curl -f "$STAGING_URL/health" || exit 1
+        
+        # API availability test
+        curl -f "$STAGING_URL/api/status" || exit 1
+        
+        # CUSTOMIZE: Add more comprehensive smoke tests
+        # python scripts/smoke_test.py --url="$STAGING_URL"
+        
+        echo "✅ Smoke tests passed!"
+
+    - name: Performance test (optional)
+      run: |
+        # CUSTOMIZE: Add performance testing if needed
+        # Use tools like Apache Bench, wrk, or custom scripts
+        # ab -n 100 -c 10 "${{ needs.deploy-staging.outputs.url }}/api/health"
+        echo "Performance tests would run here"
+
+  # =============================================================================
+  # DEPLOY PRODUCTION: Promote to production
+  # =============================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging, smoke-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    
+    steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Deploy to Cloud Run (Production)
+      id: deploy
+      uses: google-github-actions/deploy-cloudrun@v1
+      with:
+        service: ${{ env.PROD_SERVICE }}
+        region: ${{ env.GCP_REGION }}
+        image: ${{ needs.build.outputs.image-tag }}:${{ github.sha | slice(0, 8) }}
+        flags: |
+          --allow-unauthenticated
+          --memory=2Gi
+          --cpu=2
+          --max-instances=50
+          --min-instances=1
+          --concurrency=80
+          --timeout=300
+          --port=8080
+        env_vars: |
+          APP_ENV=production
+          TRADING_MODE=live
+          LOG_LEVEL=INFO
+          GCP_PROJECT=${{ secrets.GCP_PROJECT }}
+        # CUSTOMIZE: Add production-specific environment variables
+        # secrets: |
+        #   ALPACA_API_KEY=projects/${{ secrets.GCP_PROJECT }}/secrets/alpaca-api-key-prod:latest
+
+    - name: Production health check
+      run: |
+        echo "Verifying production deployment..."
+        sleep 30
+        
+        PROD_URL="${{ steps.deploy.outputs.url }}"
+        curl -f "$PROD_URL/health" || exit 1
+        
+        echo "✅ Production deployment successful!"
+
+  # =============================================================================
+  # NOTIFICATIONS: Send deployment notifications
+  # =============================================================================
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always() && (github.ref == 'refs/heads/main')
+    
+    steps:
+    - name: Notify Slack (Success)
+      if: needs.deploy-production.result == 'success'
+      run: |
+        # CUSTOMIZE: Uncomment and configure Slack webhook
+        # curl -X POST -H 'Content-type: application/json' \
+        #   --data '{"text":"🚀 Trading app deployed successfully to production!\nCommit: ${{ github.sha }}\nAuthor: ${{ github.actor }}"}' \
+        #   ${{ secrets.SLACK_WEBHOOK_URL }}
+        echo "✅ Deployment successful notification sent"
+
+    - name: Notify Slack (Failure)
+      if: needs.deploy-production.result == 'failure'
+      run: |
+        # CUSTOMIZE: Uncomment and configure Slack webhook
+        # curl -X POST -H 'Content-type: application/json' \
+        #   --data '{"text":"❌ Trading app deployment failed!\nCommit: ${{ github.sha }}\nAuthor: ${{ github.actor }}\nCheck: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' \
+        #   ${{ secrets.SLACK_WEBHOOK_URL }}
+        echo "❌ Deployment failure notification sent"
+
+  # =============================================================================
+  # CLEANUP: Clean up old images (optional)
+  # =============================================================================
+  cleanup:
+    name: Cleanup Old Images
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always() && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Clean up old images
+      run: |
+        # Keep only the last 10 images to save storage costs
+        # CUSTOMIZE: Adjust retention policy as needed
+        gcloud artifacts docker images list \
+          ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }} \
+          --sort-by="~CREATE_TIME" \
+          --limit=999 \
+          --format="value(DIGEST)" | tail -n +11 | \
+        while read digest; do
+          if [ ! -z "$digest" ]; then
+            echo "Deleting old image: $digest"
+            gcloud artifacts docker images delete \
+              ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }}@$digest \
+              --quiet || true
+          fi
+        done
+
+# =============================================================================
+# CUSTOMIZATION EXAMPLES:
+#
+# 1. Add environment-specific configs:
+#    env_vars: |
+#      DATABASE_URL=${{ secrets.DATABASE_URL_STAGING }}
+#      REDIS_URL=${{ secrets.REDIS_URL_STAGING }}
+#
+# 2. Use Google Secret Manager:
+#    secrets: |
+#      API_KEY=projects/${{ secrets.GCP_PROJECT }}/secrets/api-key:latest
+#
+# 3. Add database migrations:
+#    - name: Run migrations
+#      run: |
+#        gcloud run jobs execute migration-job --region=${{ env.GCP_REGION }}
+#
+# 4. Add Blue/Green deployment:
+#    - name: Gradual traffic migration
+#      run: |
+#        gcloud run services update-traffic ${{ env.PROD_SERVICE }} \
+#          --to-revisions=LATEST=50 --region=${{ env.GCP_REGION }}
+#
+# 5. Add security scanning:
+#    - name: Security scan
+#      uses: anchore/scan-action@v3
+#      with:
+#        image: ${{ needs.build.outputs.image-tag }}
+# =============================================================================
