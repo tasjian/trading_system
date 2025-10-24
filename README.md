@@ -1,6 +1,11 @@
 # FinRL Trading System with Automatic Retraining
 
 > **RL-Only Mode**: Pure Deep Reinforcement Learning system using FinRL for autonomous trading decisions with adaptive model retraining and performance monitoring.
+This is my first draft of an algorithmic trading system with comprehensive tax optimization capabilities, multi-modal sentiment analysis, and institutional-grade risk management.  
+
+## Heads up!
+
+Using this requires meeting the pattern day trading criteria.  Use at your own risk!  Do NOT blindly implement this if you don't know what you're doing.  You will lose a lot of money!
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FinRL](https://img.shields.io/badge/FinRL-DRL%20Framework-green.svg)](https://github.com/AI4Finance-Foundation/FinRL)
@@ -537,3 +542,4 @@ For questions or support:
 ---
 
 **⚠️ Disclaimer**: This software is for educational and research purposes only. Trading involves substantial risk of loss. Use at your own risk. Past performance does not guarantee future results.
+For detailed implementation guidance, see `TAX_LOSS_HARVESTING_GUIDE.md`.
