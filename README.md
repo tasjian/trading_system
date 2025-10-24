@@ -1,6 +1,10 @@
 # Advanced Algorithmic Trading System
 
-A sophisticated, production-ready algorithmic trading system with comprehensive tax optimization capabilities, multi-modal sentiment analysis, and institutional-grade risk management.
+This is my first draft of an algorithmic trading system with comprehensive tax optimization capabilities, multi-modal sentiment analysis, and institutional-grade risk management.  
+
+## Heads up!
+
+Using this requires meeting the pattern day trading criteria.  Use at your own risk!  Do NOT blindly implement this if you don't know what you're doing.  You will lose a lot of money!
 
 ## 🚀 Key Features
 
