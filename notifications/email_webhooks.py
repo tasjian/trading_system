@@ -69,20 +69,18 @@ class DailySummary:
 
 class EmailWebhookNotifier:
     """Email notification system using multiple webhook services."""
-    
+
     def __init__(self):
         # Rebalance/transaction notifications (only primary recipient)
-        self.rebalance_emails = [
-            "ztaschdjian@gmail.com"
-        ]
-        
+        # Load from environment variable with fallback to empty list
+        rebalance_emails_str = os.getenv("NOTIFICATION_REBALANCE_EMAILS", "")
+        self.rebalance_emails = [email.strip() for email in rebalance_emails_str.split(",") if email.strip()]
+
         # Daily summary notifications (all recipients)
-        self.daily_summary_emails = [
-            "ztaschdjian@gmail.com",
-            "twosidesbrain@gmail.com", 
-            "eeaazzyy@hotmail.com"
-        ]
-        
+        # Load from environment variable with fallback to empty list
+        daily_summary_emails_str = os.getenv("NOTIFICATION_DAILY_SUMMARY_EMAILS", "")
+        self.daily_summary_emails = [email.strip() for email in daily_summary_emails_str.split(",") if email.strip()]
+
         # Default to rebalance emails for backward compatibility
         self.recipient_emails = self.rebalance_emails
         self.webhook_services = {
